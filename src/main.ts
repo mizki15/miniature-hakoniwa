@@ -396,7 +396,7 @@ async function main() {
       stroke = { visited: new Set(), last: { x: e.clientX, y: e.clientY }, done: 0, msg: null };
       setMouse(e.clientX, e.clientY);
       applyStroke(game.use(pickAtMouse(), stroke.visited));
-      renderer.domElement.setPointerCapture(e.pointerId);
+      try { renderer.domElement.setPointerCapture(e.pointerId); } catch { /* 合成イベントなどで失敗しても続ける */ }
     }
   });
   renderer.domElement.addEventListener('pointermove', (e) => {
@@ -487,12 +487,12 @@ async function main() {
     tooltipEl.style.top = `${Math.max(8, Math.min(appEl.clientHeight - h - 8, py + 16))}px`;
   };
 
-  // 右クリック（ドラッグではない時）：作物・動物の情報を固定。何もない所なら固定をやめる
+  // 短い右クリック（ドラッグではない時）だけで固定・解除する。左クリックでは変わらない
+  //   作物・動物の上 → その情報を固定（固定中の物なら解除）／何もない所 → 解除
   let rightDown: { x: number; y: number } | null = null;
   renderer.domElement.addEventListener('pointerdown', (e) => {
     if (mode !== 'view') return;
     if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY };
-    else if (pinned) pinned = null; // 他の所を触ったら固定をやめる
   });
   renderer.domElement.addEventListener('pointerup', (e) => {
     if (mode !== 'view' || e.button !== 2 || !rightDown) return;
@@ -795,7 +795,11 @@ async function main() {
     // 畑・植林の時間を進める。道具を持っている時はカーソルを更新
     lastEnv = { season: s, raining: weatherNow.rain > 0.5 };
     game.tick(dt, lastEnv);
-    if (mode === 'edit' && mouseInside && !stroke) hintEl.textContent = game.updateCursor(pickAtMouse()) || TOOLS.find((x) => x.id === game.tool)!.help;
+    // ドラッグ中もカーソル（白い枠）をマウスに追従させる。ドラッグ中は使った直後のマスが赤くならないよう白のまま
+    if (mode === 'edit' && mouseInside) {
+      const msg = game.updateCursor(pickAtMouse(), !!stroke);
+      if (!stroke) hintEl.textContent = msg || TOOLS.find((x) => x.id === game.tool)!.help;
+    }
     updateHover();
 
     // ときどき勝手に波紋

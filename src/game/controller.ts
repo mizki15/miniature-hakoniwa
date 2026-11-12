@@ -393,14 +393,14 @@ export class GameController {
     return null;
   }
 
-  /** カーソル（選んでいるマスの枠）を更新する */
-  updateCursor(hit: VoxelHit | null): string {
+  /** カーソル（選んでいるマスの枠）を更新する。neutral なら使えるかどうかに関係なく白で表示 */
+  updateCursor(hit: VoxelHit | null, neutral = false): string {
     const c = this.check(hit);
     if (!c || !this.world) { this.cursor.visible = false; return ''; }
     const half = this.world.size / 2;
     this.cursor.visible = true;
     this.cursor.position.set(c.x + 0.5 - half, c.y + 0.5, c.z + 0.5 - half);
-    (this.cursor.material as THREE.LineBasicMaterial).color.set(c.ok ? 0xffffff : 0xff6a5a);
+    (this.cursor.material as THREE.LineBasicMaterial).color.set(c.ok || neutral ? 0xffffff : 0xff6a5a);
     return c.msg;
   }
 
