@@ -80,3 +80,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 #ui .param output { font-variant-numeric: tabular-nums; text-align: right; color: var(--muted); }
 #ui .hint { font-size: 11px; color: var(--muted); }
 #ui { max-height: calc(100% - 24px); overflow-y: auto; }
+
+/* デバッグウィンドウをたたむ（スマホでは最初からたたむ） */
+#ui .title { cursor: pointer; display: flex; align-items: baseline; gap: 4px; }
+#ui .title .fold { margin-left: auto; color: var(--muted); font-size: 12px; transition: transform 0.2s; }
+#ui.collapsed > :not(.title) { display: none; }
+#ui.collapsed .title .fold { transform: rotate(-90deg); }
+@media (max-width: 760px) {
+  #ui:not(.expanded) > :not(.title) { display: none; }
+  #ui:not(.expanded) .title .fold { transform: rotate(-90deg); }
+}

@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  clamp, cos, dot, float, floor, fract as fractT, hash, instanceIndex, length, max, mix, mx_fractal_noise_float,
+  abs, clamp, cos, dot, float, floor, fract as fractT, hash, instanceIndex, length, max, mix, mx_fractal_noise_float,
   normalize, positionGeometry, positionWorldDirection, pow, sin, smoothstep as smoothstepT, time, uniform, vec2, vec3,
 } from 'three/tsl';
 
@@ -42,17 +42,19 @@ export function createSkyNode(): N {
   const dir: N = normalize(positionWorldDirection);
   const elev = dir.y;
 
-  // 空のグラデーション（地平線より下はかすんだ地平線の色）
-  let col: N = mix(SKY.horizon, SKY.zenith, smoothstep(-0.02, 0.55, elev));
-  col = mix(col, SKY.horizon.mul(0.85), smoothstep(0, 0.3, elev.negate()));
+  // 箱庭は空に浮かんでいる設定：水平線の下にも空が続く（上下ほぼ対称、下は少し深い色）
+  const ae = abs(elev);
+  const below = smoothstep(0, 0.05, elev.negate());
+  let col: N = mix(SKY.horizon, SKY.zenith, smoothstep(-0.02, 0.55, ae));
+  col = mix(col, col.mul(vec3(0.82, 0.86, 0.95)), below);
 
   // 太陽の光の広がり（昼のみ）
   const sd = max(dot(dir, SKY.sunDir), 0);
   const day = float(1).sub(SKY.night);
   col = col.add(SKY.sunColor.mul(pow(sd, 24).mul(0.35).add(pow(sd, 400).mul(1.5))).mul(day).mul(float(1).sub(SKY.cloudCover.mul(0.8))));
 
-  // 星（夜・晴れているほどよく見える）
-  const starVis = SKY.night.mul(smoothstep(0.02, 0.25, elev)).mul(float(1).sub(SKY.cloudCover.mul(0.9)));
+  // 星（夜・晴れているほどよく見える）。水平線の下にも見える
+  const starVis = SKY.night.mul(smoothstep(0.02, 0.25, ae)).mul(float(1).sub(SKY.cloudCover.mul(0.9)));
   const stars = starLayer(dir, 90, 0.04, 0.09).add(starLayer(dir, 220, 0.05, 0.12).mul(0.6));
   col = col.add(vec3(0.95, 0.97, 1).mul(stars).mul(starVis).mul(1.6));
 
@@ -67,19 +69,39 @@ export function createSkyNode(): N {
   const meteor = float(1).sub(smoothstep(0, 0.004, dist)).mul(tt.mul(tt)).mul(sin(p.mul(Math.PI))).mul(active).mul(SKY.night);
   col = col.add(vec3(1, 0.97, 0.9).mul(meteor).mul(2.5));
 
-  // 雲：空を平面に投影したノイズ。風でゆっくり流れる
-  const uv = dir.xz.div(max(elev, 0.04)).mul(0.55).add(vec2(time.mul(0.012), time.mul(0.004)));
-  const n = mx_fractal_noise_float(vec3(uv, time.mul(0.01)), 4, 2.0, 0.5, 1).mul(0.5).add(0.5);
+  // 雲：空を平面に投影したノイズ。風でゆっくり流れる。
+  // 水平線の上は見上げる雲、下は見下ろす雲海（別の場所のノイズを使う）
   const cover = SKY.cloudCover;
-  const cloud = smoothstep(float(0.74).sub(cover.mul(0.5)), float(0.9).sub(cover.mul(0.4)), n).mul(smoothstep(0.0, 0.18, elev));
-  // 雲の色：昼は白く日の当たる側が明るい、夜は暗い紺、雨雲は灰色
+  const up = elev.greaterThan(0);
+  const uv = dir.xz.div(max(ae, 0.04)).mul(up.select(float(0.55), float(0.4)))
+    .add(up.select(vec2(0, 0), vec2(37.1, -12.7)))
+    .add(vec2(time.mul(0.012), time.mul(0.004)));
+  const n = mx_fractal_noise_float(vec3(uv, time.mul(0.01)), 4, 2.0, 0.5, 1).mul(0.5).add(0.5);
+  const seaCover = cover.mul(0.6).add(0.35); // 雲海は晴れの日でもある程度広がる
+  const cv = up.select(cover, seaCover);
+  const cloud = smoothstep(float(0.74).sub(cv.mul(0.5)), float(0.9).sub(cv.mul(0.4)), n).mul(smoothstep(0.0, 0.18, ae));
+  // 雲の色：昼は白く日の当たる側が明るい、夜は暗い紺、雨雲は灰色。雲海は上から日が当たって明るい
   const lit = pow(sd, 3).mul(0.25).mul(day);
-  const cloudDay = mix(vec3(1, 1, 1), vec3(0.55, 0.58, 0.62), SKY.cloudDark).add(lit);
+  const cloudDay = mix(vec3(1, 1, 1), vec3(0.55, 0.58, 0.62), SKY.cloudDark).add(lit).add(below.mul(0.08));
   const cloudNight = mix(vec3(0.16, 0.18, 0.24), vec3(0.1, 0.11, 0.14), SKY.cloudDark);
   const cloudCol = mix(cloudDay.mul(SKY.horizon.mul(0.25).add(0.8)), cloudNight, SKY.night);
   col = mix(col, cloudCol, cloud.mul(0.92));
 
   return col;
+}
+
+/**
+ * 雲の影：太陽の方向に沿って上空の雲の層まで投影し、同じようなノイズで影を作る。
+ * 0 = 影なし, 1 = 濃い影。地形と小物のマテリアルで使う
+ */
+export function cloudShadowAt(pw: N): N {
+  const sun: N = SKY.sunDir;
+  const toCloud = float(60).sub(pw.y).div(max(sun.y, 0.15)); // 雲の層（高さ 60）までの距離
+  const p = pw.xz.add(sun.xz.mul(toCloud)).mul(0.022).add(vec2(time.mul(0.012), time.mul(0.004)).mul(1.6));
+  const n = mx_fractal_noise_float(vec3(p, time.mul(0.01)), 3, 2.0, 0.5, 1).mul(0.5).add(0.5);
+  const cover = SKY.cloudCover;
+  const c = smoothstep(float(0.72).sub(cover.mul(0.5)), float(0.9).sub(cover.mul(0.4)), n);
+  return c.mul(float(1).sub(SKY.night)).mul(smoothstep(0.0, 0.2, sun.y));
 }
 
 /**

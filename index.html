@@ -39,7 +39,7 @@
 
         <!-- デバッグウィンドウ -->
         <div id="ui" class="glass">
-          <div class="title">Hakoniwa <small>デバッグ</small></div>
+          <div class="title" id="uiTitle" title="クリックでたたむ／ひらく">Hakoniwa <small>デバッグ</small><span class="fold">▾</span></div>
           <div class="row">
             <button id="rotL" title="左に90°回転">⟲ 90°</button>
             <button id="rotR" title="右に90°回転">90° ⟳</button>
@@ -80,6 +80,19 @@
             <label>境界のなじみ <input type="range" id="blend" min="0" max="1" step="0.05" value="0.8" /></label>
           </div>
           <div class="row">
+            <label>画質
+              <select id="quality">
+                <option value="auto" selected>自動</option>
+                <option value="high">高</option>
+                <option value="medium">中</option>
+                <option value="low">低</option>
+              </select>
+            </label>
+            <span id="qualityLabel"></span>
+            <button id="sound" title="環境音（風・水・鳥・虫・雨）">🔈 環境音</button>
+          </div>
+          <div class="row">
+            <label><input type="checkbox" id="bloom" checked /> ブルーム</label>
             <label><input type="checkbox" id="ssao" checked /> AO</label>
             <label>強さ <input type="range" id="aoStrength" min="0" max="1.5" step="0.05" value="1" /></label>
           </div>

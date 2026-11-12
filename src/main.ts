@@ -1,10 +1,14 @@
 import * as THREE from 'three/webgpu';
-import { float, packNormalToRGB, unpackRGBToNormal, mix, mrt, normalView, output, pass, sample, uniform, vec4 } from 'three/tsl';
+import { float, fog, packNormalToRGB, rangeFogFactor, unpackRGBToNormal, mix, mrt, normalView, output, pass, sample, uniform, vec4 } from 'three/tsl';
 import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
+import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { Fireflies } from './creatures/fireflies';
+import { Birds } from './creatures/birds';
+import { Ambience } from './audio';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { denoise } from 'three/addons/tsl/display/DenoiseNode.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RIPPLES, U, createDetailMaterial, createTerrainMaterial, createWaterMaterial, rippleData } from './render/materials';
+import { RIPPLES, U, createDetailMaterial, createTerrainMaterial, createWaterMaterial, fireflyData, rippleData } from './render/materials';
 import { createDaylight } from './render/daylight';
 import { SKY, createPrecipitation, createSkyNode } from './render/sky';
 import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
@@ -20,7 +24,7 @@ import type { DetailSet } from './world/worker';
 type N = any;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const WORLD_HEIGHT = 40;
+const WORLD_HEIGHT = 64;
 const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
 
 interface WorkerResult {
@@ -35,7 +39,11 @@ interface WorkerResult {
 
 async function main() {
   // ---------- レンダラー ----------
-  const renderer = new THREE.WebGPURenderer({ antialias: true });
+  // ?webgl を付けると WebGL2 で動かす（WebGPU 非対応の端末での動作確認用）
+  const forceWebGL = new URLSearchParams(location.search).has('webgl');
+  // ?gputime を付けると GPU の処理時間を計測する（計測自体が重くなる環境があるので既定は OFF）
+  const trackTimestamp = new URLSearchParams(location.search).has('gputime');
+  const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL, trackTimestamp });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight));
   renderer.shadowMap.enabled = true;
@@ -51,6 +59,9 @@ async function main() {
   const scene = new THREE.Scene();
   // 空：青空と雲、夜は星と流れ星（方向ベースなので見上げても破綻しない）
   scene.backgroundNode = createSkyNode();
+  // 空気遠近法：遠くの地形ほど空の色にかすむ（近づいて見渡した時の奥行き感）
+  const uFogNear = uniform(200), uFogFar = uniform(800);
+  scene.fogNode = fog(SKY.horizon, rangeFogFactor(uFogNear, uFogFar).mul(0.55));
 
   // 低 FOV の透視投影：ミニチュアらしさと奥行きのバランス
   const camera = new THREE.PerspectiveCamera(28, 1, 0.3, 2000);
@@ -91,11 +102,14 @@ async function main() {
   const uFocal = uniform(30);
   const uBokeh = uniform(1.8);
   const isSky = (depthTex as N).r.greaterThanEqual(0.99999);
-  let dofOn = true, aoOn = true;
+  let dofOn = true, aoOn = true, bloomOn = true;
   const updatePost = () => {
     const src: N = aoOn ? withAO : color;
     // 空（背景）はぼかさない：星や雲がくっきり見えるように
-    pipeline.outputNode = dofOn ? isSky.select(src, dof(src, viewZ, uFocus, uFocal, uBokeh)) : src;
+    let out: N = dofOn ? isSky.select(src, dof(src, viewZ, uFocus, uFocal, uBokeh)) : src;
+    // ブルーム：明るい所（ホタル・太陽の照り返し）がにじんで光る
+    if (bloomOn) out = out.add(bloom(out, 0.45, 0.4, 0.9));
+    pipeline.outputNode = out;
     pipeline.needsUpdate = true;
   };
   updatePost();
@@ -112,6 +126,11 @@ async function main() {
   let typeTex: THREE.Data3DTexture | null = null;
   const diorama = new THREE.Group();
   scene.add(diorama);
+  const fireflies = new Fireflies();
+  const birds = new Birds();
+  scene.add(fireflies.mesh, birds.group);
+  const ambience = new Ambience();
+  let liteTerrain = false;
   let world: WorldData | null = null;
   let animals: Animal[] = [];
   let info = '';
@@ -162,7 +181,7 @@ async function main() {
         typeTex.unpackAlignment = 1;
         typeTex.needsUpdate = true;
         terrainMat?.dispose();
-        terrainMat = createTerrainMaterial(typeTex, w.size, w.height);
+        terrainMat = createTerrainMaterial(typeTex, w.size, w.height, liteTerrain);
 
         const tMesh = new THREE.Mesh(toGeometry(terrain), terrainMat);
         tMesh.castShadow = tMesh.receiveShadow = true;
@@ -225,6 +244,9 @@ async function main() {
 
         U.waterLevel.value = w.waterLevel;
         U.worldSize.value = w.size;
+        fireflies.setWorld(w);
+        let maxH = 0; for (let i = 0; i < w.heights.length; i++) maxH = Math.max(maxH, w.heights[i]);
+        birds.setWorld(w.size, maxH);
         U.detail.value = detail;
 
         // カメラの距離をフィールドに合わせる（近づいて見上げられるよう最短距離は小さめ）
@@ -232,7 +254,8 @@ async function main() {
         camera.updateProjectionMatrix();
         controls.minDistance = 3;
         controls.maxDistance = w.size * 3.2;
-        const r = w.size * 2.3;
+        // 縦長の画面（スマホ）では横幅に収まるよう遠めから
+        const r = w.size * 2.3 * Math.max(1, 1.1 / camera.aspect);
         controls.target.set(0, 10, 0);
         camera.position.set(r * 0.62, r * 0.55, r * 0.62);
 
@@ -309,7 +332,32 @@ async function main() {
   // 魚がはねる・虫が落ちる：ときどき勝手に波紋
   let nextAmbient = 1;
   // デバッグ用（開発者ツールから確認できるように）
-  (window as unknown as { __hakoniwa: unknown }).__hakoniwa = { addRipple, rippleData, get world() { return world; }, camera, controls };
+  /** データ量の計測（デバッグ用）：保存データ・メモリ・GPU に載せる量 */
+  const measure = async () => {
+    if (!world) return null;
+    const gz = async (data: Uint8Array) => {
+      const stream = new Blob([data as BlobPart]).stream().pipeThrough(new CompressionStream('gzip'));
+      return (await new Response(stream).arrayBuffer()).byteLength;
+    };
+    let gpuBytes = 0, tris = 0;
+    diorama.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      const g = o.geometry as THREE.BufferGeometry;
+      for (const a of Object.values(g.attributes)) gpuBytes += (a as THREE.BufferAttribute).array.byteLength;
+      if (g.index) gpuBytes += g.index.array.byteLength;
+      if (o instanceof THREE.InstancedMesh) gpuBytes += o.instanceMatrix.array.byteLength;
+      tris += (g.index ? g.index.count : g.attributes.position.count) / 3 * (o instanceof THREE.InstancedMesh ? o.count : 1);
+    });
+    return {
+      size: `${world.size}×${world.size}×${world.height}`,
+      voxelsRaw: world.voxels.byteLength,
+      voxelsGzip: await gz(world.voxels),
+      gpuGeometry: gpuBytes,
+      typeTexture: world.voxels.byteLength,
+      triangles: Math.round(tris),
+    };
+  };
+  (window as unknown as { __hakoniwa: unknown }).__hakoniwa = { addRipple, rippleData, get world() { return world; }, camera, controls, measure, renderer };
 
   // ---------- UI ----------
   let timeOverride: number | null = null;
@@ -328,6 +376,45 @@ async function main() {
   $<HTMLInputElement>('ssao').addEventListener('change', (e) => { aoOn = (e.target as HTMLInputElement).checked; updatePost(); });
   const aoInput = $<HTMLInputElement>('aoStrength');
   aoInput.addEventListener('input', () => { uAO.value = parseFloat(aoInput.value); });
+  $<HTMLInputElement>('bloom').addEventListener('change', (e) => { bloomOn = (e.target as HTMLInputElement).checked; updatePost(); });
+
+  // ---------- 画質プリセット ----------
+  type Quality = 'high' | 'medium' | 'low';
+  const QUALITY: Record<Quality, { pixelRatio: number; ao: boolean; dof: boolean; bloom: boolean; shadow: number; lite: boolean }> = {
+    high: { pixelRatio: Math.min(devicePixelRatio, 2), ao: true, dof: true, bloom: true, shadow: 4096, lite: false },
+    medium: { pixelRatio: Math.min(devicePixelRatio, 1.25), ao: true, dof: true, bloom: true, shadow: 2048, lite: false },
+    low: { pixelRatio: Math.min(devicePixelRatio, 1) * 0.8, ao: false, dof: false, bloom: false, shadow: 1024, lite: true },
+  };
+  const QUALITY_NAMES: Record<Quality, string> = { high: '高', medium: '中', low: '低' };
+  const isMobile = navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) < 820;
+  let quality: Quality = 'high';
+  let qualityAuto = true;
+  const setChecked = (id: string, v: boolean) => { $<HTMLInputElement>(id).checked = v; };
+  const applyQuality = (q: Quality, regenerateIfNeeded = true) => {
+    quality = q;
+    const p = QUALITY[q];
+    renderer.setPixelRatio(p.pixelRatio);
+    fit();
+    aoOn = p.ao; dofOn = p.dof; bloomOn = p.bloom;
+    setChecked('ssao', aoOn); setChecked('dof', dofOn); setChecked('bloom', bloomOn);
+    updatePost();
+    const sh = daylight.sun.shadow;
+    if (sh.mapSize.x !== p.shadow) { sh.mapSize.setScalar(p.shadow); sh.map?.dispose(); (sh as { map: unknown }).map = null; }
+    $('qualityLabel').textContent = qualityAuto ? `→ ${QUALITY_NAMES[q]}` : '';
+    if (p.lite !== liteTerrain) { liteTerrain = p.lite; if (regenerateIfNeeded && world) doRegen(); }
+  };
+  $<HTMLSelectElement>('quality').addEventListener('change', (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    qualityAuto = v === 'auto';
+    applyQuality(qualityAuto ? (forceWebGL || isMobile ? 'medium' : 'high') : (v as Quality));
+  });
+
+  // ---------- 環境音 ----------
+  const soundBtn = $('sound');
+  soundBtn.addEventListener('click', async () => {
+    if (ambience.running) { await ambience.stop(); soundBtn.classList.remove('on'); soundBtn.textContent = '🔈 環境音'; }
+    else { await ambience.start(); soundBtn.classList.add('on'); soundBtn.textContent = '🔊 環境音'; }
+  });
 
   // 天気
   let weatherOverride: WeatherKind | null = null;
@@ -386,6 +473,12 @@ async function main() {
   $('detail').addEventListener('change', doRegen);
   $('flowerStyle').addEventListener('change', doRegen);
 
+  // デバッグウィンドウの開閉（スマホでは最初はたたんでおく）
+  const uiEl = $('ui');
+  // 狭い画面では CSS で最初からたたまれている（.expanded でひらく）。広い画面では .collapsed でたたむ
+  const narrow = window.matchMedia('(max-width: 760px)');
+  $('uiTitle').addEventListener('click', () => uiEl.classList.toggle(narrow.matches ? 'expanded' : 'collapsed'));
+
   // 左右パネルの開閉
   const layout = $('layout');
   document.querySelectorAll<HTMLElement>('[data-target]').forEach((btn) => {
@@ -417,6 +510,8 @@ async function main() {
   new ResizeObserver(fit).observe(appEl);
   fit();
 
+  // 最初の画質：WebGL2 やスマホは「中」から。重ければ自動で下げる
+  applyQuality(forceWebGL || isMobile || !(renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'medium' : 'high', false);
   await doRegen();
 
   // ---------- ループ ----------
@@ -425,9 +520,14 @@ async function main() {
   let fpsFrames = 0, fpsTime = 0, fps = 0;
   const cA = new THREE.Color(), cB = new THREE.Color();
   let focusSmoothed = -1;
+  let gpuMs = 0;
+  const fpsWindow: number[] = [];
+  let lastQualityChange = performance.now();
   const focusPoint = new THREE.Vector3(0, 10, 0);
 
-  renderer.setAnimationLoop((t) => {
+  let cpuLogic = 0, cpuRender = 0;
+  const loop = (t: number) => {
+    const tl0 = performance.now();
     timer.update(t);
     const dt = Math.min(timer.getDelta(), 0.1);
     U.now.value = timer.getElapsed();
@@ -512,14 +612,66 @@ async function main() {
     // f 値が大きいほどピントの合う範囲が広い
     uFocal.value = focusSmoothed * 0.05 * fNumber();
 
+    // 遠くのかすみ：注視点より奥から少しずつ
+    const camDist = camera.position.distanceTo(controls.target);
+    uFogNear.value = camDist * 0.9 + 10;
+    uFogFar.value = camDist * 2.5 + size * 1.5;
+
+    // ホタル：夜・春〜秋（夏が一番多い）・雨でない時
+    const night = SKY.night.value;
+    const seasonFly = [0.4, 1, 0.35, 0][s];
+    const tt = timer.getElapsed();
+    fireflies.update(tt, Math.max(0, (night - 0.6) / 0.4) * seasonFly * (1 - weatherNow.rain) * (1 - weatherNow.snow));
+    // 鳥：昼・晴れ〜くもり
+    birds.update(tt, Math.max(0, 1 - night * 1.5) * (1 - weatherNow.rain) * (1 - weatherNow.snow * 0.7));
+    ambience.update(dt, { day: 1 - night, rain: weatherNow.rain, wind: weatherNow.wind, season: s, volume: 0.6 });
+
+    const tr0 = performance.now();
     if (appEl.clientWidth > 0 && appEl.clientHeight > 0) pipeline.render();
+    const tr1 = performance.now();
+    cpuLogic += ((tr0 - tl0) - cpuLogic) * 0.1;
+    cpuRender += ((tr1 - tr0) - cpuRender) * 0.1;
 
     fpsFrames++; fpsTime += dt;
     if (fpsTime > 0.5) {
       fps = fpsFrames / fpsTime; fpsFrames = 0; fpsTime = 0;
-      $('stats').innerHTML = `${backendName} · ${fps.toFixed(0)} fps · ピント ${focusSmoothed.toFixed(0)}<br>${info}`;
+      // GPU の処理時間（タイムスタンプが使える環境のみ）
+      if (trackTimestamp) renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER).then(() => { gpuMs = renderer.info.render.timestamp; }).catch(() => {});
+      $('stats').innerHTML = `${backendName} · ${fps.toFixed(0)} fps${gpuMs > 0 ? ` · GPU ${gpuMs.toFixed(1)}ms` : ''} · CPU 処理 ${cpuLogic.toFixed(1)}ms＋描画命令 ${cpuRender.toFixed(1)}ms · 画質 ${QUALITY_NAMES[quality]} · ピント ${focusSmoothed.toFixed(0)}<br>${info}`;
+      // 自動画質：重い時は一段ずつ下げる（上げ下げを繰り返さないよう、下げるだけ）
+      if (qualityAuto && fps > 0 && performance.now() - lastQualityChange > 4000) {
+        fpsWindow.push(fps);
+        if (fpsWindow.length >= 6) {
+          const avg = fpsWindow.reduce((a, b) => a + b, 0) / fpsWindow.length;
+          fpsWindow.length = 0;
+          if (avg < 40 && quality !== 'low') {
+            applyQuality(quality === 'high' ? 'medium' : 'low');
+            lastQualityChange = performance.now();
+          }
+        }
+      }
     }
-  });
+  };
+  renderer.setAnimationLoop(loop);
+
+  /** ベンチマーク：描画を連続で frames 回行い、GPU の完了まで待って 1 フレームあたりの時間を測る（画面が隠れていても測れる） */
+  const bench = async (frames = 60) => {
+    renderer.setAnimationLoop(null);
+    const backend = renderer.backend as N;
+    const px = new Uint8Array(4);
+    // WebGL は finish() だけでは GPU の完了を待たないので、1 画素読み出して同期させる
+    const sync = async () => { if (backend.device) await backend.device.queue.onSubmittedWorkDone(); else { const gl = backend.gl as WebGL2RenderingContext; gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); } };
+    pipeline.render(); await sync();
+    const t0 = performance.now();
+    for (let i = 0; i < frames; i++) { U.now.value += 1 / 60; pipeline.render(); }
+    await sync();
+    const ms = (performance.now() - t0) / frames;
+    renderer.setAnimationLoop(loop);
+    const w = renderer.domElement.width, h = renderer.domElement.height;
+    return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
+  };
+  const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
+  Object.assign((window as N).__hakoniwa, { bench, adapterInfo, applyQuality, fireflyData, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {

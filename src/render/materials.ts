@@ -3,9 +3,10 @@ import {
   abs, attribute, cameraFar, cameraNear, cameraPosition, clamp, dot, exp, float, floor, fract as fractT, instanceIndex,
   int, ivec3, length, max, mix, mx_noise_float as noiseT, mx_noise_vec3, normalize, normalGeometry, normalLocal, normalWorldGeometry, perspectiveDepthToViewZ,
   positionGeometry, positionLocal, positionView, positionWorld, pow, screenUV, sin, cos, smoothstep as smoothstepT, step, texture3DLoad, time,
-  transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture,
+  transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture, Fn, Loop,
 } from 'three/tsl';
 import { paletteFlat, WATER } from '../world/blocks';
+import { cloudShadowAt } from './sky';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any; // TSL のノード型は複雑なので、ここでは緩く扱う
@@ -40,6 +41,32 @@ const ripples = uniformArray(rippleData, 'vec4');
 /** 影の自己遮蔽（シャドウアクネ）を防ぐため、影を参照する位置を面から浮かせる量 */
 const SHADOW_OFFSET = 0.06;
 
+/** ホタル：[x, y, z, 明るさ] × FIREFLIES（ワールド座標）。周りの地面や草木をほんのり照らす */
+export const FIREFLIES = 32;
+export const fireflyData = Array.from({ length: FIREFLIES }, () => new THREE.Vector4(0, -100, 0, 0));
+const fireflies = uniformArray(fireflyData, 'vec4');
+export const FIREFLY_COLOR = new THREE.Color(0.75, 1.0, 0.32);
+const fireflyColor = uniform(FIREFLY_COLOR);
+
+/** その位置がホタルからどれだけ照らされるか（距離の 2 乗で弱まる） */
+const fireflyLight = (pw: N): N => Fn(() => {
+  const acc = float(0).toVar();
+  Loop(FIREFLIES, ({ i }: { i: N }) => {
+    const f: N = fireflies.element(i);
+    const d = pw.sub(f.xyz);
+    acc.addAssign(f.w.div(dot(d, d).mul(1.6).add(0.25)));
+  });
+  return acc;
+})();
+
+/** 雲の影・ホタルの光・高い山の雪など、地形と小物に共通の仕上げ */
+function finishSurface(m: THREE.MeshStandardNodeMaterial, albedo: N, extraEmissive: N = null) {
+  const shade = float(1).sub(cloudShadowAt(positionWorld).mul(0.38));
+  m.colorNode = albedo.mul(shade);
+  const glow = (fireflyColor as N).mul(fireflyLight(positionWorld)).mul(albedo.add(0.08));
+  m.emissiveNode = extraEmissive ? extraEmissive.add(glow) : glow;
+}
+
 const palette = uniformArray(paletteFlat().map(([r, g, b]) => new THREE.Color(r, g, b)), 'color');
 
 const hash3 = (p: N) => fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))).mul(43758.5453));
@@ -62,7 +89,8 @@ function faceFrame(pL: N, nL: N) {
  * - 角丸は「平面が途切れる縁」だけに付ける（同じ平面の継ぎ目に溝を作らない）
  * - 頂点 AO、季節の色、水中のコースティクス
  */
-export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, height: number): THREE.MeshStandardNodeMaterial {
+export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, height: number, lite = false): THREE.MeshStandardNodeMaterial {
+  // lite（低画質）：境界のなじませと角丸を省き、テクスチャ参照を 13 回 → 1 回に減らす
   const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.92, metalness: 0 });
   const pL: N = positionLocal;
   const nL: N = normalLocal;
@@ -99,7 +127,7 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   const ownColor = surfaceColor(typeAt(voxel));
   let colSum: N = ownColor.mul(0.001);
   let wSum: N = float(0.001);
-  for (const [i, j] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+  for (const [i, j] of lite ? [] : [[0, 0], [1, 0], [0, 1], [1, 1]]) {
     const cell = cellAt(base.x.add(i), base.y.add(j));
     const t = typeAt(cell);
     const valid = isOpaque(t).and(isOpaque(typeAt(cell.add(nL))).not());
@@ -121,11 +149,10 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
     return nbSolid.not().select(float(1), wall.select(float(-0.75), float(0)));
   };
   const w = float(0.2);
-  const eu = edgeKind(tU).mul(smoothstep(float(1).sub(w), 1, fr.x)).sub(edgeKind(tU.negate()).mul(float(1).sub(smoothstep(0, w, fr.x))));
-  const ev = edgeKind(tV).mul(smoothstep(float(1).sub(w), 1, fr.y)).sub(edgeKind(tV.negate()).mul(float(1).sub(smoothstep(0, w, fr.y))));
+  const eu: N = lite ? float(0) : edgeKind(tU).mul(smoothstep(float(1).sub(w), 1, fr.x)).sub(edgeKind(tU.negate()).mul(float(1).sub(smoothstep(0, w, fr.x))));
+  const ev: N = lite ? float(0) : edgeKind(tV).mul(smoothstep(float(1).sub(w), 1, fr.y)).sub(edgeKind(tV.negate()).mul(float(1).sub(smoothstep(0, w, fr.y))));
   const k = U.roundEdges.mul(0.9);
-  const bent = normalize(nL.add(tU.mul(eu.mul(k))).add(tV.mul(ev.mul(k))));
-  m.normalNode = transformNormalToView(bent);
+  if (!lite) m.normalNode = transformNormalToView(normalize(nL.add(tU.mul(eu.mul(k))).add(tV.mul(ev.mul(k)))));
   // 影の参照位置は「曲げる前」の法線方向に少し浮かせる（縁のギザギザ防止）
   m.receivedShadowPositionNode = positionWorld.add(normalWorldGeometry.mul(SHADOW_OFFSET));
 
@@ -134,7 +161,12 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   const jitter = hash3(voxel).mul(0.05).add(mx_noise_float(pL.mul(0.18)).mul(0.06)).add(0.97);
   const aoF = mix(float(0.42), float(1), attribute('ao', 'float'));
   const edge = max(abs(eu), abs(ev)).mul(U.roundEdges);
-  m.colorNode = blended.mul(jitter).mul(aoF).mul(float(1).sub(edge.mul(0.06)));
+  let albedo: N = blended.mul(jitter).mul(aoF).mul(float(1).sub(edge.mul(0.06)));
+  // 雪：冬は上向きの面すべて、高い山の頂上は一年中
+  const upFace = smoothstep(0.5, 0.9, nL.y);
+  const peakSnow = smoothstep(41, 47, positionWorld.y);
+  const snowAmt = max(U.snow.mul(0.85), peakSnow).mul(upFace).add(peakSnow.mul(0.6).mul(float(1).sub(upFace))).min(1);
+  albedo = mix(albedo, vec3(0.93, 0.95, 0.98).mul(aoF), snowAmt);
 
   // --- コースティクス（水面より下の地形。箱庭の外周には出さない） ---
   const depthBelow = U.waterLevel.sub(0.15).sub(positionWorld.y);
@@ -146,8 +178,9 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   const cp = positionWorld.xz.mul(1.1);
   const c1: N = float(1).sub(abs(mx_noise_float(vec3(cp, time.mul(0.5)))));
   const c2: N = float(1).sub(abs(mx_noise_float(vec3(cp.mul(1.7).add(3.1), time.mul(0.7)))));
-  m.emissiveNode = (U.sunColor as N).mul(pow(c1, 8).add(pow(c2, 10)).mul(under)).mul(U.daylight).mul(0.55);
+  const caustics = (U.sunColor as N).mul(pow(c1, 8).add(pow(c2, 10)).mul(under)).mul(U.daylight).mul(0.55);
 
+  finishSurface(m, albedo, caustics);
   return m;
 }
 
@@ -178,7 +211,7 @@ export function createDetailMaterial(swayLinear = 0): THREE.MeshStandardNodeMate
   const micro = floor(pG.mul(U.detail).sub(nG.mul(0.5)));
   const jitter = hash3(micro).mul(0.12).add(0.94);
   const aoF = mix(float(0.5), float(1), attribute('ao', 'float'));
-  m.colorNode = col.mul(jitter).mul(aoF);
+  finishSurface(m, col.mul(jitter).mul(aoF));
   return m;
 }
 

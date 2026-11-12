@@ -9,8 +9,8 @@ const smooth = (a: number, b: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-// 夜：青みを抑えた紺。月明かりは白に近い淡い青。暗くなりすぎないように少し明るめ
-const NIGHT = { top: C(0x16213a), bottom: C(0x3a4664), light: C(0xcdd6ee), hemiSky: C(0x5a6482), hemiGround: C(0x24242c) };
+// 夜：青みを抑えた紺。月明かりは白に近い淡い青。ホタルが映えるよう暗めに
+const NIGHT = { top: C(0x0c1322), bottom: C(0x262f48), light: C(0xc4d0ec), hemiSky: C(0x3e4866), hemiGround: C(0x18181e) };
 const DAY = { top: C(0x4f9be0), bottom: C(0xd8ecfb), light: C(0xfff4e0), hemiSky: C(0xcfe8ff), hemiGround: C(0x7a6644) };
 const DUSK = { top: C(0x5b6fb0), bottom: C(0xffb98a), light: C(0xffa266), hemiSky: C(0xffc8a0), hemiGround: C(0x5a4030) };
 const OVERCAST = C(0x9aa3ad);
@@ -63,7 +63,7 @@ export function createDaylight(scene: THREE.Scene): Daylight {
       sun.position.copy(focus).addScaledVector(dir, radius * 2);
       sun.target.position.copy(focus);
       mixSet(sun.color, 'light', day, dusk);
-      const base = isDay ? 0.4 + 2.4 * smooth(-0.05, 0.35, elev) : 1.0;
+      const base = isDay ? 0.4 + 2.4 * smooth(-0.05, 0.35, elev) : 0.55;
       sun.intensity = base * (isDay ? weather.sun : 0.6 + 0.4 * (1 - weather.cloudCover));
 
       const cam = sun.shadow.camera;
@@ -74,7 +74,7 @@ export function createDaylight(scene: THREE.Scene): Daylight {
       mixSet(hemi.color, 'hemiSky', day, dusk);
       mixSet(hemi.groundColor, 'hemiGround', day, dusk);
       // 曇りの日は日差しが弱いぶん、空からの光を少し増やす
-      hemi.intensity = (0.75 + 0.4 * day) * (1 + overcast * 0.35);
+      hemi.intensity = (0.45 + 0.7 * day) * (1 + overcast * 0.35);
 
       // 空の色（曇り・雨は灰色がかる）
       mixSet(SKY.zenith.value, 'top', day, dusk).lerp(OVERCAST, overcast * 0.8);

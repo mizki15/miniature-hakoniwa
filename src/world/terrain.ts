@@ -67,7 +67,7 @@ export function generateWorld(size: number, height: number, seed: number, params
     for (let x = 0; x < N; x++) {
       let h = 12.5 + (fbm(x / 48, z / 48) * 7 + Math.max(0, n2(x / 30, z / 30)) * 9) * P.relief;
       // 大きな起伏（広いフィールドで山と谷ができる）
-      h += Math.max(0, n4(x / 90, z / 90)) * 12 * P.mountains;
+      h += Math.max(0, n4(x / 90, z / 90)) ** 1.3 * 22 * P.mountains;
       // 湖：低周波ノイズの窪地（水が多いほど広く）
       const lake = n3(x / 70 + 40, z / 70 - 20);
       const lakeT = 0.35 + (1 - P.water) * 0.25;
@@ -89,7 +89,7 @@ export function generateWorld(size: number, height: number, seed: number, params
       let top: number;
       if (h - 1 <= WL) top = SAND;
       else if (h - 1 <= WL + 2 && beach > -0.1) top = SAND; // 砂浜が内陸に入り込む
-      else if (h > 27 || rocky > 0.5 + (1 - P.rocks) * 0.3) top = STONE; // 岩場
+      else if (h > 34 || rocky > 0.5 + (1 - P.rocks) * 0.3) top = STONE; // 岩場（高い所は岩山）
       else if (bare > 0.55) top = DIRT; // 土がむき出しの所
       else top = GRASS;
       for (let y = 0; y < h; y++) {
