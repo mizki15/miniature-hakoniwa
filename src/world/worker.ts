@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
-import { FLOWER_VARIANTS, TREE_VARIANTS, generateWorld, type Placement, type TerrainParams } from './terrain';
+import { FLOWER_VARIANTS, TREE_VARIANTS, applyEdits, generateWorld, type Placement, type TerrainParams } from './terrain';
 import { CHUNK, buildChunk, buildMesh, transformMesh, type MeshData } from './mesher';
 import { buildFlowerModel, buildTreeModel } from './details';
 
-export interface GenerateRequest { type: 'generate'; size: number; height: number; seed: number; detail: number; params: TerrainParams; }
+export interface GenerateRequest { type: 'generate'; size: number; height: number; seed: number; detail: number; params: TerrainParams; edits?: number[]; }
 /** 編集したチャンクだけ作り直す。voxels は世界全体のコピー */
 export interface RemeshRequest { type: 'remesh'; id: number; voxels: Uint8Array; size: number; height: number; waterLevel: number; chunks: [number, number][]; }
 
@@ -41,6 +41,8 @@ self.onmessage = (e: MessageEvent<GenerateRequest | RemeshRequest>) => {
   const { size, height, seed, detail, params } = req;
   const t0 = performance.now();
   const world = generateWorld(size, height, seed, params);
+  // セーブデータから読み込む時は、変えた所を当ててからメッシュを作る
+  if (req.edits?.length) applyEdits(world, req.edits);
   const t1 = performance.now();
   // 地形はチャンクごとに作る（編集した時にその部分だけ作り直せるように）
   const chunks: ChunkMesh[] = [];

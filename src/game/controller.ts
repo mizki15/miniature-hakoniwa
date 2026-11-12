@@ -6,6 +6,7 @@ import type { ChunkMesh, DetailSet } from '../world/worker';
 import { CROPS, Farm, type CropKind } from './farm';
 import { buildCropGeometry, buildSaplingGeometry } from './cropModels';
 import { raycastVoxels, type VoxelHit } from './picking';
+import type { SaveData } from '../save/format';
 
 export type Tool = 'look' | 'till' | 'seed' | 'water' | 'harvest' | 'plant' | 'dig' | 'raise';
 
@@ -50,8 +51,10 @@ export class GameController {
   tool: Tool = 'look';
   seed: CropKind = 'turnip';
   world: WorldData | null = null;
-  /** 生成した状態からの変更（保存は「シード＋この差分」で行う予定） */
+  /** 生成した状態からの変更（保存は「シード＋この差分」で行う） */
   edits = new Map<number, number>();
+  /** 前回の保存から変わったか（道具を使った時に立てる） */
+  unsaved = false;
 
   private terrainMat: THREE.Material | null = null;
   private typeTex: THREE.Data3DTexture | null = null;
@@ -340,6 +343,7 @@ export class GameController {
       visited.add(col);
     }
     if (!c.ok) return c.msg;
+    this.unsaved = true;
     switch (this.tool) {
       case 'till':
         this.removeFlowersAt(x, z);
@@ -536,6 +540,76 @@ export class GameController {
     const w = this.world!;
     const half = w.size / 2;
     return new THREE.Vector3((col % w.size) + 0.5 - half, w.heights[col], Math.floor(col / w.size) + 0.5 - half);
+  }
+
+  // ---------- 保存・読み込み ----------
+
+  /** 保存用：地形の差分と畑の状態 */
+  exportState(): Pick<SaveData, 'edits' | 'farm'> {
+    const edits: number[] = [];
+    for (const [i, t] of this.edits) edits.push(i, t);
+    const f = this.farm;
+    return {
+      edits,
+      farm: {
+        simMs: f.simMs,
+        inventory: { ...f.inventory },
+        crops: [...f.crops.values()].map((c) => [c.col, c.kind, +c.progress.toFixed(5)]),
+        saplings: f.saplings.map((s) => [s.col, s.variant, s.rot, +s.progress.toFixed(5)]),
+        wet: [...f.wetUntil.entries()].filter(([, u]) => u > f.simMs),
+      },
+    };
+  }
+
+  /** 読み込み：差分はワーカーで当て済み。ここでは差分の記録と畑の状態を戻す */
+  restore(save: SaveData) {
+    const w = this.world!;
+    for (let i = 0; i + 1 < save.edits.length; i += 2) this.edits.set(save.edits[i], save.edits[i + 1]);
+    // 耕した畑の一覧は地形から作り直す
+    for (let col = 0; col < w.size * w.size; col++) {
+      const h = w.heights[col];
+      if (h > 0 && isFarm(w.voxels[col + (h - 1) * w.size * w.size])) this.farmland.add(col);
+    }
+    const f = this.farm;
+    f.simMs = save.farm.simMs;
+    f.inventory = { ...f.inventory, ...save.farm.inventory };
+    for (const [col, kind, progress] of save.farm.crops) f.crops.set(col, { col, kind, progress });
+    for (const [col, variant, rot, progress] of save.farm.saplings) {
+      f.saplings.push({ col, variant, rot, progress });
+      this.treeCols.add(col);
+      w.walkable[col] = 0;
+    }
+    for (const [col, until] of save.farm.wet) f.wetUntil.set(col, until);
+    this.rebuildCrops();
+    this.rebuildGrowing();
+    this.wetCheck = 0;
+    this.unsaved = false;
+  }
+
+  /**
+   * 閉じていた間の時間を進める（オフライン進行）。15 分ずつ、その時々の季節と天気で育てる。
+   * 戻り値：進めた時間と、その間に収穫できるようになった作物・育ちきった木の数
+   */
+  catchUp(toMs: number, envAt: (ms: number) => { season: number; raining: boolean }, maxHours = 24 * 7) {
+    const f = this.farm;
+    const from = f.simMs;
+    const target = Math.min(toMs, from + maxHours * HOUR);
+    if (target <= from) return { hours: 0, ripened: 0, grown: 0 };
+    const ripeBefore = [...f.crops.values()].filter((c) => c.progress >= 1).length;
+    const grownBefore = f.saplings.filter((s) => s.progress >= 1).length;
+    const STEP = 15 * 60 * 1000;
+    while (f.simMs < target) {
+      const dt = Math.min(STEP, target - f.simMs);
+      f.advance(dt, { ...envAt(f.simMs), isWet: (col) => this.isWet(col) });
+    }
+    this.rebuildCrops();
+    this.rebuildGrowing();
+    this.wetCheck = 0;
+    return {
+      hours: (target - from) / HOUR,
+      ripened: [...f.crops.values()].filter((c) => c.progress >= 1).length - ripeBefore,
+      grown: f.saplings.filter((s) => s.progress >= 1).length - grownBefore,
+    };
   }
 
   /** 右パネルに出す情報 */

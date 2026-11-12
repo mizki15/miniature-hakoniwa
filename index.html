@@ -198,6 +198,17 @@
             <dl id="st-inv"></dl>
           </section>
           <section class="stat-block">
+            <h3>保存</h3>
+            <div id="saveStatus" class="save-status">—</div>
+            <div class="save-buttons">
+              <button id="saveNow" title="この端末（ブラウザ）に保存。ふだんは自動で保存されます">💾 保存</button>
+              <button id="exportSave" title="ファイルとして書き出す（控え・別の端末へ）">⬇ 書き出す</button>
+              <button id="importSave" title="書き出したファイルを読み込む">⬆ 読み込む</button>
+              <button id="driveSync" title="Google Drive のアプリ専用フォルダと同期">☁ Google Drive</button>
+            </div>
+            <input type="file" id="importFile" accept=".hakoniwa" hidden />
+          </section>
+          <section class="stat-block">
             <h3>できごと</h3>
             <div class="skeleton-line"></div>
             <div class="skeleton-line"></div>

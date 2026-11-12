@@ -15,6 +15,9 @@ import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
 import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, weatherAt, type WeatherKind } from './weather';
 import { ACTIVITY_NAMES, spawnAnimals, type Animal } from './creatures/animals';
 import { renderDex } from './creatures/dex';
+import { SAVE_VERSION, decodeSave, encodeSave, type SaveData } from './save/format';
+import { loadLocal, requestPersist, saveLocal } from './save/store';
+import { DRIVE_CLIENT_ID, download, remoteInfo, upload } from './save/drive';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
 import type { TerrainParams, WorldData } from './world/terrain';
@@ -161,7 +164,7 @@ async function main() {
     diorama.clear();
   };
 
-  const regenerate = (size: number, seed: number, detail: number, params: TerrainParams, flowerStyle: string) =>
+  const regenerate = (size: number, seed: number, detail: number, params: TerrainParams, flowerStyle: string, edits?: number[]) =>
     new Promise<void>((resolve) => {
       busy.style.display = 'grid';
       onGenerated = (res: WorkerResult) => {
@@ -228,7 +231,7 @@ async function main() {
         busy.style.display = 'none';
         resolve();
       };
-      worker.postMessage({ type: 'generate', size, height: WORLD_HEIGHT, seed, detail, params });
+      worker.postMessage({ type: 'generate', size, height: WORLD_HEIGHT, seed, detail, params, edits });
     });
 
   // ---------- 画面中央の奥行き（ボクセルのレイマーチ） ----------
@@ -285,11 +288,11 @@ async function main() {
   let mode: Mode = 'view';
   const toolsEl = $('tools'), seedsEl = $('seeds'), hintEl = $('toolHint'), toastEl = $('toast'), tooltipEl = $('tooltip');
   let toastTimer = 0;
-  const toast = (msg: string) => {
+  const toast = (msg: string, ms = 1600) => {
     toastEl.textContent = msg;
     toastEl.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => toastEl.classList.remove('show'), 1600);
+    toastTimer = window.setTimeout(() => toastEl.classList.remove('show'), ms);
   };
 
   // エディタの道具一覧（「見る」はモードで切り替えるので除く）
@@ -580,7 +583,7 @@ async function main() {
     const sh = daylight.sun.shadow;
     if (sh.mapSize.x !== p.shadow) { sh.mapSize.setScalar(p.shadow); sh.map?.dispose(); (sh as { map: unknown }).map = null; }
     $('qualityLabel').textContent = qualityAuto ? `→ ${QUALITY_NAMES[q]}` : '';
-    if (p.lite !== liteTerrain) { liteTerrain = p.lite; if (regenerateIfNeeded && world) doRegen(); }
+    if (p.lite !== liteTerrain) { liteTerrain = p.lite; if (regenerateIfNeeded && world) doRegen(true); }
   };
   $<HTMLSelectElement>('quality').addEventListener('change', (e) => {
     const v = (e.target as HTMLSelectElement).value;
@@ -658,17 +661,174 @@ async function main() {
     controls.autoRotate = !controls.autoRotate;
     autoBtn.classList.toggle('on', controls.autoRotate);
   });
-  const doRegen = () => regenerate(
-    parseInt($<HTMLSelectElement>('size').value, 10),
-    parseInt($<HTMLInputElement>('seed').value, 10) || 0,
-    parseInt($<HTMLSelectElement>('detail').value, 10),
-    readParams(),
-    $<HTMLSelectElement>('flowerStyle').value,
-  );
-  $('regen').addEventListener('click', doRegen);
-  $('size').addEventListener('change', doRegen);
-  $('detail').addEventListener('change', doRegen);
-  $('flowerStyle').addEventListener('change', doRegen);
+  // ---------- 保存 ----------
+  // いまの箱庭の生成設定（保存にはこれと差分を書く）
+  let worldSettings: SaveData['world'] | null = null;
+  const settingsFromUI = (): SaveData['world'] => ({
+    seed: parseInt($<HTMLInputElement>('seed').value, 10) || 0,
+    size: parseInt($<HTMLSelectElement>('size').value, 10),
+    height: WORLD_HEIGHT,
+    detail: parseInt($<HTMLSelectElement>('detail').value, 10),
+    flowerStyle: $<HTMLSelectElement>('flowerStyle').value,
+    params: readParams(),
+  });
+  const settingsToUI = (s: SaveData['world']) => {
+    $<HTMLInputElement>('seed').value = String(s.seed);
+    $<HTMLSelectElement>('size').value = String(s.size);
+    $<HTMLSelectElement>('detail').value = String(s.detail);
+    $<HTMLSelectElement>('flowerStyle').value = s.flowerStyle;
+    PARAM_KEYS.forEach((k) => { paramInput(k).value = String(s.params[k] ?? 1); showParam(k); });
+  };
+  const buildSave = (): SaveData => ({ version: SAVE_VERSION, savedAt: Date.now(), world: worldSettings!, ...game.exportState() });
+
+  // 閉じていた間の季節と天気（オフライン進行で使う）
+  const envAt = (ms: number) => {
+    const d = new Date(ms);
+    const season = seasonAt(d).season;
+    return { season, raining: weatherAt(d, season) === 'rain' };
+  };
+  const fmtHours = (h: number) => (h >= 24 ? `${Math.floor(h / 24)}日${Math.round(h % 24)}時間` : h >= 1 ? `${Math.floor(h)}時間${Math.round((h % 1) * 60)}分` : `${Math.round(h * 60)}分`);
+
+  /** セーブデータから箱庭を作り直す。catchUp なら閉じていた間の時間を進める */
+  const loadFrom = async (save: SaveData, catchUp: boolean) => {
+    settingsToUI(save.world);
+    const s = save.world;
+    await regenerate(s.size, s.seed, s.detail, s.params, s.flowerStyle, save.edits);
+    worldSettings = { ...s };
+    game.restore(save);
+    if (!catchUp) return;
+    const target = save.farm.simMs + Math.max(0, Date.now() - save.savedAt);
+    const r = game.catchUp(target, envAt);
+    if (r.hours >= 0.05) {
+      const news = [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : ''].filter(Boolean).join('・');
+      toast(`おかえりなさい。${fmtHours(r.hours)}たちました${news ? `：${news}` : ''}`, 5000);
+    }
+  };
+
+  /** keep = true：今の状態（編集・畑）を保ったまま作り直す（小物の細かさ・花・画質の変更） */
+  const doRegen = async (keep = true) => {
+    if (keep && world && worldSettings) {
+      const s = buildSave();
+      const ui = settingsFromUI();
+      s.world = { ...worldSettings, detail: ui.detail, flowerStyle: ui.flowerStyle };
+      await loadFrom(s, false);
+      game.unsaved = true;
+    } else {
+      const s = settingsFromUI();
+      await regenerate(s.size, s.seed, s.detail, s.params, s.flowerStyle);
+      worldSettings = s;
+      game.unsaved = true;
+    }
+  };
+  const hasProgress = () => game.edits.size > 0 || game.farm.crops.size > 0 || game.farm.saplings.length > 0;
+  /** 新しい箱庭を作る（今の箱庭は上書きされるので確認する） */
+  const newWorld = async () => {
+    if (hasProgress() && !confirm('新しい箱庭を作ると、今の箱庭（畑・植林・地形の変更）は上書きされます。よろしいですか？')) {
+      if (worldSettings) settingsToUI(worldSettings);
+      return;
+    }
+    await doRegen(false);
+    await saveNow();
+  };
+  $('regen').addEventListener('click', newWorld);
+  $('size').addEventListener('change', newWorld);
+  $('detail').addEventListener('change', () => doRegen(true));
+  $('flowerStyle').addEventListener('change', () => doRegen(true));
+
+  // この端末（IndexedDB）に保存
+  let persisted = false;
+  let lastSavedAt = 0;
+  let saving = false;
+  const saveStatusEl = $('saveStatus');
+  const showSaveStatus = (extra = '') => {
+    const t = lastSavedAt ? new Date(lastSavedAt) : null;
+    const time = t ? `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}` : '—';
+    saveStatusEl.innerHTML = `この端末に保存：${time}${persisted ? '' : '<br><small>（ブラウザに「消さないで」と頼めませんでした。書き出しで控えを）</small>'}${extra ? `<br>${extra}` : ''}`;
+  };
+  const saveNow = async () => {
+    if (!world || !worldSettings || saving) return;
+    saving = true;
+    try {
+      const save = buildSave();
+      const data = await encodeSave(save);
+      await saveLocal({ key: 'main', data, savedAt: save.savedAt, version: save.version });
+      lastSavedAt = save.savedAt;
+      game.unsaved = false;
+      if (!persisted) persisted = await requestPersist();
+      showSaveStatus(`${(data.byteLength / 1024).toFixed(1)} KB`);
+    } catch (err) {
+      console.error(err);
+      toast('保存できませんでした');
+    } finally {
+      saving = false;
+    }
+  };
+  $('saveNow').addEventListener('click', async () => { await saveNow(); toast('保存しました'); });
+  // ページを離れる時・隠れる時にも保存
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
+  window.addEventListener('pagehide', () => { saveNow(); });
+
+  // ファイルに書き出す・ファイルから読み込む（どこでも使える控え）
+  $('exportSave').addEventListener('click', async () => {
+    if (!world) return;
+    const save = buildSave();
+    const data = await encodeSave(save);
+    const d = new Date(save.savedAt);
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([data as BlobPart], { type: 'application/octet-stream' }));
+    a.download = `hakoniwa-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}.hakoniwa`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast(`書き出しました（${(data.byteLength / 1024).toFixed(1)} KB）`);
+  });
+  const importFile = $<HTMLInputElement>('importFile');
+  $('importSave').addEventListener('click', () => importFile.click());
+  importFile.addEventListener('change', async () => {
+    const file = importFile.files?.[0];
+    importFile.value = '';
+    if (!file) return;
+    try {
+      const save = await decodeSave(new Uint8Array(await file.arrayBuffer()));
+      if (hasProgress() && !confirm('読み込むと、今の箱庭は上書きされます。よろしいですか？')) return;
+      await loadFrom(save, true);
+      await saveNow();
+      toast('読み込みました');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '読み込めませんでした');
+    }
+  });
+
+  // Google Drive と同期（アプリ専用フォルダ）
+  const driveBtn = $<HTMLButtonElement>('driveSync');
+  if (!DRIVE_CLIENT_ID) driveBtn.title = 'Google Drive の設定（Client ID）が必要です。docs/保存とクラウド同期.md を参照';
+  driveBtn.addEventListener('click', async () => {
+    if (!DRIVE_CLIENT_ID) { toast('Google Drive を使うには設定が必要です（docs/保存とクラウド同期.md）', 4000); return; }
+    if (!world) return;
+    driveBtn.disabled = true;
+    try {
+      const remote = await remoteInfo();
+      if (remote && remote.savedAt > lastSavedAt + 5000) {
+        const when = new Date(remote.savedAt).toLocaleString();
+        if (confirm(`Google Drive に、この端末より新しい箱庭があります（${when}）。\nOK：Drive の箱庭を読み込む\nキャンセル：この端末の箱庭で Drive を上書きする`)) {
+          const save = await decodeSave(await download(remote.id));
+          await loadFrom(save, true);
+          await saveNow();
+          toast('Google Drive から読み込みました');
+          return;
+        }
+      }
+      await saveNow();
+      const save = buildSave();
+      await upload(await encodeSave(save), save.savedAt, remote?.id);
+      showSaveStatus(`Google Drive に同期：${new Date().toLocaleTimeString().slice(0, 5)}`);
+      toast('Google Drive に保存しました');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '同期できませんでした', 4000);
+    } finally {
+      driveBtn.disabled = false;
+    }
+  });
 
   // デバッグウィンドウの開閉（スマホでは最初はたたんでおく）
   const uiEl = $('ui');
@@ -711,7 +871,23 @@ async function main() {
 
   // 最初の画質：WebGL2 やスマホは「中」から。重ければ自動で下げる
   applyQuality(forceWebGL || isMobile || !(renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'medium' : 'high', false);
-  await doRegen();
+  // 起動：この端末に保存があれば読み込み（閉じていた間の時間も進める）、なければ新しく作る
+  try {
+    const stored = await loadLocal();
+    if (stored) {
+      await loadFrom(await decodeSave(stored.data), true);
+      lastSavedAt = stored.savedAt;
+      persisted = await navigator.storage?.persisted?.() ?? false;
+      showSaveStatus();
+    } else {
+      await doRegen(false);
+      await saveNow();
+    }
+  } catch (err) {
+    console.error(err);
+    toast('保存データを読めなかったので、新しい箱庭を作りました', 4000);
+    await doRegen(false);
+  }
 
   // ---------- ループ ----------
   const timer = new THREE.Timer();
@@ -719,6 +895,7 @@ async function main() {
   let fpsFrames = 0, fpsTime = 0, fps = 0;
   const cA = new THREE.Color(), cB = new THREE.Color();
   let focusSmoothed = -1;
+  let autosaveT = 0;
   let gpuMs = 0;
   const fpsWindow: number[] = [];
   let lastQualityChange = performance.now();
@@ -841,6 +1018,10 @@ async function main() {
     cpuLogic += ((tr0 - tl0) - cpuLogic) * 0.1;
     cpuRender += ((tr1 - tr0) - cpuRender) * 0.1;
 
+    // 自動保存：変更があれば 1 分ごと、なくても 5 分ごと（早送り中は箱庭内の時計がずれるので 1 分ごと）
+    autosaveT += dt;
+    if ((autosaveT > 60 && (game.unsaved || game.farm.speed > 1)) || autosaveT > 300) { autosaveT = 0; saveNow(); }
+
     fpsFrames++; fpsTime += dt;
     if (fpsTime > 0.5) {
       fps = fpsFrames / fpsTime; fpsFrames = 0; fpsTime = 0;
@@ -881,7 +1062,7 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { bench, adapterInfo, applyQuality, fireflyData, game, selectTool, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {

@@ -147,3 +147,10 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .dex-card.sel { outline: 2px solid rgba(47,125,225,0.7); }
 #dexDetail { margin-top: 10px; font-size: 12px; line-height: 1.6; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.3); min-height: 3em; }
 @media (max-width: 760px) { #modes, #toast, #tooltip, #editor { display: none !important; } }
+
+/* 保存 */
+.save-status { font-size: 12px; line-height: 1.5; margin-bottom: 6px; }
+.save-status small { color: var(--muted); font-size: 10.5px; }
+.save-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.save-buttons button { border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.35); border-radius: 10px; padding: 5px 6px; cursor: pointer; font-size: 12px; color: var(--ink); }
+.save-buttons button:disabled { opacity: 0.5; cursor: wait; }

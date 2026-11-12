@@ -151,3 +151,32 @@ export function generateWorld(size: number, height: number, seed: number, params
 
 /** メインスレッドに渡す地形データ（小物の配置は別に送る） */
 export type WorldData = Omit<World, 'trees' | 'flowers'>;
+
+/**
+ * セーブデータの差分（[番号, 種類, ...]）を生成した地形に当てる。
+ * 変えた列の高さ・歩けるかを直し、その列の花は取り除く（木の列は編集できないので残る）。
+ */
+export function applyEdits(world: World, edits: number[]) {
+  const N = world.size, H = world.height;
+  const cols = new Set<number>();
+  for (let i = 0; i + 1 < edits.length; i += 2) {
+    const idx = edits[i];
+    if (idx < 0 || idx >= world.voxels.length) continue;
+    world.voxels[idx] = edits[i + 1];
+    cols.add(idx % (N * N));
+  }
+  const treeCols = new Set(world.trees.map((t) => Math.floor(t.x) + Math.floor(t.z) * N));
+  for (const col of cols) {
+    const x = col % N, z = Math.floor(col / N);
+    let h = H;
+    while (h > 0) {
+      const t = world.voxels[x + z * N + (h - 1) * N * N];
+      if (t > 0 && t !== WATER) break;
+      h--;
+    }
+    world.heights[col] = h;
+    const top = h > 0 ? world.voxels[x + z * N + (h - 1) * N * N] : 0;
+    world.walkable[col] = (top === GRASS || top === SAND || top === DIRT || top === 13 || top === 14) && !treeCols.has(col) ? 1 : 0;
+  }
+  world.flowers = world.flowers.filter((f) => !cols.has(Math.floor(f.x) + Math.floor(f.z) * N));
+}
