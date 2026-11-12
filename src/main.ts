@@ -1,15 +1,23 @@
 import * as THREE from 'three/webgpu';
-import { mix, pass, screenUV, uniform } from 'three/tsl';
+import { float, packNormalToRGB, unpackRGBToNormal, mix, mrt, normalView, output, pass, sample, uniform, vec4 } from 'three/tsl';
 import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
+import { ao } from 'three/addons/tsl/display/GTAONode.js';
+import { denoise } from 'three/addons/tsl/display/DenoiseNode.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RIPPLES, U, createDetailMaterial, createTerrainMaterial, createWaterMaterial, rippleData } from './render/materials';
 import { createDaylight } from './render/daylight';
+import { SKY, createPrecipitation, createSkyNode } from './render/sky';
 import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
+import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, weatherAt, type WeatherKind } from './weather';
 import { spawnAnimals, type Animal } from './creatures/animals';
+import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
-import type { WorldData } from './world/terrain';
+import type { TerrainParams, WorldData } from './world/terrain';
 import type { MeshData } from './world/mesher';
 import type { DetailSet } from './world/worker';
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type N = any;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const WORLD_HEIGHT = 40;
@@ -20,6 +28,7 @@ interface WorkerResult {
   terrain: MeshData;
   water: MeshData;
   details: DetailSet[];
+  flowerPlacements: Float32Array[];
   counts: { trees: number; flowers: number };
   timings: { generate: number; mesh: number; details: number };
 }
@@ -40,40 +49,65 @@ async function main() {
 
   // ---------- シーン・カメラ ----------
   const scene = new THREE.Scene();
-  const bgTop = uniform(new THREE.Color());
-  const bgBottom = uniform(new THREE.Color());
-  scene.backgroundNode = mix(bgTop, bgBottom, screenUV.y);
+  // 空：青空と雲、夜は星と流れ星（方向ベースなので見上げても破綻しない）
+  scene.backgroundNode = createSkyNode();
 
   // 低 FOV の透視投影：ミニチュアらしさと奥行きのバランス
-  const camera = new THREE.PerspectiveCamera(28, 1, 1, 2000);
+  const camera = new THREE.PerspectiveCamera(28, 1, 0.3, 2000);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.minPolarAngle = THREE.MathUtils.degToRad(20);
-  controls.maxPolarAngle = THREE.MathUtils.degToRad(72);
-  controls.screenSpacePanning = false;
+  // 真上近くから、水平より下（見上げる）まで回せる
+  controls.minPolarAngle = THREE.MathUtils.degToRad(5);
+  controls.maxPolarAngle = THREE.MathUtils.degToRad(105);
+  controls.screenSpacePanning = true; // 右ドラッグで注視点を上下にも動かせる
+  controls.zoomToCursor = true; // カーソルの位置に向かってズーム
   controls.autoRotateSpeed = 0.6;
 
   const daylight = createDaylight(scene);
 
-  // ---------- ポストプロセス（被写界深度：画面中央にピント） ----------
+  // ---------- ポストプロセス：AO（GTAO）→ 被写界深度（画面中央にピント） ----------
   const pipeline = new THREE.RenderPipeline(renderer);
   const scenePass = pass(scene, camera);
+  scenePass.setMRT(mrt({ output, normal: packNormalToRGB(normalView) }));
   const color = scenePass.getTextureNode('output');
+  const normalTex = scenePass.getTextureNode('normal');
+  const depthTex = scenePass.getTextureNode('depth');
   const viewZ = scenePass.getViewZNode();
+
+  const sceneNormal = sample((uv: N) => unpackRGBToNormal((normalTex as N).sample(uv)));
+  const aoPass = ao(depthTex, sceneNormal, camera);
+  aoPass.resolutionScale = 0.5;
+  aoPass.radius.value = 1.6; // ボクセル 1〜2 個分くらいの範囲の隅を暗く
+  aoPass.thickness.value = 2;
+  aoPass.scale.value = 1.6;
+  aoPass.distanceFallOff.value = 1;
+  const uAO = uniform(1);
+  // GTAO はサンプルのノイズが粒状に見えるので、深度と法線を見ながらぼかして消す
+  const aoValue = (denoise(aoPass.getTextureNode(), depthTex, sceneNormal, camera) as N).r;
+  const withAO = vec4((color as N).rgb.mul(mix(float(1), aoValue, uAO)), 1);
+
   const uFocus = uniform(100);
   const uFocal = uniform(30);
   const uBokeh = uniform(1.8);
-  const dofOut = dof(color, viewZ, uFocus, uFocal, uBokeh);
-  const setDof = (on: boolean) => {
-    pipeline.outputNode = on ? dofOut : color;
+  const isSky = (depthTex as N).r.greaterThanEqual(0.99999);
+  let dofOn = true, aoOn = true;
+  const updatePost = () => {
+    const src: N = aoOn ? withAO : color;
+    // 空（背景）はぼかさない：星や雲がくっきり見えるように
+    pipeline.outputNode = dofOn ? isSky.select(src, dof(src, viewZ, uFocus, uFocal, uBokeh)) : src;
     pipeline.needsUpdate = true;
   };
-  setDof(true);
+  updatePost();
 
   // ---------- 箱庭 ----------
   const waterMat = createWaterMaterial();
   const detailMat = createDetailMaterial();
+  const flowerMat = createDetailMaterial(0.12); // 花は背が低いので高さに比例して揺らす
+  const lowPolyFlowers = [0, 1, 2].map((v) => buildLowPolyFlower(v));
+  let precip: { rain: THREE.InstancedMesh; snow: THREE.InstancedMesh } | null = null;
+  const rainAmount = uniform(0);
+  const snowAmount = uniform(0);
   let terrainMat: THREE.MeshStandardNodeMaterial | null = null;
   let typeTex: THREE.Data3DTexture | null = null;
   const diorama = new THREE.Group();
@@ -103,18 +137,18 @@ async function main() {
   const clearDiorama = () => {
     diorama.traverse((o) => {
       if (o instanceof THREE.Mesh) {
-        o.geometry.dispose();
+        if (!o.userData.sharedGeometry) o.geometry.dispose();
         if (o.userData.ownMaterial) (o.material as THREE.Material).dispose();
       }
     });
     diorama.clear();
   };
 
-  const regenerate = (size: number, seed: number, detail: number) =>
+  const regenerate = (size: number, seed: number, detail: number, params: TerrainParams, flowerStyle: string) =>
     new Promise<void>((resolve) => {
       busy.style.display = 'grid';
       worker.onmessage = (e: MessageEvent<WorkerResult>) => {
-        const { world: w, terrain, water, details, counts, timings } = e.data;
+        const { world: w, terrain, water, details, flowerPlacements, counts, timings } = e.data;
         world = w;
         clearDiorama();
         const half = w.size / 2;
@@ -149,23 +183,41 @@ async function main() {
         // 小物（木・花）はインスタンス描画
         let detailTris = 0;
         const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
-        for (const d of details) {
-          const count = d.placements.length / 5;
-          if (count === 0) continue;
-          const im = new THREE.InstancedMesh(toGeometry(d.mesh), detailMat, count);
+        const addInstances = (geo: THREE.BufferGeometry, mat: THREE.Material, placements: Float32Array, kind: string, shared: boolean) => {
+          const count = placements.length / 5;
+          if (count === 0) return;
+          const im = new THREE.InstancedMesh(geo, mat, count);
           for (let i = 0; i < count; i++) {
-            const [x, y, z, rot, s] = d.placements.subarray(i * 5, i * 5 + 5);
+            const [x, y, z, rot, s] = placements.subarray(i * 5, i * 5 + 5);
             ps.set(x - half, y, z - half);
             q.setFromAxisAngle(up, rot);
             sc.setScalar(s);
             im.setMatrixAt(i, mtx.compose(ps, q, sc));
           }
-          im.castShadow = d.kind === 'tree';
+          im.castShadow = kind === 'tree';
           im.receiveShadow = true;
-          im.userData.kind = d.kind;
+          im.userData.kind = kind;
+          im.userData.sharedGeometry = shared;
           diorama.add(im);
-          detailTris += (d.mesh.index.length / 3) * count;
+          const tri = geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3;
+          detailTris += tri * count;
+        };
+        for (const d of details) {
+          if (d.kind === 'flower' && flowerStyle === 'lowpoly') continue;
+          addInstances(toGeometry(d.mesh), d.kind === 'flower' ? flowerMat : detailMat, d.placements, d.kind, false);
         }
+        // ローポリの花（細かさに関係なく使える）。ボクセルの花が作れない 1/1 でもローポリで出す
+        const hasVoxelFlowers = details.some((d) => d.kind === 'flower');
+        if (flowerStyle === 'lowpoly' || !hasVoxelFlowers) {
+          flowerPlacements.forEach((p, v) => addInstances(lowPolyFlowers[v], flowerMat, p, 'flower', true));
+        }
+
+        // 雨・雪（フィールドの大きさに合わせて作り直す）
+        if (precip) {
+          for (const m of [precip.rain, precip.snow]) { scene.remove(m); m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
+        }
+        precip = { rain: createPrecipitation('rain', w.size, rainAmount), snow: createPrecipitation('snow', w.size, snowAmount) };
+        scene.add(precip.rain, precip.snow);
 
         for (const a of animals) a.object.removeFromParent();
         animals = spawnAnimals(w, Math.max(4, Math.round(w.size / 10)));
@@ -175,13 +227,10 @@ async function main() {
         U.worldSize.value = w.size;
         U.detail.value = detail;
 
-        // 影の範囲と解像度、カメラの距離をフィールドに合わせる
-        daylight.sun.shadow.mapSize.setScalar(w.size > 160 ? 4096 : 2048);
-        daylight.sun.shadow.map?.dispose();
-        daylight.sun.shadow.map = null;
+        // カメラの距離をフィールドに合わせる（近づいて見上げられるよう最短距離は小さめ）
         camera.far = w.size * 8;
         camera.updateProjectionMatrix();
-        controls.minDistance = Math.min(30, w.size * 0.35);
+        controls.minDistance = 3;
         controls.maxDistance = w.size * 3.2;
         const r = w.size * 2.3;
         controls.target.set(0, 10, 0);
@@ -193,7 +242,7 @@ async function main() {
         busy.style.display = 'none';
         resolve();
       };
-      worker.postMessage({ size, height: WORLD_HEIGHT, seed, detail });
+      worker.postMessage({ size, height: WORLD_HEIGHT, seed, detail, params });
     });
 
   // ---------- 画面中央の奥行き（ボクセルのレイマーチ） ----------
@@ -275,7 +324,46 @@ async function main() {
   $<HTMLInputElement>('round').addEventListener('change', (e) => { U.roundEdges.value = (e.target as HTMLInputElement).checked ? 1 : 0; });
   const blendInput = $<HTMLInputElement>('blend');
   blendInput.addEventListener('input', () => { U.blend.value = parseFloat(blendInput.value); });
-  $<HTMLInputElement>('dof').addEventListener('change', (e) => setDof((e.target as HTMLInputElement).checked));
+  $<HTMLInputElement>('dof').addEventListener('change', (e) => { dofOn = (e.target as HTMLInputElement).checked; updatePost(); });
+  $<HTMLInputElement>('ssao').addEventListener('change', (e) => { aoOn = (e.target as HTMLInputElement).checked; updatePost(); });
+  const aoInput = $<HTMLInputElement>('aoStrength');
+  aoInput.addEventListener('input', () => { uAO.value = parseFloat(aoInput.value); });
+
+  // 天気
+  let weatherOverride: WeatherKind | null = null;
+  $<HTMLSelectElement>('weather').addEventListener('change', (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    weatherOverride = v === 'auto' ? null : (v as WeatherKind);
+  });
+  const weatherNow = { ...WEATHER_PARAMS.clear };
+  let weatherInit = false;
+
+  // 流れ星（夜・晴れの時にときどき。ボタンでも流せる）
+  let meteorT = -1, meteorDur = 1;
+  const launchMeteor = () => {
+    const az = Math.random() * Math.PI * 2;
+    const el = 0.35 + Math.random() * 0.45;
+    const a = new THREE.Vector3(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el));
+    const az2 = az + (Math.random() < 0.5 ? -1 : 1) * (0.25 + Math.random() * 0.3);
+    const el2 = el - 0.12 - Math.random() * 0.15;
+    const b = new THREE.Vector3(Math.cos(az2) * Math.cos(el2), Math.sin(el2), Math.sin(az2) * Math.cos(el2));
+    SKY.meteorA.value.copy(a);
+    SKY.meteorB.value.copy(b);
+    meteorT = 0;
+    meteorDur = 0.7 + Math.random() * 0.6;
+  };
+  $('meteor').addEventListener('click', launchMeteor);
+
+  // 地形のパラメータ
+  const PARAM_KEYS: (keyof TerrainParams)[] = ['relief', 'mountains', 'water', 'rocks', 'forest', 'flowers'];
+  const paramInput = (k: keyof TerrainParams) => $<HTMLInputElement>(`p-${k}`);
+  const showParam = (k: keyof TerrainParams) => {
+    const el = paramInput(k);
+    (el.nextElementSibling as HTMLOutputElement).value = parseFloat(el.value).toFixed(1);
+  };
+  PARAM_KEYS.forEach((k) => { paramInput(k).addEventListener('input', () => showParam(k)); showParam(k); });
+  $('paramsReset').addEventListener('click', () => PARAM_KEYS.forEach((k) => { paramInput(k).value = '1'; showParam(k); }));
+  const readParams = () => Object.fromEntries(PARAM_KEYS.map((k) => [k, parseFloat(paramInput(k).value)])) as unknown as TerrainParams;
   const fInput = $<HTMLInputElement>('fstop');
   const fNumber = () => F_STOPS[parseInt(fInput.value, 10)];
   const showF = () => { $('fLabel').textContent = `f/${fNumber()}`; };
@@ -290,10 +378,13 @@ async function main() {
     parseInt($<HTMLSelectElement>('size').value, 10),
     parseInt($<HTMLInputElement>('seed').value, 10) || 0,
     parseInt($<HTMLSelectElement>('detail').value, 10),
+    readParams(),
+    $<HTMLSelectElement>('flowerStyle').value,
   );
   $('regen').addEventListener('click', doRegen);
   $('size').addEventListener('change', doRegen);
   $('detail').addEventListener('change', doRegen);
+  $('flowerStyle').addEventListener('change', doRegen);
 
   // 左右パネルの開閉
   const layout = $('layout');
@@ -351,6 +442,13 @@ async function main() {
       camera.position.copy(controls.target).add(offset);
     }
     controls.update(dt);
+    // 地面の下にカメラが潜らないようにする（見上げる時）
+    if (world) {
+      const N = world.size;
+      const cx = Math.floor(camera.position.x + N / 2), cz = Math.floor(camera.position.z + N / 2);
+      const ground = cx >= 0 && cz >= 0 && cx < N && cz < N ? Math.max(world.heights[cx + cz * N], world.waterLevel) : 0;
+      if (camera.position.y < ground + 0.5) camera.position.y = ground + 0.5;
+    }
 
     // 時刻（端末の現在時刻と連動。スライダーで上書き可）
     const now = new Date();
@@ -359,14 +457,30 @@ async function main() {
     const hh = Math.floor(hour), mm = Math.floor((hour - hh) * 60);
     $('timeLabel').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}${timeOverride === null ? '' : '（手動）'}`;
 
-    const size = world?.size ?? 64;
-    daylight.apply(hour, focusPoint, size * 0.78);
-    bgTop.value.copy(daylight.bgTop);
-    bgBottom.value.copy(daylight.bgBottom);
-
     // 季節（全世界共通の暦。セレクトで上書き可）
     const st = seasonAt(now);
     const s = seasonOverride ?? st.season;
+
+    // 天気（全世界共通。セレクトで上書き可）。少しずつ移り変わる
+    let wk: WeatherKind = weatherOverride ?? weatherAt(now, s);
+    if (wk === 'snow' && s !== 3 && weatherOverride === null) wk = 'rain';
+    if (!weatherInit) { Object.assign(weatherNow, WEATHER_PARAMS[wk]); weatherInit = true; }
+    approachWeather(weatherNow, WEATHER_PARAMS[wk], dt, weatherOverride ? 1.2 : 0.35);
+    rainAmount.value = weatherNow.rain;
+    snowAmount.value = weatherNow.snow;
+    if (precip) { precip.rain.visible = weatherNow.rain > 0.01; precip.snow.visible = weatherNow.snow > 0.01; }
+    $('weatherLabel').textContent = `いま：${WEATHER_NAMES[weatherAt(now, st.season)]}`;
+
+    const size = world?.size ?? 64;
+    daylight.apply(hour, focusPoint, size * 0.78, weatherNow);
+
+    // 流れ星：夜で晴れている時、ときどき
+    if (meteorT < 0 && SKY.night.value > 0.8 && weatherNow.cloudCover < 0.5 && Math.random() < dt * 0.08) launchMeteor();
+    if (meteorT >= 0) {
+      meteorT += dt / meteorDur;
+      SKY.meteorP.value = meteorT;
+      if (meteorT > 1) { meteorT = -1; SKY.meteorP.value = -1; }
+    }
     const blend = seasonOverride === null ? st.blend : 0;
     const nextS = seasonOverride === null ? st.next : s;
     U.grassColor.value.copy(cA.setHex(SEASON_COLORS[s].grass).lerp(cB.setHex(SEASON_COLORS[nextS].grass), blend));
@@ -382,7 +496,8 @@ async function main() {
     // ときどき勝手に波紋
     nextAmbient -= dt;
     if (nextAmbient <= 0 && world) {
-      nextAmbient = 0.8 + Math.random() * 2.5;
+      // 雨の時は雨粒の波紋がたくさん
+      nextAmbient = weatherNow.rain > 0.3 ? 0.04 + Math.random() * 0.08 : 0.8 + Math.random() * 2.5;
       const N = world.size;
       for (let tries = 0; tries < 30; tries++) {
         const x = (Math.random() - 0.5) * N, z = (Math.random() - 0.5) * N;

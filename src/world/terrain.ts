@@ -30,7 +30,20 @@ const smoothstep = (a: number, b: number, x: number) => {
 export const TREE_VARIANTS = 6; // 0-3: 広葉樹, 4-5: 針葉樹
 export const FLOWER_VARIANTS = 3;
 
-export function generateWorld(size: number, height: number, seed: number): World {
+/** 地形のファクター（どれも 1 が標準。0〜2 程度） */
+export interface TerrainParams {
+  relief: number; // 起伏の激しさ（細かな丘）
+  mountains: number; // 山の高さ（大きな起伏）
+  water: number; // 水の多さ（湖・川の幅）
+  rocks: number; // 岩場の多さ
+  forest: number; // 森の密度
+  flowers: number; // 花の密度
+}
+
+export const DEFAULT_PARAMS: TerrainParams = { relief: 1, mountains: 1, water: 1, rocks: 1, forest: 1, flowers: 1 };
+
+export function generateWorld(size: number, height: number, seed: number, params: TerrainParams = DEFAULT_PARAMS): World {
+  const P = params;
   const N = size;
   const H = height;
   const WL = 10;
@@ -52,17 +65,20 @@ export function generateWorld(size: number, height: number, seed: number): World
   // 1. 地形の高さ
   for (let z = 0; z < N; z++) {
     for (let x = 0; x < N; x++) {
-      let h = 12.5 + fbm(x / 48, z / 48) * 7 + Math.max(0, n2(x / 30, z / 30)) * 9;
+      let h = 12.5 + (fbm(x / 48, z / 48) * 7 + Math.max(0, n2(x / 30, z / 30)) * 9) * P.relief;
       // 大きな起伏（広いフィールドで山と谷ができる）
-      h += Math.max(0, n4(x / 90, z / 90)) * 12;
-      // 湖：低周波ノイズの窪地
+      h += Math.max(0, n4(x / 90, z / 90)) * 12 * P.mountains;
+      // 湖：低周波ノイズの窪地（水が多いほど広く）
       const lake = n3(x / 70 + 40, z / 70 - 20);
-      if (lake > 0.35) h -= (lake - 0.35) * 30;
-      // 川：X 方向に蛇行しながら流れる
-      const cz = N * 0.5 + Math.sin(x * 0.07 + riverPhase) * Math.min(N, 96) * 0.15 + n2(x * 0.03, 5.3) * Math.min(N, 128) * 0.08;
-      const d = Math.abs(z - cz);
-      const rw = 2.2 + 0.8 * Math.sin(x * 0.13 + riverPhase) + (N > 128 ? 1 : 0);
-      if (d < rw + 7) h = WL - 2.2 + (h - (WL - 2.2)) * smoothstep(rw, rw + 7, d);
+      const lakeT = 0.35 + (1 - P.water) * 0.25;
+      if (lake > lakeT) h -= (lake - lakeT) * 30;
+      // 川：X 方向に蛇行しながら流れる（水がほぼ無い設定では作らない）
+      if (P.water > 0.15) {
+        const cz = N * 0.5 + Math.sin(x * 0.07 + riverPhase) * Math.min(N, 96) * 0.15 + n2(x * 0.03, 5.3) * Math.min(N, 128) * 0.08;
+        const d = Math.abs(z - cz);
+        const rw = Math.max(0.8, 2.2 + 0.8 * Math.sin(x * 0.13 + riverPhase) + (N > 128 ? 1 : 0) + (P.water - 1) * 1.5);
+        if (d < rw + 7) h = WL - 2.2 + (h - (WL - 2.2)) * smoothstep(rw, rw + 7, d);
+      }
       h = Math.max(3, Math.min(H - 6, Math.round(h)));
       heights[x + z * N] = h;
 
@@ -73,7 +89,7 @@ export function generateWorld(size: number, height: number, seed: number): World
       let top: number;
       if (h - 1 <= WL) top = SAND;
       else if (h - 1 <= WL + 2 && beach > -0.1) top = SAND; // 砂浜が内陸に入り込む
-      else if (h > 27 || rocky > 0.5) top = STONE; // 岩場
+      else if (h > 27 || rocky > 0.5 + (1 - P.rocks) * 0.3) top = STONE; // 岩場
       else if (bare > 0.55) top = DIRT; // 土がむき出しの所
       else top = GRASS;
       for (let y = 0; y < h; y++) {
@@ -104,7 +120,7 @@ export function generateWorld(size: number, height: number, seed: number): World
       const h = heights[x + z * N];
       if (topAt(x, z) !== GRASS || h - 1 <= WL + 1) continue;
       const forest = n3(x / 22, z / 22);
-      const p = forest > 0.15 ? 0.07 : 0.008;
+      const p = (forest > 0.15 ? 0.07 : 0.008) * P.forest;
       if (rand() > p) continue;
       let blocked = false;
       for (let dz = -2; dz <= 2 && !blocked; dz++) for (let dx = -2; dx <= 2; dx++) if (occupied[x + dx + (z + dz) * N]) { blocked = true; break; }
@@ -124,7 +140,7 @@ export function generateWorld(size: number, height: number, seed: number): World
     for (let x = 1; x < N - 1; x++) {
       if (topAt(x, z) !== GRASS || occupied[x + z * N]) continue;
       const meadow = n1(x / 15 + 100, z / 15);
-      if (rand() > (meadow > 0.2 ? 0.12 : 0.015)) continue;
+      if (rand() > (meadow > 0.2 ? 0.12 : 0.015) * P.flowers) continue;
       const variant = Math.floor((n2(x / 9, z / 9) * 0.5 + 0.5) * FLOWER_VARIANTS * 0.999 + rand() * 0.6) % FLOWER_VARIANTS;
       flowers.push({ variant, x: x + 0.2 + rand() * 0.6, y: heights[x + z * N], z: z + 0.2 + rand() * 0.6, rot: rand() * Math.PI * 2, scale: 0.8 + rand() * 0.4 });
     }

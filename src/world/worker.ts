@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
-import { FLOWER_VARIANTS, TREE_VARIANTS, generateWorld, type Placement } from './terrain';
+import { FLOWER_VARIANTS, TREE_VARIANTS, generateWorld, type Placement, type TerrainParams } from './terrain';
 import { buildMesh, transformMesh, type MeshData } from './mesher';
 import { buildFlowerModel, buildTreeModel } from './details';
 
-export interface GenerateRequest { size: number; height: number; seed: number; detail: number; }
+export interface GenerateRequest { size: number; height: number; seed: number; detail: number; params: TerrainParams; }
 
 export interface DetailSet {
   kind: 'tree' | 'flower';
@@ -22,9 +22,9 @@ const pack = (list: Placement[], variant: number) => {
 };
 
 self.onmessage = (e: MessageEvent<GenerateRequest>) => {
-  const { size, height, seed, detail } = e.data;
+  const { size, height, seed, detail, params } = e.data;
   const t0 = performance.now();
-  const world = generateWorld(size, height, seed);
+  const world = generateWorld(size, height, seed, params);
   const t1 = performance.now();
   const grid = { sx: size, sy: height, sz: size, data: world.voxels };
   const terrain = buildMesh(grid, { skipBottom: true });
@@ -38,21 +38,28 @@ self.onmessage = (e: MessageEvent<GenerateRequest>) => {
     const mesh = transformMesh(buildMesh(m.grid), 1 / detail, ...m.offset);
     details.push({ kind: 'tree', mesh, placements: pack(world.trees, v) });
   }
+  // ボクセルの花（細かさ 1/3 以上の時だけ作れる）
   for (let v = 0; v < FLOWER_VARIANTS; v++) {
     const m = buildFlowerModel(v, detail);
     if (!m) continue;
     const mesh = transformMesh(buildMesh(m.grid), 1 / detail, ...m.offset);
     details.push({ kind: 'flower', mesh, placements: pack(world.flowers, v) });
   }
+  // 花の配置はボクセルの細かさに関係なく渡す（ローポリの花で使う）
+  const flowerPlacements = Array.from({ length: FLOWER_VARIANTS }, (_, v) => pack(world.flowers, v));
   const t3 = performance.now();
 
   const { trees: _t, flowers: _f, ...worldOut } = world;
   (self as unknown as DedicatedWorkerGlobalScope).postMessage(
     {
-      world: worldOut, terrain, water, details,
+      world: worldOut, terrain, water, details, flowerPlacements,
       counts: { trees: world.trees.length, flowers: world.flowers.length },
       timings: { generate: t1 - t0, mesh: t2 - t1, details: t3 - t2 },
     },
-    [world.voxels.buffer, ...buffersOf(terrain), ...buffersOf(water), ...details.flatMap((d) => [...buffersOf(d.mesh), d.placements.buffer])],
+    [
+      world.voxels.buffer, ...buffersOf(terrain), ...buffersOf(water),
+      ...details.flatMap((d) => [...buffersOf(d.mesh), d.placements.buffer]),
+      ...flowerPlacements.map((p) => p.buffer),
+    ],
   );
 };

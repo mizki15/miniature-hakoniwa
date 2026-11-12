@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
   abs, attribute, cameraFar, cameraNear, cameraPosition, clamp, dot, exp, float, floor, fract as fractT, instanceIndex,
-  int, ivec3, length, max, mix, mx_noise_float as noiseT, mx_noise_vec3, normalize, normalGeometry, normalLocal, perspectiveDepthToViewZ,
+  int, ivec3, length, max, mix, mx_noise_float as noiseT, mx_noise_vec3, normalize, normalGeometry, normalLocal, normalWorldGeometry, perspectiveDepthToViewZ,
   positionGeometry, positionLocal, positionView, positionWorld, pow, screenUV, sin, cos, smoothstep as smoothstepT, step, texture3DLoad, time,
   transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture,
 } from 'three/tsl';
@@ -36,6 +36,9 @@ export const U = {
 export const RIPPLES = 12;
 export const rippleData = Array.from({ length: RIPPLES }, () => new THREE.Vector4(0, 0, -1000, 0));
 const ripples = uniformArray(rippleData, 'vec4');
+
+/** 影の自己遮蔽（シャドウアクネ）を防ぐため、影を参照する位置を面から浮かせる量 */
+const SHADOW_OFFSET = 0.06;
 
 const palette = uniformArray(paletteFlat().map(([r, g, b]) => new THREE.Color(r, g, b)), 'color');
 
@@ -106,15 +109,25 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   }
   const blended = colSum.div(wSum);
 
-  // --- 角丸：平面が途切れる側の縁だけ法線を外へ曲げる ---
+  // --- 角丸（ベベル） ---
+  // 縁の種類ごとに法線を曲げる：
+  //   凸の縁（となりが空気＝段差の下り）→ 外側へ曲げる（+1）
+  //   凹の縁（となりの手前に壁が立ち上がる）→ 壁から離れる向きへ曲げる（-0.75）。入り隅もまるく見える
+  //   同じ平面が続く → 曲げない（継ぎ目に溝を作らない）
   const fr = fract(faceUV);
-  const open = (dir: N) => isOpaque(typeAt(voxel.add(dir))).not().select(float(1), float(0));
-  const w = float(0.18);
-  const eu = open(tU).mul(smoothstep(float(1).sub(w), 1, fr.x)).sub(open(tU.negate()).mul(float(1).sub(smoothstep(0, w, fr.x))));
-  const ev = open(tV).mul(smoothstep(float(1).sub(w), 1, fr.y)).sub(open(tV.negate()).mul(float(1).sub(smoothstep(0, w, fr.y))));
+  const edgeKind = (dir: N): N => {
+    const nbSolid = isOpaque(typeAt(voxel.add(dir)));
+    const wall = isOpaque(typeAt(voxel.add(dir).add(nL)));
+    return nbSolid.not().select(float(1), wall.select(float(-0.75), float(0)));
+  };
+  const w = float(0.2);
+  const eu = edgeKind(tU).mul(smoothstep(float(1).sub(w), 1, fr.x)).sub(edgeKind(tU.negate()).mul(float(1).sub(smoothstep(0, w, fr.x))));
+  const ev = edgeKind(tV).mul(smoothstep(float(1).sub(w), 1, fr.y)).sub(edgeKind(tV.negate()).mul(float(1).sub(smoothstep(0, w, fr.y))));
   const k = U.roundEdges.mul(0.9);
   const bent = normalize(nL.add(tU.mul(eu.mul(k))).add(tV.mul(ev.mul(k))));
   m.normalNode = transformNormalToView(bent);
+  // 影の参照位置は「曲げる前」の法線方向に少し浮かせる（縁のギザギザ防止）
+  m.receivedShadowPositionNode = positionWorld.add(normalWorldGeometry.mul(SHADOW_OFFSET));
 
   // --- 色 ---
   // ボクセルごとのゆらぎは弱め＋なめらかなノイズで、平面のつながりを保つ
@@ -138,8 +151,11 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   return m;
 }
 
-/** 小物（木・花）：頂点カラー・季節の色・AO・風で揺れる */
-export function createDetailMaterial(): THREE.MeshStandardNodeMaterial {
+/**
+ * 小物（木・花）：頂点カラー・季節の色・AO・風で揺れる。
+ * swayLinear：背の低いもの（花）向けの揺れ。高さに比例して揺らす
+ */
+export function createDetailMaterial(swayLinear = 0): THREE.MeshStandardNodeMaterial {
   const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
   const pL: N = positionLocal; // ※インスタンスの行列を適用した後の座標（箱庭全体の中での位置）
   const pG: N = positionGeometry; // モデル自身の座標（根元が y=0）
@@ -149,10 +165,11 @@ export function createDetailMaterial(): THREE.MeshStandardNodeMaterial {
   // 2 つの周期を重ねてゆっくり不規則に。個体ごとに位相をずらす
   const phase = fract(sin(float(instanceIndex).mul(12.9898)).mul(43758.5453)).mul(6.28);
   const hgt = max(pG.y, 0);
-  const sway = hgt.mul(hgt).mul(0.0022).min(0.25).mul(U.wind);
+  const sway = hgt.mul(hgt).mul(0.0022).add(hgt.mul(swayLinear)).min(0.25).mul(U.wind);
   const gust = sin(time.mul(0.9).add(phase)).mul(0.7).add(sin(time.mul(2.3).add(phase.mul(2.1))).mul(0.3));
   const gust2 = cos(time.mul(0.7).add(phase.mul(1.7))).mul(0.6);
   m.positionNode = pL.add(vec3(gust, 0, gust2).mul(sway));
+  m.receivedShadowPositionNode = positionWorld.add(normalWorldGeometry.mul(SHADOW_OFFSET));
 
   const veg = attribute('veg', 'float');
   const base = attribute('color', 'vec3');
