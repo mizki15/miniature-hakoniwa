@@ -502,39 +502,40 @@ export class GameController {
     this.wetCheck = 0;
   }
 
-  /** ステータスモード：その場所の様子（作物・苗木・地面） */
-  describe(hit: VoxelHit | null, env: { season: number; raining: boolean }): { title: string; lines: string[]; progress?: number } | null {
+  /** 指した所の作物の列（作物がなければ null） */
+  cropColAt(hit: VoxelHit | null): number | null {
     const w = this.world;
     if (!w || !hit) return null;
     const col = hit.x + hit.z * w.size;
+    return this.farm.crops.has(col) ? col : null;
+  }
+
+  /** 作物の様子（ホバー・固定表示用）。作物がなければ null */
+  describeCrop(col: number, env: { season: number; raining: boolean }): { title: string; lines: string[]; progress: number } | null {
     const crop = this.farm.crops.get(col);
-    if (crop) {
-      const def = CROPS[crop.kind];
-      const stageNames = ['芽が出た', '若い', '育ってきた', '収穫できる'];
-      const wet = this.farm.isWateredNow(col) ? '水やり済み' : this.irrigated(col) ? '水路のそば（しっとり）' : env.raining ? '雨でしっとり' : '乾いている（水やりで倍の速さ）';
-      const lines = [stageNames[Farm.stage(crop.progress)], wet];
-      if (crop.progress < 1) {
-        const seasonRate = env.season === 3 ? 0 : def.seasons.includes(env.season) ? 1 : 0.35;
-        const rate = seasonRate * (this.isWet(col) || env.raining ? 1 : 0.5);
-        if (rate === 0) lines.push('冬のあいだは育たない');
-        else {
-          const mins = Math.ceil(((1 - crop.progress) * def.hours * 60) / rate);
-          lines.push(`収穫まで あと約 ${mins >= 60 ? `${Math.floor(mins / 60)}時間${mins % 60}分` : `${mins}分`}`);
-        }
-        if (!def.seasons.includes(env.season) && env.season !== 3) lines.push('季節外れなのでゆっくり');
+    if (!crop) return null;
+    const def = CROPS[crop.kind];
+    const stageNames = ['芽が出た', '若い', '育ってきた', '収穫できる'];
+    const wet = this.farm.isWateredNow(col) ? '水やり済み' : this.irrigated(col) ? '水路のそば（しっとり）' : env.raining ? '雨でしっとり' : '乾いている（水やりで倍の速さ）';
+    const lines = [stageNames[Farm.stage(crop.progress)], wet];
+    if (crop.progress < 1) {
+      const seasonRate = env.season === 3 ? 0 : def.seasons.includes(env.season) ? 1 : 0.35;
+      const rate = seasonRate * (this.isWet(col) || env.raining ? 1 : 0.5);
+      if (rate === 0) lines.push('冬のあいだは育たない');
+      else {
+        const mins = Math.ceil(((1 - crop.progress) * def.hours * 60) / rate);
+        lines.push(`収穫まで あと約 ${mins >= 60 ? `${Math.floor(mins / 60)}時間${mins % 60}分` : `${mins}分`}`);
       }
-      return { title: def.name, lines, progress: crop.progress };
+      if (!def.seasons.includes(env.season) && env.season !== 3) lines.push('季節外れなのでゆっくり');
     }
-    const sap = this.farm.saplings.find((s) => s.col === col);
-    if (sap) {
-      return { title: sap.progress < 1 ? '植えた苗木' : '植えた木', lines: [sap.progress < 1 ? `育ち具合 ${Math.floor(sap.progress * 100)}%` : 'すっかり大きくなった'], progress: sap.progress };
-    }
-    const t = this.get(hit.x, hit.y, hit.z);
-    const NAMES: Record<number, string> = { 1: '草地', 2: '土', 3: '岩', 4: '砂', 6: '木', 13: '畑（乾いている）', 14: '畑（湿っている）' };
-    const lines = [`高さ ${hit.y + 1}`];
-    if (this.treeCols.has(col)) lines.push('木が生えている');
-    if (isFarm(t)) lines.push('種をまけます');
-    return { title: NAMES[t] ?? '地面', lines };
+    return { title: def.name, lines, progress: crop.progress };
+  }
+
+  /** 列の上面の中心（世界座標） */
+  colTop(col: number) {
+    const w = this.world!;
+    const half = w.size / 2;
+    return new THREE.Vector3((col % w.size) + 0.5 - half, w.heights[col], Math.floor(col / w.size) + 0.5 - half);
   }
 
   /** 右パネルに出す情報 */

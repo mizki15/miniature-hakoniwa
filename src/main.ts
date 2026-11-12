@@ -281,7 +281,7 @@ async function main() {
     return world.voxels[x + z * N + (world.waterLevel - 1) * N * N] === WATER;
   };
   // ---------- モードと道具 ----------
-  type Mode = 'view' | 'edit' | 'status';
+  type Mode = 'view' | 'edit';
   let mode: Mode = 'view';
   const toolsEl = $('tools'), seedsEl = $('seeds'), hintEl = $('toolHint'), toastEl = $('toast'), tooltipEl = $('tooltip');
   let toastTimer = 0;
@@ -328,7 +328,7 @@ async function main() {
   const modeButtons = document.querySelectorAll<HTMLButtonElement>('#modes button');
   const setMode = (m: Mode) => {
     mode = m;
-    layoutEl.classList.remove('mode-view', 'mode-edit', 'mode-status');
+    layoutEl.classList.remove('mode-view', 'mode-edit');
     layoutEl.classList.add(`mode-${m}`);
     modeButtons.forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
     // エディタでは左ドラッグを道具に使う（視点は右ドラッグで回す）
@@ -339,7 +339,8 @@ async function main() {
     if (m === 'edit') selectTool(editTool);
     game.cursor.visible = false;
     tooltipEl.style.display = 'none';
-    if (m === 'status') refreshDex();
+    pinned = null;
+    if (m === 'view') refreshDex();
   };
   modeButtons.forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode as Mode)));
 
@@ -348,7 +349,6 @@ async function main() {
     const k = e.key.toLowerCase();
     if (k === 'v' || e.key === 'Escape') setMode('view');
     else if (k === 'e') setMode('edit');
-    else if (k === 's') setMode('status');
     else {
       const t = EDIT_TOOLS.find((x) => x.key === e.key);
       if (t) selectTool(t.id);
@@ -421,47 +421,89 @@ async function main() {
     if (hit && isWaterAt(hit.x, hit.z)) addRipple(hit.x, hit.z, 1);
   });
 
-  // ステータスモード：ホバーした動物・作物・地面の情報を小さく出す
-  const statusCursorColor = new THREE.Color(0x7fd3ff);
-  const updateHover = () => {
-    if (mode !== 'status') return;
-    if (!mouseInside || !world) { tooltipEl.style.display = 'none'; return; }
+  // 見るモード：作物・動物にホバーすると情報を小さく出す。右クリックで固定（他の所を触るまで）
+  type Target = { kind: 'animal'; animal: Animal } | { kind: 'crop'; col: number };
+  let pinned: Target | null = null;
+  const sameTarget = (a: Target | null, b: Target | null) =>
+    !!a && !!b && a.kind === b.kind && (a.kind === 'animal' ? a.animal === (b as { animal: Animal }).animal : a.col === (b as { col: number }).col);
+
+  /** マウスの下にある作物か動物（地面などは対象外） */
+  const targetAtMouse = (): Target | null => {
+    if (!world) return null;
     raycaster.setFromCamera(mouse, camera);
-    let html = '';
-    const animalHits = raycaster.intersectObjects(animals.map((a) => a.object), true);
     const voxelHit = game.pick(raycaster.ray.origin, raycaster.ray.direction);
-    const animalHit = animalHits[0];
+    const animalHit = raycaster.intersectObjects(animals.map((a) => a.object), true)[0];
     if (animalHit && (!voxelHit || animalHit.distance < voxelHit.t + 0.5)) {
       let o: THREE.Object3D | null = animalHit.object;
       while (o && !o.userData.animal) o = o.parent;
-      const a = o?.userData.animal as Animal | undefined;
-      if (a) {
-        const info = a.info;
-        html = `<div class="tt-title">${info.icon} ${a.name}</div><div class="tt-sub">${info.name}</div>` +
-          `<div class="tt-line">いま：${ACTIVITY_NAMES[a.activity]}</div><div class="tt-line">好きなもの：${a.favorite}</div><div class="tt-line">得意：${info.skill}</div>`;
-        game.cursor.visible = false;
-      }
+      if (o) return { kind: 'animal', animal: o.userData.animal as Animal };
     }
-    if (!html && voxelHit) {
-      const d = game.describe(voxelHit, lastEnv);
-      if (d) {
-        html = `<div class="tt-title">${d.title}</div>` + d.lines.map((l) => `<div class="tt-line">${l}</div>`).join('') +
-          (d.progress !== undefined ? `<div class="bar"><i style="width:${Math.round(d.progress * 100)}%"></i></div>` : '');
-        const half = world.size / 2;
-        game.cursor.visible = true;
-        game.cursor.position.set(voxelHit.x + 0.5 - half, voxelHit.y + 0.5, voxelHit.z + 0.5 - half);
-        (game.cursor.material as THREE.LineBasicMaterial).color.copy(statusCursorColor);
-      }
-    }
-    if (!html) { tooltipEl.style.display = 'none'; game.cursor.visible = false; return; }
-    tooltipEl.innerHTML = html;
-    tooltipEl.style.display = 'block';
-    // 画面の端ではみ出さないように
-    const w = tooltipEl.offsetWidth, h = tooltipEl.offsetHeight;
-    const sw = appEl.clientWidth, sh = appEl.clientHeight;
-    tooltipEl.style.left = `${Math.min(sw - w - 8, mousePx.x + 16)}px`;
-    tooltipEl.style.top = `${Math.min(sh - h - 8, mousePx.y + 16)}px`;
+    const col = game.cropColAt(voxelHit);
+    return col !== null ? { kind: 'crop', col } : null;
   };
+
+  const targetHtml = (t: Target): string | null => {
+    if (t.kind === 'animal') {
+      const a = t.animal, info = a.info;
+      return `<div class="tt-title">${info.icon} ${a.name}</div><div class="tt-sub">${info.name}</div>` +
+        `<div class="tt-line">いま：${ACTIVITY_NAMES[a.activity]}</div><div class="tt-line">好きなもの：${a.favorite}</div><div class="tt-line">得意：${info.skill}</div>`;
+    }
+    const d = game.describeCrop(t.col, lastEnv);
+    if (!d) return null;
+    return `<div class="tt-title">${CROP_ICONS[game.farm.crops.get(t.col)!.kind]} ${d.title}</div>` + d.lines.map((l) => `<div class="tt-line">${l}</div>`).join('') +
+      `<div class="bar"><i style="width:${Math.round(d.progress * 100)}%"></i></div>`;
+  };
+
+  const targetWorldPos = (t: Target) =>
+    t.kind === 'animal' ? t.animal.object.position.clone().add(new THREE.Vector3(0, 1.2, 0)) : game.colTop(t.col).add(new THREE.Vector3(0, 0.4, 0));
+
+  const statusCursorColor = new THREE.Color(0x7fd3ff);
+  const tmpV = new THREE.Vector3();
+  const updateHover = () => {
+    if (mode !== 'view' || !world) return;
+    // 固定表示が優先。対象が消えたら（収穫など）固定をやめる
+    if (pinned && !targetHtml(pinned)) pinned = null;
+    const t = pinned ?? (mouseInside ? targetAtMouse() : null);
+    const html = t ? targetHtml(t) : null;
+    if (!t || !html) { tooltipEl.style.display = 'none'; game.cursor.visible = false; return; }
+    tooltipEl.innerHTML = (pinned ? '<span class="pin">📌 固定中</span>' : '') + html;
+    tooltipEl.classList.toggle('pinned', !!pinned);
+    tooltipEl.style.display = 'block';
+    // 作物のマスは水色の枠で示す
+    if (t.kind === 'crop') {
+      game.cursor.visible = true;
+      game.cursor.position.copy(game.colTop(t.col)).add(tmpV.set(0, -0.5, 0));
+      (game.cursor.material as THREE.LineBasicMaterial).color.copy(statusCursorColor);
+    } else game.cursor.visible = false;
+    // 位置：固定中は対象の横（動物は動くのでついていく）、ホバー中はマウスの横
+    let px = mousePx.x, py = mousePx.y;
+    if (pinned) {
+      const v = targetWorldPos(pinned).project(camera);
+      px = (v.x + 1) / 2 * appEl.clientWidth;
+      py = (1 - v.y) / 2 * appEl.clientHeight;
+    }
+    const w = tooltipEl.offsetWidth, h = tooltipEl.offsetHeight;
+    tooltipEl.style.left = `${Math.max(8, Math.min(appEl.clientWidth - w - 8, px + 16))}px`;
+    tooltipEl.style.top = `${Math.max(8, Math.min(appEl.clientHeight - h - 8, py + 16))}px`;
+  };
+
+  // 右クリック（ドラッグではない時）：作物・動物の情報を固定。何もない所なら固定をやめる
+  let rightDown: { x: number; y: number } | null = null;
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (mode !== 'view') return;
+    if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY };
+    else if (pinned) pinned = null; // 他の所を触ったら固定をやめる
+  });
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    if (mode !== 'view' || e.button !== 2 || !rightDown) return;
+    const moved = Math.hypot(e.clientX - rightDown.x, e.clientY - rightDown.y) > 5;
+    rightDown = null;
+    if (moved) return; // 右ドラッグは視点の移動
+    setMouse(e.clientX, e.clientY);
+    const t = targetAtMouse();
+    pinned = t && !sameTarget(t, pinned) ? t : null;
+  });
+  renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
   // 図鑑
   const refreshDex = () => renderDex($('dexGrid'), $('dexDetail'), animals);

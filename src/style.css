@@ -106,11 +106,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 /* パネルの表示：見る＝なし、エディタ＝エディタのみ、ステータス＝図鑑とステータス */
 #editor { left: var(--gap); }
 #layout:not(.mode-edit) #editor { transform: translateX(calc(-100% - var(--gap) * 2)); opacity: 0; pointer-events: none; }
-#layout:not(.mode-status) #left { transform: translateX(calc(-100% - var(--gap) * 2)); opacity: 0; pointer-events: none; }
-#layout:not(.mode-status) #right { transform: translateX(calc(100% + var(--gap) * 2)); opacity: 0; pointer-events: none; }
-#layout:not(.mode-status) .reopen { display: none !important; }
-#layout.mode-view #ui { left: var(--gap); }
+#layout.mode-edit #left { transform: translateX(calc(-100% - var(--gap) * 2)); opacity: 0; pointer-events: none; }
+#layout.mode-edit #right { transform: translateX(calc(100% + var(--gap) * 2)); opacity: 0; pointer-events: none; }
+#layout.mode-edit .reopen { display: none !important; }
 #layout.mode-edit #ui { left: calc(var(--side-w) + var(--gap) * 2); }
+/* 右クリックで固定した情報 */
+#tooltip.pinned { border-color: rgba(47,125,225,0.6); box-shadow: 0 6px 22px rgba(20,40,60,0.25); }
+#tooltip .pin { float: right; font-size: 11px; color: var(--muted); margin-left: 8px; }
 
 /* エディタの道具一覧 */
 .tool-list { display: flex; flex-direction: column; gap: 6px; }
