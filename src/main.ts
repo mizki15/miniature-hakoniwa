@@ -328,7 +328,7 @@ async function main() {
   };
 
   const layoutEl = $('layout');
-  const modeButtons = document.querySelectorAll<HTMLButtonElement>('#modes button');
+  const modeButtons = document.querySelectorAll<HTMLButtonElement>('#modes button[data-mode]');
   const setMode = (m: Mode) => {
     mode = m;
     layoutEl.classList.remove('mode-view', 'mode-edit');
@@ -347,10 +347,30 @@ async function main() {
   };
   modeButtons.forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode as Mode)));
 
+  // Esc メニュー：画面全体をすりガラスにして、保存などのメニューを出す
+  const menuEl = $('menu');
+  const menuOpen = () => menuEl.classList.contains('open');
+  const setMenu = (open: boolean) => {
+    menuEl.classList.toggle('open', open);
+    menuEl.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (open) {
+      stroke = null;
+      tooltipEl.style.display = 'none';
+      game.cursor.visible = false;
+      showSaveStatus();
+    }
+  };
+  $('menuOpen').addEventListener('click', () => setMenu(true));
+  $('menuClose').addEventListener('click', () => setMenu(false));
+  // パネルの外（すりガラスの部分）を押しても閉じる
+  menuEl.addEventListener('pointerdown', (e) => { if (e.target === menuEl) setMenu(false); });
+
   window.addEventListener('keydown', (e) => {
-    if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+    if (e.key === 'Escape') { setMenu(!menuOpen()); return; }
+    if (menuOpen()) return; // メニューを開いている間は他のキーを受け付けない
+    if ((e.target as HTMLElement).closest?.('input, select, textarea')) return;
     const k = e.key.toLowerCase();
-    if (k === 'v' || e.key === 'Escape') setMode('view');
+    if (k === 'v') setMode('view');
     else if (k === 'e') setMode('edit');
     else {
       const t = EDIT_TOOLS.find((x) => x.key === e.key);

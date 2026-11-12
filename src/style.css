@@ -148,9 +148,30 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 #dexDetail { margin-top: 10px; font-size: 12px; line-height: 1.6; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.3); min-height: 3em; }
 @media (max-width: 760px) { #modes, #toast, #tooltip, #editor { display: none !important; } }
 
-/* 保存 */
-.save-status { font-size: 12px; line-height: 1.5; margin-bottom: 6px; }
-.save-status small { color: var(--muted); font-size: 10.5px; }
-.save-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.save-buttons button { border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.35); border-radius: 10px; padding: 5px 6px; cursor: pointer; font-size: 12px; color: var(--ink); }
-.save-buttons button:disabled { opacity: 0.5; cursor: wait; }
+/* ---------- Esc メニュー ----------
+   背景の時間帯（昼の明るい空・夜の暗い空）に関係なく読めるよう、
+   画面全体を明るめのすりガラスで覆い、パネルはほぼ不透明・文字は濃い色で固定する */
+#menu { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(232, 237, 243, 0.62); backdrop-filter: blur(22px) saturate(120%); -webkit-backdrop-filter: blur(22px) saturate(120%); opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
+#menu.open { opacity: 1; pointer-events: auto; }
+.menu-panel { width: min(780px, 92vw); max-height: 88vh; display: flex; flex-direction: column; background: rgba(255, 255, 255, 0.88); border: 1px solid rgba(255, 255, 255, 0.9); border-radius: 20px; box-shadow: 0 18px 60px rgba(15, 25, 40, 0.28); color: #1f2933; transform: translateY(8px) scale(0.99); transition: transform 0.2s ease; }
+#menu.open .menu-panel { transform: none; }
+.menu-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #e3e7ec; }
+.menu-title { font-size: 18px; font-weight: 700; }
+.menu-close { border: 1px solid #cfd6de; background: #fff; color: #1f2933; border-radius: 10px; padding: 4px 10px; cursor: pointer; font-size: 13px; }
+.menu-close .k { font-size: 10px; color: #4a5560; border: 1px solid #cfd6de; border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+.menu-body { padding: 16px 18px 20px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.menu-card { background: #ffffff; border: 1px solid #e3e7ec; border-radius: 14px; padding: 14px 16px; }
+.menu-card h2 { font-size: 15px; margin: 0 0 10px; color: #1f2933; }
+.menu-note { font-size: 13px; color: #4a5560; margin: 0; line-height: 1.6; }
+.save-status { font-size: 13px; line-height: 1.6; margin-bottom: 10px; color: #1f2933; }
+.save-status small { color: #4a5560; font-size: 12px; }
+.save-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.save-buttons button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; border: 1px solid #cfd6de; background: #f7f9fb; border-radius: 10px; padding: 8px 10px; cursor: pointer; color: #1f2933; font-size: 13px; }
+.save-buttons button small { font-size: 11px; color: #4a5560; }
+.save-buttons button:hover { background: #eaf2fc; border-color: #9cc1ec; }
+.save-buttons button:disabled { opacity: 0.55; cursor: wait; }
+.menu-keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
+.menu-keys dt { font-weight: 600; color: #1f2933; white-space: nowrap; }
+.menu-keys dd { margin: 0; color: #4a5560; }
+@media (max-width: 760px) { .save-buttons { grid-template-columns: 1fr; } }
+#modes .menu-btn { min-width: 76px; }

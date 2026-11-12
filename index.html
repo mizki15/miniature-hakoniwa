@@ -35,7 +35,7 @@
           <div class="howto">
             <div><b>左ドラッグ</b>：なぞった所にまとめて使う</div>
             <div><b>右ドラッグ</b>：回転　<b>ホイール</b>：ズーム</div>
-            <div><b>中ドラッグ</b>：移動　<b>Esc</b>：見るモードへ</div>
+            <div><b>中ドラッグ</b>：移動　<b>V</b>：見るモードへ　<b>Esc</b>：メニュー</div>
           </div>
         </div>
       </aside>
@@ -166,6 +166,7 @@
         <div id="modes" class="glass">
           <button data-mode="view"><span class="ic">👁</span>見る<span class="k">V</span></button>
           <button data-mode="edit"><span class="ic">🛠</span>エディタ<span class="k">E</span></button>
+          <button id="menuOpen" class="menu-btn"><span class="ic">☰</span>メニュー<span class="k">Esc</span></button>
         </div>
         <div id="toast"></div>
         <!-- ステータスモード：ホバーした物の情報 -->
@@ -198,17 +199,6 @@
             <dl id="st-inv"></dl>
           </section>
           <section class="stat-block">
-            <h3>保存</h3>
-            <div id="saveStatus" class="save-status">—</div>
-            <div class="save-buttons">
-              <button id="saveNow" title="この端末（ブラウザ）に保存。ふだんは自動で保存されます">💾 保存</button>
-              <button id="exportSave" title="ファイルとして書き出す（控え・別の端末へ）">⬇ 書き出す</button>
-              <button id="importSave" title="書き出したファイルを読み込む">⬆ 読み込む</button>
-              <button id="driveSync" title="Google Drive のアプリ専用フォルダと同期">☁ Google Drive</button>
-            </div>
-            <input type="file" id="importFile" accept=".hakoniwa" hidden />
-          </section>
-          <section class="stat-block">
             <h3>できごと</h3>
             <div class="skeleton-line"></div>
             <div class="skeleton-line"></div>
@@ -217,6 +207,45 @@
           <div class="placeholder-note">（準備中）</div>
         </div>
       </aside>
+    </div>
+
+    <!-- Esc メニュー（画面全体をすりガラスにして表示） -->
+    <div id="menu" aria-hidden="true">
+      <div class="menu-panel" role="dialog" aria-label="メニュー">
+        <header class="menu-head">
+          <span class="menu-title">メニュー</span>
+          <button id="menuClose" class="menu-close" title="閉じる（Esc）">✕ <span class="k">Esc</span></button>
+        </header>
+        <div class="menu-body">
+          <section class="menu-card">
+            <h2>💾 保存</h2>
+            <div id="saveStatus" class="save-status">—</div>
+            <div class="save-buttons">
+              <button id="saveNow" title="この端末（ブラウザ）に保存。ふだんは自動で保存されます"><b>今すぐ保存</b><small>この端末に保存（ふだんは自動）</small></button>
+              <button id="exportSave" title="ファイルとして書き出す（控え・別の端末へ）"><b>ファイルに書き出す</b><small>控え・別の端末への引っ越しに</small></button>
+              <button id="importSave" title="書き出したファイルを読み込む"><b>ファイルから読み込む</b><small>.hakoniwa ファイル</small></button>
+              <button id="driveSync" title="Google Drive のアプリ専用フォルダと同期"><b>Google Drive と同期</b><small>アプリ専用フォルダに保存</small></button>
+            </div>
+            <input type="file" id="importFile" accept=".hakoniwa" hidden />
+          </section>
+          <section class="menu-card">
+            <h2>⚙ 設定</h2>
+            <p class="menu-note">画質・音・時刻などの設定は、順次デバッグ画面からここへ移します。</p>
+          </section>
+          <section class="menu-card">
+            <h2>🎮 操作</h2>
+            <dl class="menu-keys">
+              <dt>V / E</dt><dd>見るモード／エディタモード</dd>
+              <dt>Esc</dt><dd>このメニューを開く・閉じる</dd>
+              <dt>左ドラッグ</dt><dd>見る：視点を回す／エディタ：なぞって道具を使う</dd>
+              <dt>右ドラッグ</dt><dd>見る：視点を動かす／エディタ：視点を回す</dd>
+              <dt>右クリック</dt><dd>作物・動物の情報を固定（もう一度で解除）</dd>
+              <dt>ホイール</dt><dd>ズーム</dd>
+              <dt>2〜8</dt><dd>エディタの道具を選ぶ</dd>
+            </dl>
+          </section>
+        </div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
