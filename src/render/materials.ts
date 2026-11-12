@@ -1,8 +1,8 @@
 import * as THREE from 'three/webgpu';
 import {
   abs, attribute, cameraFar, cameraNear, cameraPosition, clamp, dot, exp, float, floor, fract as fractT, instanceIndex,
-  int, ivec3, length, max, mix, mx_noise_float as noiseT, mx_noise_vec3, normalize, normalLocal, perspectiveDepthToViewZ,
-  positionLocal, positionView, positionWorld, pow, screenUV, sin, cos, smoothstep as smoothstepT, step, texture3DLoad, time,
+  int, ivec3, length, max, mix, mx_noise_float as noiseT, mx_noise_vec3, normalize, normalGeometry, normalLocal, perspectiveDepthToViewZ,
+  positionGeometry, positionLocal, positionView, positionWorld, pow, screenUV, sin, cos, smoothstep as smoothstepT, step, texture3DLoad, time,
   transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture,
 } from 'three/tsl';
 import { paletteFlat, WATER } from '../world/blocks';
@@ -141,20 +141,24 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
 /** 小物（木・花）：頂点カラー・季節の色・AO・風で揺れる */
 export function createDetailMaterial(): THREE.MeshStandardNodeMaterial {
   const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
-  const pL: N = positionLocal;
-  const nL: N = normalLocal;
+  const pL: N = positionLocal; // ※インスタンスの行列を適用した後の座標（箱庭全体の中での位置）
+  const pG: N = positionGeometry; // モデル自身の座標（根元が y=0）
+  const nG: N = normalGeometry;
 
-  // 風：高い所ほど大きく揺れる。個体ごとに位相をずらす
+  // 風：モデルの根元からの高さで揺れ幅を決める（地面の標高には依存させない）。
+  // 2 つの周期を重ねてゆっくり不規則に。個体ごとに位相をずらす
   const phase = fract(sin(float(instanceIndex).mul(12.9898)).mul(43758.5453)).mul(6.28);
-  const hgt = max(pL.y, 0);
-  const sway = hgt.mul(hgt).mul(0.006).mul(U.wind);
-  m.positionNode = pL.add(vec3(sin(time.mul(1.3).add(phase)), 0, cos(time.mul(1.1).add(phase.mul(1.7)))).mul(sway));
+  const hgt = max(pG.y, 0);
+  const sway = hgt.mul(hgt).mul(0.0022).min(0.25).mul(U.wind);
+  const gust = sin(time.mul(0.9).add(phase)).mul(0.7).add(sin(time.mul(2.3).add(phase.mul(2.1))).mul(0.3));
+  const gust2 = cos(time.mul(0.7).add(phase.mul(1.7))).mul(0.6);
+  m.positionNode = pL.add(vec3(gust, 0, gust2).mul(sway));
 
   const veg = attribute('veg', 'float');
   const base = attribute('color', 'vec3');
   const conifer = mix(base, vec3(0.92, 0.95, 0.97), U.snow);
   const col = near(veg, 2).select(U.leafColor, near(veg, 3).select(conifer, base));
-  const micro = floor(pL.mul(U.detail).sub(nL.mul(0.5)));
+  const micro = floor(pG.mul(U.detail).sub(nG.mul(0.5)));
   const jitter = hash3(micro).mul(0.12).add(0.94);
   const aoF = mix(float(0.5), float(1), attribute('ao', 'float'));
   m.colorNode = col.mul(jitter).mul(aoF);
