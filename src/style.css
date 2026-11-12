@@ -2,7 +2,7 @@
   --side-w: 248px;
   --gap: 12px;
   /* すりガラス */
-  --glass-bg: rgba(255, 255, 255, 0.28);
+  --glass-bg: rgba(255, 255, 255, 0.4);
   --glass-strong: rgba(255, 255, 255, 0.45);
   --glass-border: rgba(255, 255, 255, 0.55);
   --glass-blur: blur(18px) saturate(160%);
@@ -18,7 +18,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 #layout { position: relative; height: 100%; }
 #stage { position: absolute; inset: 0; }
 
-.glass { background: var(--glass-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-border); box-shadow: 0 8px 32px rgba(20, 40, 60, 0.18), inset 0 1px 0 rgba(255,255,255,0.6); }
+.glass { transition: background-color 0.6s ease, color 0.6s ease; color: var(--ink); background: var(--glass-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-border); box-shadow: 0 8px 32px rgba(20, 40, 60, 0.18), inset 0 1px 0 rgba(255,255,255,0.6); }
 
 .side { position: absolute; top: var(--gap); bottom: var(--gap); width: var(--side-w); border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; z-index: 2; transition: transform 0.3s ease, opacity 0.3s ease; }
 #left { left: var(--gap); }
@@ -175,3 +175,26 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .menu-keys dd { margin: 0; color: #4a5560; }
 @media (max-width: 760px) { .save-buttons { grid-template-columns: 1fr; } }
 #modes .menu-btn { min-width: 76px; }
+
+/* ---------- 夜のパネル ----------
+   夜は背景（空・地形）が暗いので、明るいすりガラスだと文字が沈む。
+   暗いすりガラス＋明るい文字に切り替える（body.night は時刻に合わせて JS で付け外し） */
+body.night {
+  --glass-bg: rgba(16, 22, 34, 0.58);
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --ink: #e9eef4;
+  --muted: #aeb8c4;
+  --line: rgba(255, 255, 255, 0.14);
+}
+body.night .glass { box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08); }
+body.night .side header { text-shadow: none; }
+body.night .tab:not(.on), body.night .dex-card, body.night .skeleton-line, body.night #dexDetail, body.night .tool-hint { background: rgba(255, 255, 255, 0.08); }
+body.night .dex-card { border-color: rgba(255, 255, 255, 0.14); }
+body.night .dex-icon { background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.45); }
+body.night .dex-card.found .dex-icon { background: rgba(255, 255, 255, 0.85); }
+body.night #ui button:not(.on), body.night .tool-list button:not(.on), body.night .seed-list button:not(.on), body.night #modes button:not(.on), body.night .reopen {
+  background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2); color: var(--ink);
+}
+body.night .tool-list button .k { border-color: rgba(255, 255, 255, 0.25); }
+body.night #tooltip { background: rgba(16, 22, 34, 0.78); }
+body.night #tooltip .bar { background: rgba(255, 255, 255, 0.15); }

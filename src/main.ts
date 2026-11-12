@@ -969,6 +969,10 @@ async function main() {
 
     const size = world?.size ?? 64;
     daylight.apply(hour, focusPoint, size * 0.78, weatherNow);
+    // パネルの見た目を時間帯に合わせる（夜は暗いすりガラス）。明け方・夕方にちらつかないよう幅を持たせる
+    const nightUI = document.body.classList.contains('night');
+    if (!nightUI && SKY.night.value > 0.65) document.body.classList.add('night');
+    else if (nightUI && SKY.night.value < 0.45) document.body.classList.remove('night');
 
     // 流れ星：夜で晴れている時、ときどき
     if (meteorT < 0 && SKY.night.value > 0.8 && weatherNow.cloudCover < 0.5 && Math.random() < dt * 0.08) launchMeteor();
