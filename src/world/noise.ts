@@ -51,3 +51,17 @@ export function makeNoise2D(seed: number): (x: number, y: number) => number {
     return 70 * n;
   };
 }
+
+/** 座標とシード値だけで決まる乱数（0 以上 1 未満）。区画をどの順で作っても同じ値になる */
+export function hash2(seed: number, x: number, z: number, salt: number): number {
+  const mix = (h: number) => {
+    h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+    return h ^ (h >>> 16);
+  };
+  let h = mix((seed | 0) ^ 0x9e3779b9);
+  h = mix(h ^ Math.imul(salt | 0, 0x27d4eb2d));
+  h = mix(h ^ (x | 0));
+  h = mix(h ^ Math.imul(z | 0, 0x165667b1));
+  return (h >>> 0) / 4294967296;
+}

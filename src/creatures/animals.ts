@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { WorldData as World } from '../world/terrain';
 
 /**
@@ -33,6 +34,36 @@ const NAMES = ['こむぎ', 'もち', 'あずき', 'きなこ', 'まめ', 'く�
 const FAVORITES = ['カブ', '小麦', 'かぼちゃ', '花畑', '水辺', '日なたぼっこ', '雨上がり', '朝の散歩', '星空', '木かげ'];
 
 const mat = (color: number) => new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.85 });
+/** 1 匹ぶんの部品をまとめた後の材質（色は頂点ごとに持つ。全部の動物で共有） */
+const mergedMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.85 });
+
+/**
+ * 部品ごとのメッシュを 1 つのメッシュにまとめる（部品は個別に動かさないので、見た目は同じまま描画命令を減らせる）。
+ * 部品の色は頂点の色にする。
+ */
+function mergeModel(g: THREE.Group): THREE.Group {
+  g.updateMatrixWorld(true);
+  const geos: THREE.BufferGeometry[] = [];
+  const c = new THREE.Color();
+  for (const o of g.children) {
+    const m = o as THREE.Mesh;
+    const geo = (m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone()).applyMatrix4(m.matrix);
+    for (const k of Object.keys(geo.attributes)) if (k !== 'position' && k !== 'normal') geo.deleteAttribute(k);
+    c.copy((m.material as THREE.MeshStandardMaterial).color);
+    const n = geo.attributes.position.count;
+    const col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geos.push(geo);
+    (m.material as THREE.Material).dispose();
+  }
+  const out = new THREE.Group();
+  const mesh = new THREE.Mesh(mergeGeometries(geos), mergedMat);
+  mesh.castShadow = true;
+  out.add(mesh);
+  geos.forEach((x) => x.dispose());
+  return out;
+}
 
 function part(geo: THREE.BufferGeometry, color: number, x: number, y: number, z: number, sx = 1, sy = 1, sz = 1) {
   const m = new THREE.Mesh(geo, mat(color));
@@ -147,7 +178,7 @@ export class Animal {
     this.id = id;
     this.name = NAMES[id % NAMES.length];
     this.favorite = FAVORITES[(id * 7 + species.length) % FAVORITES.length];
-    this.model = buildModel(species, color);
+    this.model = mergeModel(buildModel(species, color));
     this.object.add(this.model);
     // 見下ろし視点で見つけやすいよう、ボクセル 1 個分より少し大きめにする
     this.object.scale.setScalar(1.7);
@@ -228,21 +259,29 @@ export class Animal {
   }
 }
 
-/** 歩ける場所にランダムに動物を配置する。あひるは水辺、りすは木の近くを選びやすく */
-export function spawnAnimals(world: World, count: number): Animal[] {
+/**
+ * 歩ける場所（開いた区画の中だけ）にランダムに動物を配置する。あひるは水辺を選びやすく。
+ * idStart：すでにいる動物の数（番号と種類の順番を続きから振る）
+ */
+export function spawnAnimals(world: World, count: number, idStart = 0): Animal[] {
   const N = world.size;
   const out: Animal[] = [];
-  for (let i = 0; i < count; i++) {
+  // 歩ける列を先に集める（枠の大半が開いていない区画でも、すぐに見つかるように）
+  const cols: number[] = [];
+  for (let z = 4; z < N - 4; z++) for (let x = 4; x < N - 4; x++) if (world.walkable[x + z * N]) cols.push(x + z * N);
+  if (cols.length === 0) return out;
+  for (let k = 0; k < count; k++) {
+    const i = idStart + k;
     const species = SPECIES_LIST[i % SPECIES_LIST.length];
     const info = SPECIES[species];
     let best: [number, number] | null = null;
     for (let tries = 0; tries < 300; tries++) {
-      const x = 4 + Math.floor(Math.random() * (N - 8)), z = 4 + Math.floor(Math.random() * (N - 8));
-      if (!world.walkable[x + z * N]) continue;
+      const c = cols[Math.floor(Math.random() * cols.length)];
+      const x = c % N, z = Math.floor(c / N);
       best = [x, z];
       if (species !== 'duck') break;
       // あひる：水辺（隣が水）を探す
-      const nearWater = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => world.heights[x + dx + (z + dz) * N] < world.waterLevel);
+      const nearWater = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => world.walkable[x + dx + (z + dz) * N] === 0 && world.heights[x + dx + (z + dz) * N] > 0 && world.heights[x + dx + (z + dz) * N] < world.waterLevel);
       if (nearWater) break;
     }
     if (best) out.push(new Animal(species, info.colors[i % info.colors.length], world, best[0], best[1], i));

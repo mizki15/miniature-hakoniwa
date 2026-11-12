@@ -29,6 +29,8 @@ export class Birds {
   private center = new THREE.Vector3();
   private radius = 40;
   private altitude = 45;
+  private cx = 0;
+  private cz = 0;
 
   constructor(count = 9) {
     for (let i = 0; i < count; i++) {
@@ -39,9 +41,12 @@ export class Birds {
     }
   }
 
-  setWorld(size: number, maxHeight: number) {
-    this.radius = size * 0.32;
+  /** 開いた範囲（中心と大きさ）のまわりを飛ぶ */
+  setWorld(area: { cx: number; cz: number; extent: number }, maxHeight: number) {
+    this.radius = area.extent * 0.32;
     this.altitude = maxHeight + 8;
+    this.cx = area.cx;
+    this.cz = area.cz;
   }
 
   /** amount：0..1（昼で晴れているほど多く飛ぶ） */
@@ -50,8 +55,8 @@ export class Birds {
     if (!this.group.visible) return;
     // 群れの中心はゆっくり大きな円を描く
     const a = t * 0.05;
-    this.center.set(Math.cos(a) * this.radius, this.altitude + Math.sin(t * 0.13) * 3, Math.sin(a * 1.3) * this.radius * 0.8);
-    const ahead = new THREE.Vector3(Math.cos(a + 0.05) * this.radius, this.center.y, Math.sin((a + 0.05) * 1.3) * this.radius * 0.8);
+    this.center.set(this.cx + Math.cos(a) * this.radius, this.altitude + Math.sin(t * 0.13) * 3, this.cz + Math.sin(a * 1.3) * this.radius * 0.8);
+    const ahead = new THREE.Vector3(this.cx + Math.cos(a + 0.05) * this.radius, this.center.y, this.cz + Math.sin((a + 0.05) * 1.3) * this.radius * 0.8);
     for (const b of this.birds) {
       const wob = new THREE.Vector3(Math.sin(t * 0.7 + b.phase) * 1.5, Math.sin(t * 1.1 + b.phase) * 0.6, Math.cos(t * 0.6 + b.phase) * 1.5);
       b.root.position.copy(this.center).add(b.offset).add(wob);

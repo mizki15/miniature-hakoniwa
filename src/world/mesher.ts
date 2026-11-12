@@ -157,7 +157,7 @@ export function transformMesh(m: MeshData, scale: number, ox: number, oy: number
 }
 
 /** チャンク（地形を X・Z 方向に CHUNK 個ずつ区切ったもの）の一辺 */
-export const CHUNK = 32;
+export const CHUNK = 64; // 区画（64×64）と同じ。メッシュの数を減らして描画命令の負荷を抑える
 
 /**
  * 1 チャンク分のメッシュを作る。

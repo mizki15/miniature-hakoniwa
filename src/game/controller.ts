@@ -2,7 +2,9 @@ import * as THREE from 'three/webgpu';
 import { AIR, DIRT, FARMLAND, GRASS, SAND, WATER, WET_FARMLAND, isOpaque } from '../world/blocks';
 import { CHUNK, type MeshData } from '../world/mesher';
 import type { WorldData } from '../world/terrain';
-import type { ChunkMesh, DetailSet } from '../world/worker';
+import type { ChunkMesh, DetailModel, PlotPlacements, PlotResult } from '../world/worker';
+import { FRAME, PLOT, plotOfCol, plotRect } from '../world/plots';
+import { canSetCol, floodAllowed } from './edgeRules';
 import { CROPS, Farm, type CropKind } from './farm';
 import { buildCropGeometry, buildSaplingGeometry } from './cropModels';
 import { raycastVoxels, type VoxelHit } from './picking';
@@ -33,7 +35,7 @@ export function toGeometry(m: MeshData) {
   return g;
 }
 
-interface DecorSet { kind: 'tree' | 'flower'; geo: THREE.BufferGeometry; mat: THREE.Material; placements: Float32Array; mesh: THREE.InstancedMesh | null; shared: boolean; }
+interface DecorSet { kind: 'tree' | 'flower'; variant: number; geo: THREE.BufferGeometry; mat: THREE.Material; placements: Float32Array; mesh: THREE.InstancedMesh | null; shared: boolean; }
 
 export interface ControllerDeps {
   diorama: THREE.Group;
@@ -45,6 +47,9 @@ export interface ControllerDeps {
 
 const isFarm = (t: number) => t === FARMLAND || t === WET_FARMLAND;
 const HOUR = 3600 * 1000;
+/** 区画を開いた時に、どれだけ下からせり上がるか（ボクセル）と、かかる秒数 */
+const RISE_DEPTH = 6;
+const RISE_SECONDS = 0.6;
 
 export class GameController {
   farm = new Farm();
@@ -64,6 +69,10 @@ export class GameController {
   private treeCols = new Set<number>();
   private farmland = new Set<number>();
   private dirty = new Set<string>();
+  /** 今の箱庭の番号（ワーカーへの依頼に付ける）。main が箱庭を作るたびに設定する */
+  gen = 0;
+  /** 箱庭を作り直している間は編集しない（古い箱庭への編集がワーカーの新しい箱庭に混ざらないように） */
+  locked = false;
   private remeshInFlight = false;
   private remeshId = 0;
   private cropMeshes: THREE.InstancedMesh[] = [];
@@ -72,6 +81,12 @@ export class GameController {
   private growingMeshes: THREE.InstancedMesh[] = [];
   private irrigatedCache = new Map<number, boolean>();
   private wetCheck = 0;
+  private flowerGeos: THREE.BufferGeometry[] = [];
+  private flowerShared = false;
+  /** ワーカーにまだ送っていない編集（[番号, 種類, ...]） */
+  private delta: number[] = [];
+  /** 開いたばかりの区画のせり上がり（t: 0→1） */
+  private rising: { objs: THREE.Object3D[]; t: number; done?: () => void }[] = [];
   readonly cursor: THREE.LineSegments;
 
   constructor(private deps: ControllerDeps) {
@@ -83,11 +98,13 @@ export class GameController {
 
   // ---------- 読み込み ----------
 
-  load(w: WorldData, chunks: ChunkMesh[], details: DetailSet[], flowerPlacements: Float32Array[], lowPolyFlowers: THREE.BufferGeometry[] | null, typeTex: THREE.Data3DTexture, terrainMat: THREE.Material) {
+  load(w: WorldData, chunks: ChunkMesh[], models: DetailModel[], placements: PlotPlacements[], lowPolyFlowers: THREE.BufferGeometry[] | null, typeTex: THREE.Data3DTexture, terrainMat: THREE.Material) {
     this.world = w;
     this.typeTex = typeTex;
     this.terrainMat = terrainMat;
     this.farm = new Farm();
+    this.dirty.clear();
+    this.remeshInFlight = false;
     this.edits.clear();
     this.chunks.clear();
     this.farmland.clear();
@@ -97,21 +114,80 @@ export class GameController {
     this.decor = [];
     this.treeCols.clear();
     this.treeGeos = [];
+    this.flowerGeos = [];
+    this.delta = [];
+    this.rising = [];
     for (const c of chunks) this.setChunk(c);
 
-    for (const d of details) {
-      if (d.kind === 'tree') {
-        const geo = toGeometry(d.mesh);
-        this.treeGeos[d.variant] = geo;
-        this.decor.push({ kind: 'tree', geo, mat: this.deps.detailMat, placements: d.placements, mesh: null, shared: false });
-        for (let i = 0; i < d.placements.length; i += 5) this.treeCols.add(Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * w.size);
-      } else if (!lowPolyFlowers) {
-        this.decor.push({ kind: 'flower', geo: toGeometry(d.mesh), mat: this.deps.flowerMat, placements: d.placements, mesh: null, shared: false });
-      }
+    // 木・花の形は種類ごとに 1 つ。ローポリの花はボクセルの花が作れない 1/1 でも使う
+    for (const m of models) {
+      if (m.kind === 'tree') this.treeGeos[m.variant] = toGeometry(m.mesh);
+      else if (!lowPolyFlowers) this.flowerGeos[m.variant] = toGeometry(m.mesh);
     }
-    if (lowPolyFlowers) flowerPlacements.forEach((p, v) => this.decor.push({ kind: 'flower', geo: lowPolyFlowers[v], mat: this.deps.flowerMat, placements: p, mesh: null, shared: true }));
-    for (const d of this.decor) this.buildDecor(d);
+    this.flowerShared = !!lowPolyFlowers;
+    if (lowPolyFlowers) this.flowerGeos = lowPolyFlowers;
+    for (const p of placements) this.addDecor(p);
     this.deps.diorama.add(this.cursor);
+  }
+
+  /**
+   * 区画の木・花を足す。InstancedMesh は種類ごとに 1 つ（全部の区画をまとめる）。
+   * 区画ごとに分けると画面外を描かずに済むが、描画命令が増えてかえって重くなったため（16 区画で 144 → 9）。
+   */
+  private addDecor(p: PlotPlacements) {
+    const w = this.world!;
+    const add = (kind: 'tree' | 'flower', v: number, pl: Float32Array, geo: THREE.BufferGeometry | undefined, mat: THREE.Material, shared: boolean) => {
+      if (!geo) return;
+      if (kind === 'tree') for (let i = 0; i < pl.length; i += 5) this.treeCols.add(Math.floor(pl[i]) + Math.floor(pl[i + 2]) * w.size);
+      let d = this.decor.find((x) => x.kind === kind && x.variant === v);
+      if (!d) { d = { kind, variant: v, geo, mat, placements: new Float32Array(0), mesh: null, shared }; this.decor.push(d); }
+      if (pl.length === 0 && d.mesh) return;
+      const merged = new Float32Array(d.placements.length + pl.length);
+      merged.set(d.placements);
+      merged.set(pl, d.placements.length);
+      d.placements = merged;
+      this.buildDecor(d);
+    };
+    p.trees.forEach((pl, v) => add('tree', v, pl, this.treeGeos[v], this.deps.detailMat, false));
+    p.flowers.forEach((pl, v) => add('flower', v, pl, this.flowerGeos[v], this.deps.flowerMat, this.flowerShared));
+  }
+
+  /**
+   * 区画を開いた結果（ワーカーの返事）を当てる：ボクセル・高さ・歩けるかを書き戻し、
+   * 新しい区画と境目のチャンク、その区画の木・花を足す。新しい区画は下からせり上がる。
+   */
+  addPlot(r: PlotResult) {
+    const w = this.world!;
+    const rect = plotRect(r.plot), H = w.height, NN = FRAME * FRAME;
+    for (let lz = 0; lz < PLOT; lz++) {
+      const row = rect.x0 + (rect.z0 + lz) * FRAME;
+      w.heights.set(r.heights.subarray(lz * PLOT, lz * PLOT + PLOT), row);
+      w.walkable.set(r.walkable.subarray(lz * PLOT, lz * PLOT + PLOT), row);
+      for (let y = 0; y < H; y++) w.voxels.set(r.voxels.subarray(lz * PLOT + y * PLOT * PLOT, lz * PLOT + y * PLOT * PLOT + PLOT), row + y * NN);
+    }
+    w.plots |= 1 << r.plot;
+    this.typeTex!.needsUpdate = true;
+    this.irrigatedCache.clear();
+    const risers: THREE.Object3D[] = [];
+    for (const c of r.chunks) {
+      const isNew = plotOfCol(c.cx * CHUNK, c.cz * CHUNK) === r.plot;
+      const m = this.setChunk(c);
+      if (isNew) risers.push(m.terrain, m.water);
+    }
+    for (const o of risers) o.position.y = -RISE_DEPTH;
+    // 木と花は、地面がせり上がりきってから置く（全部の区画で 1 つの InstancedMesh なので一緒には動かせない）
+    this.rising.push({ objs: risers, t: 0, done: () => this.addDecor(r.placements) });
+    this.onPlotsChanged?.();
+  }
+
+  /** 区画が増えた時に呼ぶ（main が台座・カメラの範囲などを直す） */
+  onPlotsChanged: (() => void) | null = null;
+
+  /** まだワーカーに送っていない編集の差分（[番号, 種類, ...]）。取り出すと空になる */
+  pendingDelta(): number[] {
+    const d = this.delta;
+    this.delta = [];
+    return d;
   }
 
   private chunkKey(cx: number, cz: number) { return `${cx},${cz}`; }
@@ -131,7 +207,9 @@ export class GameController {
     water.position.set(-half, 0, -half);
     water.renderOrder = 1;
     this.deps.diorama.add(terrain, water);
-    this.chunks.set(key, { terrain, water });
+    const m = { terrain, water };
+    this.chunks.set(key, m);
+    return m;
   }
 
   private buildDecor(d: DecorSet) {
@@ -154,6 +232,7 @@ export class GameController {
     im.receiveShadow = true;
     im.userData.kind = d.kind;
     im.userData.sharedGeometry = true; // ジオメトリは DecorSet が持つ（作り直しても使い回す）
+    im.computeBoundingSphere(); // 全部の木（花）を囲む境界球。画面外なら描かない
     d.mesh = im;
     this.deps.diorama.add(im);
   }
@@ -183,10 +262,13 @@ export class GameController {
 
   private setVoxel(x: number, y: number, z: number, t: number) {
     const w = this.world!;
+    // 開いていない区画は変えない。作り直している間も変えない
+    if (this.locked || !canSetCol(w.plots, x, z)) return;
     const i = this.idx(x, y, z);
     if (w.voxels[i] === t) return;
     w.voxels[i] = t;
     this.edits.set(i, t);
+    this.delta.push(i, t);
     // 列の高さと歩けるかどうかを更新
     let h = w.height;
     while (h > 0 && !isOpaque(w.voxels[this.idx(x, h - 1, z)])) h--;
@@ -203,23 +285,36 @@ export class GameController {
       const ax = x + dx, az = z + dz;
       const ncx = Math.floor(ax / CHUNK), ncz = Math.floor(az / CHUNK);
       if (ncx < 0 || ncz < 0 || ncx >= nc || ncz >= nc) continue;
-      if (ncx !== cx || ncz !== cz || (dx === 0 && dz === 0)) this.dirty.add(this.chunkKey(ncx, ncz));
+      const key = this.chunkKey(ncx, ncz);
+      // 開いていない区画のチャンクは作らない（その区画を開いた時に作る）
+      if (!this.chunks.has(key)) continue;
+      if (ncx !== cx || ncz !== cz || (dx === 0 && dz === 0)) this.dirty.add(key);
     }
   }
 
   /** 作り直しが必要なチャンクをワーカーに頼む（1 度に 1 回ずつ） */
   flushRemesh() {
-    if (this.remeshInFlight || this.dirty.size === 0 || !this.world) return;
+    if (this.locked || this.remeshInFlight || this.dirty.size === 0 || !this.world) return;
     const w = this.world;
     const chunks = [...this.dirty].map((k) => k.split(',').map(Number) as [number, number]);
     this.dirty.clear();
     this.remeshInFlight = true;
-    this.deps.worker.postMessage({ type: 'remesh', id: ++this.remeshId, voxels: w.voxels.slice(), size: w.size, height: w.height, waterLevel: w.waterLevel, chunks });
+    // ボクセル全体は送らず、前回からの差分だけを送る（ワーカーも同じ世界を持っている）
+    void w;
+    this.deps.worker.postMessage({ type: 'remesh', gen: this.gen, id: ++this.remeshId, delta: this.pendingDelta(), chunks });
   }
 
   onRemesh(chunks: ChunkMesh[]) {
+    // チャンクが空の返事は sendDeltaNow の分（作り直し中の印は変えない）
+    if (chunks.length === 0) return;
     for (const c of chunks) this.setChunk(c);
     this.remeshInFlight = false;
+  }
+
+  /** まだ送っていない編集の差分だけを、今すぐワーカーに送る（区画を開く前に、ワーカーの世界をそろえる） */
+  sendDeltaNow() {
+    const delta = this.pendingDelta();
+    if (delta.length) this.deps.worker.postMessage({ type: 'remesh', gen: this.gen, id: -1, delta, chunks: [] });
   }
 
   /** 掘った穴が水のそばなら、水面の高さまで水を流し込む */
@@ -242,6 +337,7 @@ export class GameController {
       for (const [dx, dy, dz] of dirs) {
         const nx = x + dx, ny = y + dy, nz = z + dz;
         if (nx < 0 || nz < 0 || ny < 0 || nx >= w.size || nz >= w.size) continue;
+        if (!floodAllowed(w.plots, nx, nz)) continue;
         if (Math.abs(nx - sx) > 16 || Math.abs(nz - sz) > 16) continue;
         queue.push([nx, ny, nz]);
       }
@@ -318,7 +414,7 @@ export class GameController {
         return res(true, '掘る');
       case 'raise': {
         const tx = x + hit.nx, ty = y + hit.ny, tz = z + hit.nz;
-        if (tx < 0 || tz < 0 || tx >= w.size || tz >= w.size || ty >= w.height - 2) return res(false, 'ここには置けません', tx, ty, tz);
+        if (tx < 0 || tz < 0 || tx >= w.size || tz >= w.size || ty >= w.height - 2 || !canSetCol(w.plots, tx, tz)) return res(false, 'ここには置けません', tx, ty, tz);
         if (this.treeCols.has(tx + tz * w.size)) return res(false, '木があります', tx, ty, tz);
         const there = this.get(tx, ty, tz);
         if (there !== AIR && there !== WATER) return res(false, 'ふさがっています', tx, ty, tz);
@@ -333,6 +429,7 @@ export class GameController {
    * visited を渡すと、同じ列には 1 回しか使わない（ドラッグでなぞる時、掘りすぎ・積みすぎを防ぐ）
    */
   use(hit: VoxelHit | null, visited?: Set<number>): string | null {
+    if (this.locked) return null;
     const c = this.check(hit);
     if (!c) return null;
     const w = this.world!;
@@ -481,6 +578,14 @@ export class GameController {
   /** 毎フレーム呼ぶ。dtReal は現実の経過秒 */
   tick(dtReal: number, env: { season: number; raining: boolean }) {
     if (!this.world) return;
+    // 開いたばかりの区画をせり上げる
+    for (const r of this.rising) {
+      r.t = Math.min(1, r.t + dtReal / RISE_SECONDS);
+      const e = 1 - (1 - r.t) ** 3;
+      for (const o of r.objs) o.position.y = -RISE_DEPTH * (1 - e);
+    }
+    for (const r of this.rising) if (r.t >= 1) r.done?.();
+    this.rising = this.rising.filter((r) => r.t < 1);
     const changed = this.farm.advance(dtReal * 1000 * this.farm.speed, { ...env, isWet: (col) => this.isWet(col) });
     if (changed) { this.rebuildCrops(); this.rebuildGrowing(); }
     // 畑の湿り具合を見た目（ブロックの種類）に反映（1 秒ごと）

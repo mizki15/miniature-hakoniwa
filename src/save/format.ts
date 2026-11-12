@@ -6,21 +6,28 @@ import type { CropKind } from '../game/farm';
  * 地形はシード値から毎回同じものを作れるので、「生成の設定＋変えた所（差分）」だけを保存する。
  * 形式を変えた時は SAVE_VERSION を上げ、migrate() で古い形式を読めるようにする。
  */
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 export interface SaveData {
   version: number;
   savedAt: number; // 保存した現実の時刻（ミリ秒）
   world: {
     seed: number;
-    size: number;
     height: number;
     detail: number;
     flowerStyle: string;
     params: TerrainParams;
   };
-  /** 地形の差分：[ボクセルの番号, 種類, 番号, 種類, ...] */
+  /** 開いた区画のマスク（world/plots.ts） */
+  plots: number;
+  /** 地形の差分：[ボクセルの番号, 種類, 番号, 種類, ...]。番号は 256 の枠の座標 */
   edits: number[];
+  /** 進み具合（発見ポイントと土地の権利。権利の残り = floor(points / 3) - rightsUsed） */
+  progress: { points: number; rightsUsed: number; unlocks: string[]; firsts: string[]; newMarks: string[] };
+  /** 図鑑（段階 ② で使う） */
+  dex: Record<string, { seenAt: number; observedAt?: number; seasons: number[] }>;
+  /** 住人（段階 ② で使う） */
+  residents: [species: string, x: number, z: number, name: string][];
   farm: {
     simMs: number; // 箱庭内の時計
     inventory: Record<string, number>;
@@ -30,9 +37,15 @@ export interface SaveData {
   };
 }
 
-/** 古い形式のデータを今の形式にそろえる（今は v1 だけ） */
+/** v1（大きさを選んで作った箱庭）のデータ。地形の作り方が変わったので引き継げない */
+export class OldSaveError extends Error {
+  constructor() { super('古い形式のため新しく始めます'); this.name = 'OldSaveError'; }
+}
+
+/** 古い形式のデータを今の形式にそろえる */
 function migrate(d: SaveData): SaveData {
   if (d.version > SAVE_VERSION) throw new Error('新しいバージョンで保存されたデータです。アプリを更新してください。');
+  if (d.version < 2) throw new OldSaveError();
   return d;
 }
 

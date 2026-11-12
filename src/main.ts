@@ -15,13 +15,16 @@ import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
 import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, weatherAt, type WeatherKind } from './weather';
 import { ACTIVITY_NAMES, spawnAnimals, type Animal } from './creatures/animals';
 import { renderDex } from './creatures/dex';
-import { SAVE_VERSION, decodeSave, encodeSave, type SaveData } from './save/format';
+import { OldSaveError, SAVE_VERSION, decodeSave, encodeSave, type SaveData } from './save/format';
 import { loadLocal, requestPersist, saveLocal } from './save/store';
 import { DRIVE_CLIENT_ID, download, remoteInfo, upload } from './save/drive';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
 import type { TerrainParams, WorldData } from './world/terrain';
-import type { ChunkMesh, DetailSet } from './world/worker';
+import type { InitResult, PlotResult, RemeshResult } from './world/worker';
+import { FRAME, PLOT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect, rightsLeft } from './world/plots';
+import { buildBase, disposeBase } from './render/base';
+import { PlotGhosts } from './render/plotGhosts';
 import { GameController, TOOLS, type Tool } from './game/controller';
 import { CROPS, CROP_KINDS, type CropKind } from './game/farm';
 
@@ -32,15 +35,6 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const WORLD_HEIGHT = 64;
 const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
 
-interface WorkerResult {
-  type: 'generate';
-  world: WorldData;
-  chunks: ChunkMesh[];
-  details: DetailSet[];
-  flowerPlacements: Float32Array[];
-  counts: { trees: number; flowers: number };
-  timings: { generate: number; mesh: number; details: number };
-}
 
 async function main() {
   // ---------- レンダラー ----------
@@ -152,10 +146,65 @@ async function main() {
 
   // 触れる・育つ要素（道具・畑・植林・地形の編集）
   const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat });
-  let onGenerated: ((r: WorkerResult) => void) | null = null;
-  worker.onmessage = (e: MessageEvent<WorkerResult | { type: 'remesh'; chunks: ChunkMesh[] }>) => {
+  let onGenerated: ((r: InitResult) => void) | null = null;
+  const onPlot = (r: PlotResult) => {
+    game.addPlot(r);
+    progress.rightsUsed++;
+    game.unsaved = true;
+    opening = false;
+    openingDone = null;
+    refreshGhosts();
+    toast('新しい土地が開きました');
+    plotResolve?.();
+    plotResolve = null;
+  };
+  /** 箱庭を作るたびに増える番号。作り直しの最中に届いた、古い箱庭あての返事は捨てる */
+  let gen = 0;
+  worker.onmessage = (e: MessageEvent<InitResult | PlotResult | RemeshResult>) => {
+    if (e.data.gen !== gen) return;
     if (e.data.type === 'remesh') game.onRemesh(e.data.chunks);
+    else if (e.data.type === 'plot') onPlot(e.data);
     else onGenerated?.(e.data);
+  };
+  // 進み具合（発見ポイントと土地の権利）。段階 ② ③ で図鑑・解放につなぐ
+  let progress: SaveData['progress'] = { points: 0, rightsUsed: 0, unlocks: [], firsts: [], newMarks: [] };
+  let base: THREE.Group | null = null;
+  // エディタモードで、開ける隣の区画を半透明の枠で見せる
+  const ghosts = new PlotGhosts();
+  scene.add(ghosts.group);
+  /** 区画を開いている途中（ワーカーの返事待ち）。素早く 2 回押しても 1 回だけ開く */
+  let opening = false;
+  const rights = () => Math.max(0, rightsLeft(progress.points, progress.rightsUsed) - (opening ? 1 : 0));
+  /** 開いた区画の地面の平均の高さ（枠を置く高さの目安） */
+  const groundOf = (plot: number) => {
+    const w = world!;
+    let sum = 0, n = 0;
+    for (let p = 0; p < 16; p++) {
+      if (!isOpen(w.plots, p) || Math.abs((p % 4) - (plot % 4)) + Math.abs(Math.floor(p / 4) - Math.floor(plot / 4)) !== 1) continue;
+      const r = plotRect(p);
+      for (let z = r.z0; z < r.z1; z += 4) for (let x = r.x0; x < r.x1; x += 4) { sum += Math.max(w.heights[x + z * FRAME], w.waterLevel); n++; }
+    }
+    return n ? sum / n : w.waterLevel;
+  };
+  const refreshGhosts = () => { if (world) ghosts.update(world.plots, rights(), groundOf); };
+  let plotResolve: (() => void) | null = null;
+  /** 開いている途中の区画（作り直す前に、開き終わるのを待つ） */
+  let openingDone: Promise<void> | null = null;
+  /** 区画を開く（権利を 1 つ使う）。開けない時は理由を返す */
+  const openPlot = (plot: number): Promise<void> | string => {
+    if (!world) return '';
+    if (game.locked) return 'いま箱庭を作っています';
+    if (opening) return 'いま土地を開いています';
+    if (!canOpen(world.plots, plot, rights())) return rights() > 0 ? 'この土地はまだ開けません' : '土地の権利が足りません';
+    // 権利は開き終わった時（onPlot）に使う。それまでは rights() で 1 つ引いておく（途中で保存しても食い違わないように）
+    opening = true;
+    // 先に、まだ送っていない編集をワーカーに渡してから区画を足す（境目のチャンクが古い地形で作られないように）
+    game.sendDeltaNow();
+    const edits: number[] = [];
+    for (const [i, t] of game.edits) { const c = i % (FRAME * FRAME); if (plotOfCol(c % FRAME, Math.floor(c / FRAME)) === plot) edits.push(i, t); }
+    worker.postMessage({ type: 'addPlot', gen, plot, edits });
+    openingDone = new Promise<void>((res) => { plotResolve = res; });
+    return openingDone;
   };
 
   const clearDiorama = () => {
@@ -168,11 +217,15 @@ async function main() {
     diorama.clear();
   };
 
-  const regenerate = (size: number, seed: number, detail: number, params: TerrainParams, flowerStyle: string, edits?: number[]) =>
+  const startWorld = (seed: number, detail: number, params: TerrainParams, flowerStyle: string, plots: number, edits?: number[]) =>
     new Promise<void>((resolve) => {
       busy.style.display = 'grid';
-      onGenerated = (res: WorkerResult) => {
-        const { world: w, chunks, details, flowerPlacements, counts, timings } = res;
+      gen++;
+      game.locked = true;
+      // 開いている途中だった区画は、古い箱庭あてなので取りやめる（権利は使っていない）
+      if (opening) { opening = false; plotResolve?.(); plotResolve = null; openingDone = null; }
+      onGenerated = (res: InitResult) => {
+        const { world: w, chunks, models, placements, counts, timings } = res;
         world = w;
         clearDiorama();
 
@@ -187,56 +240,79 @@ async function main() {
         terrainMat?.dispose();
         terrainMat = createTerrainMaterial(typeTex, w.size, w.height, liteTerrain);
 
-        // 台座（ジオラマの木の土台）
-        const base = new THREE.Mesh(
-          new THREE.BoxGeometry(w.size + 3, 2.4, w.size + 3),
-          new THREE.MeshStandardMaterial({ color: 0x5a3e2b, roughness: 0.7 }),
-        );
-        base.userData.ownMaterial = true;
-        base.position.y = -1.2;
-        base.receiveShadow = true;
-        diorama.add(base);
-
         // 地形（チャンクごと）・木・花。ローポリの花はボクセルの花が作れない 1/1 でも使う
-        const hasVoxelFlowers = details.some((d) => d.kind === 'flower');
-        game.load(w, chunks, details, flowerPlacements, flowerStyle === 'lowpoly' || !hasVoxelFlowers ? lowPolyFlowers : null, typeTex, terrainMat);
-
-        // 雨・雪（フィールドの大きさに合わせて作り直す）
-        if (precip) {
-          for (const m of [precip.rain, precip.snow]) { scene.remove(m); m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
-        }
-        precip = { rain: createPrecipitation('rain', w.size, rainAmount), snow: createPrecipitation('snow', w.size, snowAmount) };
-        scene.add(precip.rain, precip.snow);
-
-        for (const a of animals) a.object.removeFromParent();
-        animals = spawnAnimals(w, Math.max(4, Math.round(w.size / 10)));
-        for (const a of animals) diorama.add(a.object);
-        refreshDex();
+        const hasVoxelFlowers = models.some((d) => d.kind === 'flower');
+        game.load(w, chunks, models, placements, flowerStyle === 'lowpoly' || !hasVoxelFlowers ? lowPolyFlowers : null, typeTex, terrainMat);
+        game.onPlotsChanged = () => applyBounds(false);
+        game.gen = res.gen;
+        game.locked = false;
 
         U.waterLevel.value = w.waterLevel;
         U.worldSize.value = w.size;
-        fireflies.setWorld(w);
-        let maxH = 0; for (let i = 0; i < w.heights.length; i++) maxH = Math.max(maxH, w.heights[i]);
-        birds.setWorld(w.size, maxH);
         U.detail.value = detail;
-
-        // カメラの距離をフィールドに合わせる（近づいて見上げられるよう最短距離は小さめ）
-        camera.far = w.size * 8;
-        camera.updateProjectionMatrix();
         controls.minDistance = 3;
-        controls.maxDistance = w.size * 3.2;
-        // 縦長の画面（スマホ）では横幅に収まるよう遠めから
-        const r = w.size * 2.3 * Math.max(1, 1.1 / camera.aspect);
-        controls.target.set(0, 10, 0);
-        camera.position.set(r * 0.62, r * 0.55, r * 0.62);
+        applyBounds(true);
 
         info = `チャンク ${chunks.length} · 木 ${counts.trees} · 花 ${counts.flowers}<br>` +
           `生成 ${timings.generate.toFixed(0)}ms / 地形メッシュ ${timings.mesh.toFixed(0)}ms / 小物 ${timings.details.toFixed(0)}ms`;
         busy.style.display = 'none';
         resolve();
       };
-      worker.postMessage({ type: 'generate', size, height: WORLD_HEIGHT, seed, detail, params, edits });
+      worker.postMessage({ type: 'init', gen, height: WORLD_HEIGHT, seed, detail, params, plots, edits });
     });
+
+  /**
+   * 開いた区画の範囲に合わせて、台座・雨と雪・動物・ホタル・鳥・カメラの範囲を直す。
+   * first：箱庭を作った時（カメラを置き直す）。区画を開いた時は false（今の視点のまま）
+   */
+  let bounds = boundsOf(1 << START_PLOT);
+  /** 開いた範囲の大きさ（縦横の大きい方） */
+  let extent = 64;
+  const applyBounds = (first: boolean) => {
+    const w = world!;
+    bounds = boundsOf(w.plots);
+    extent = Math.max(bounds.w, bounds.d);
+    const cx = bounds.cx - FRAME / 2, cz = bounds.cz - FRAME / 2;
+
+    if (base) disposeBase(base);
+    base = buildBase(w.plots);
+    diorama.add(base);
+
+    // 雨・雪（開いた範囲の上だけに降らせる）
+    if (precip) {
+      for (const m of [precip.rain, precip.snow]) { scene.remove(m); m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
+    }
+    precip = { rain: createPrecipitation('rain', extent, rainAmount), snow: createPrecipitation('snow', extent, snowAmount) };
+    precip.rain.position.set(cx, 0, cz);
+    precip.snow.position.set(cx, 0, cz);
+    scene.add(precip.rain, precip.snow);
+
+    // 動物は開いた面積に応じて（最大 24 匹）。区画を開いた時は今いる動物を残して足す
+    const want = Math.min(24, Math.max(4, Math.round(Math.sqrt(countOpen(w.plots) * 4096) / 10)));
+    if (first) { for (const a of animals) a.object.removeFromParent(); animals = []; }
+    if (animals.length < want) {
+      const add = spawnAnimals(w, want - animals.length, animals.length);
+      for (const a of add) diorama.add(a.object);
+      animals = [...animals, ...add];
+    }
+    refreshDex();
+
+    fireflies.setWorld(w);
+    let maxH = 0; for (let i = 0; i < w.heights.length; i++) maxH = Math.max(maxH, w.heights[i]);
+    birds.setWorld({ cx, cz, extent }, maxH);
+    refreshGhosts();
+
+    // カメラの距離を開いた範囲に合わせる（近づいて見上げられるよう最短距離は小さめ）
+    camera.far = Math.max(512, extent * 8);
+    camera.updateProjectionMatrix();
+    controls.maxDistance = extent * 3.2;
+    if (first) {
+      // 縦長の画面（スマホ）では横幅に収まるよう遠めから
+      const r = extent * 2.3 * Math.max(1, 1.1 / camera.aspect);
+      controls.target.set(cx, 10, cz);
+      camera.position.set(cx + r * 0.62, r * 0.55, cz + r * 0.62);
+    }
+  };
 
   // ---------- 画面中央の奥行き（ボクセルのレイマーチ） ----------
   const centerDepth = (): number | null => {
@@ -347,6 +423,8 @@ async function main() {
     game.cursor.visible = false;
     tooltipEl.style.display = 'none';
     pinned = null;
+    ghosts.group.visible = m === 'edit';
+    ghosts.setHover(-1);
     if (m === 'view') refreshDex();
   };
   modeButtons.forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode as Mode)));
@@ -416,6 +494,16 @@ async function main() {
     raycaster.setFromCamera(mouse, camera);
     return game.pick(raycaster.ray.origin, raycaster.ray.direction);
   };
+  /** マウスの先にある「開ける区画の枠」（地形の方が手前なら -1） */
+  const ghostAtMouse = () => {
+    if (mode !== 'edit' || !world) return -1;
+    raycaster.setFromCamera(mouse, camera);
+    const plot = ghosts.pick(raycaster.ray);
+    if (plot < 0) return -1;
+    const hit = game.pick(raycaster.ray.origin, raycaster.ray.direction);
+    // 開いた区画の地形に当たっているなら、そちらを優先する
+    return hit && plotOfCol(hit.x, hit.z) !== plot && isOpen(world.plots, plotOfCol(hit.x, hit.z)) ? -1 : plot;
+  };
 
   // エディタ：左ドラッグでなぞった所にまとめて道具を使う（同じ列は 1 回だけ）
   let stroke: { visited: Set<number>; last: { x: number; y: number }; done: number; msg: string | null } | null = null;
@@ -441,6 +529,14 @@ async function main() {
   renderer.domElement.addEventListener('pointerdown', (e) => {
     downAt = { x: e.clientX, y: e.clientY };
     if (mode === 'edit' && e.button === 0 && world) {
+      setMouse(e.clientX, e.clientY);
+      const plot = ghostAtMouse();
+      if (plot >= 0) {
+        const r = openPlot(plot);
+        if (typeof r === 'string') { if (r) toast(r); }
+
+        return;
+      }
       stroke = { visited: new Set(), last: { x: e.clientX, y: e.clientY }, done: 0, msg: null };
       setMouse(e.clientX, e.clientY);
       applyStroke(game.use(pickAtMouse(), stroke.visited));
@@ -656,7 +752,7 @@ async function main() {
     $('st-season').textContent = SEASON_NAMES[season] + (season !== calendarSeason ? '（手動）' : '');
     $('st-weather').textContent = WEATHER_NAMES[weatherOverride ?? weatherAt(new Date(), season)];
     const f = game.summary();
-    $('st-farm').innerHTML = dl([['畑', `${f.fields} マス`], ['育っている', f.growing], ['収穫できる', f.ripe], ['育つ苗木', f.saplings]]);
+    $('st-farm').innerHTML = dl([['畑', `${f.fields} マス`], ['育っている', f.growing], ['収穫できる', f.ripe], ['育つ苗木', f.saplings], ['🔑 土地の権利', rights()], ['開いた土地', `${world ? countOpen(world.plots) : 0} / 16`]]);
     $('st-inv').innerHTML = dl(CROP_KINDS.map((k) => [`${CROP_ICONS[k]} ${CROPS[k].name}`, f.inventory[k] ?? 0]));
     $('st-residents').innerHTML = dl(animals.slice(0, 10).map((a) => [`${a.info.icon} ${a.name}`, ACTIVITY_NAMES[a.activity]]));
   };
@@ -711,7 +807,6 @@ async function main() {
   let worldSettings: SaveData['world'] | null = null;
   const settingsFromUI = (): SaveData['world'] => ({
     seed: parseInt($<HTMLInputElement>('seed').value, 10) || 0,
-    size: parseInt($<HTMLSelectElement>('size').value, 10),
     height: WORLD_HEIGHT,
     detail: parseInt($<HTMLSelectElement>('detail').value, 10),
     flowerStyle: $<HTMLSelectElement>('flowerStyle').value,
@@ -719,12 +814,14 @@ async function main() {
   });
   const settingsToUI = (s: SaveData['world']) => {
     $<HTMLInputElement>('seed').value = String(s.seed);
-    $<HTMLSelectElement>('size').value = String(s.size);
     $<HTMLSelectElement>('detail').value = String(s.detail);
     $<HTMLSelectElement>('flowerStyle').value = s.flowerStyle;
     PARAM_KEYS.forEach((k) => { paramInput(k).value = String(s.params[k] ?? 1); showParam(k); });
   };
-  const buildSave = (): SaveData => ({ version: SAVE_VERSION, savedAt: Date.now(), world: worldSettings!, ...game.exportState() });
+  const buildSave = (): SaveData => ({
+    version: SAVE_VERSION, savedAt: Date.now(), world: worldSettings!, plots: world!.plots,
+    ...game.exportState(), progress: { ...progress }, dex: {}, residents: [],
+  });
 
   // 閉じていた間の季節と天気（オフライン進行で使う）
   const envAt = (ms: number) => {
@@ -738,7 +835,8 @@ async function main() {
   const loadFrom = async (save: SaveData, catchUp: boolean) => {
     settingsToUI(save.world);
     const s = save.world;
-    await regenerate(s.size, s.seed, s.detail, s.params, s.flowerStyle, save.edits);
+    progress = { ...save.progress };
+    await startWorld(s.seed, s.detail, s.params, s.flowerStyle, save.plots, save.edits);
     worldSettings = { ...s };
     game.restore(save);
     if (!catchUp) return;
@@ -752,6 +850,7 @@ async function main() {
 
   /** keep = true：今の状態（編集・畑）を保ったまま作り直す（小物の細かさ・花・画質の変更） */
   const doRegen = async (keep = true) => {
+    if (openingDone) await openingDone;
     if (keep && world && worldSettings) {
       const s = buildSave();
       const ui = settingsFromUI();
@@ -760,7 +859,8 @@ async function main() {
       game.unsaved = true;
     } else {
       const s = settingsFromUI();
-      await regenerate(s.size, s.seed, s.detail, s.params, s.flowerStyle);
+      progress = { points: 0, rightsUsed: 0, unlocks: [], firsts: [], newMarks: [] };
+      await startWorld(s.seed, s.detail, s.params, s.flowerStyle, 1 << START_PLOT);
       worldSettings = s;
       game.unsaved = true;
     }
@@ -776,7 +876,22 @@ async function main() {
     await saveNow();
   };
   $('regen').addEventListener('click', newWorld);
-  $('size').addEventListener('change', newWorld);
+  $('rightPlus').addEventListener('click', () => {
+    progress.points += 3;
+    game.unsaved = true;
+    refreshGhosts();
+    toast(`土地の権利：${rights()}`);
+  });
+  $('openAll').addEventListener('click', async () => {
+    if (!world || opening) return;
+    // 残りの区画を 1 つずつ開く（権利が足りなければ足す）
+    for (let next = openable(world.plots); next.length; next = openable(world.plots)) {
+      if (rights() === 0) progress.points += 3;
+      const r = openPlot(next[0]);
+      if (typeof r === 'string') break;
+      await r;
+    }
+  });
   $('detail').addEventListener('change', () => doRegen(true));
   $('flowerStyle').addEventListener('change', () => doRegen(true));
 
@@ -840,7 +955,7 @@ async function main() {
       await saveNow();
       toast('読み込みました');
     } catch (err) {
-      toast(err instanceof Error ? err.message : '読み込めませんでした');
+      toast(err instanceof OldSaveError ? '古い形式（v1）の保存データは読み込めません。今の箱庭はそのままです' : err instanceof Error ? err.message : '読み込めませんでした', 4000);
     }
   });
 
@@ -869,7 +984,7 @@ async function main() {
       showSaveStatus(`Google Drive に同期：${new Date().toLocaleTimeString().slice(0, 5)}`);
       toast('Google Drive に保存しました');
     } catch (err) {
-      toast(err instanceof Error ? err.message : '同期できませんでした', 4000);
+      toast(err instanceof OldSaveError ? 'Google Drive の保存データは古い形式（v1）なので読み込めません。今の箱庭はそのままです' : err instanceof Error ? err.message : '同期できませんでした', 4000);
     } finally {
       driveBtn.disabled = false;
     }
@@ -930,8 +1045,9 @@ async function main() {
     }
   } catch (err) {
     console.error(err);
-    toast('保存データを読めなかったので、新しい箱庭を作りました', 4000);
+    toast(err instanceof OldSaveError ? `保存データは${err.message}` : '保存データを読めなかったので、新しい箱庭を作りました', 4000);
     await doRegen(false);
+    if (err instanceof OldSaveError) await saveNow();
   }
 
   // ---------- ループ ----------
@@ -992,8 +1108,10 @@ async function main() {
     if (precip) { precip.rain.visible = weatherNow.rain > 0.01; precip.snow.visible = weatherNow.snow > 0.01; }
     $('weatherLabel').textContent = `いま：${WEATHER_NAMES[weatherAt(now, st.season)]}`;
 
-    const size = world?.size ?? 64;
-    daylight.apply(hour, focusPoint, size * 0.78, weatherNow);
+    const size = extent;
+    // 影の範囲は箱庭全体ではなく、注目点のまわり（カメラとの距離で決める）。広くなっても影が粗くならない
+    const shadowR = Math.min(160, Math.max(48, camera.position.distanceTo(controls.target) * 0.9));
+    daylight.apply(hour, focusPoint, shadowR, weatherNow);
     // パネルの見た目を時間帯に合わせる（夜は暗いすりガラス）。明け方・夕方にちらつかないよう幅を持たせる
     const nightUI = document.body.classList.contains('night');
     if (!nightUI && SKY.night.value > 0.65) document.body.classList.add('night');
@@ -1023,8 +1141,15 @@ async function main() {
     game.tick(dt, lastEnv);
     // ドラッグ中もカーソル（白い枠）をマウスに追従させる。ドラッグ中は使った直後のマスが赤くならないよう白のまま
     if (mode === 'edit' && mouseInside) {
-      const msg = game.updateCursor(pickAtMouse(), !!stroke);
-      if (!stroke) hintEl.textContent = msg || TOOLS.find((x) => x.id === game.tool)!.help;
+      const gp = stroke ? -1 : ghostAtMouse();
+      ghosts.setHover(gp);
+      if (gp >= 0) {
+        game.cursor.visible = false;
+        hintEl.textContent = rights() > 0 ? 'クリックでこの土地を開く（権利 1）' : '土地の権利が足りません';
+      } else {
+        const msg = game.updateCursor(pickAtMouse(), !!stroke);
+        if (!stroke) hintEl.textContent = msg || TOOLS.find((x) => x.id === game.tool)!.help;
+      }
     }
     updateHover();
 
@@ -1033,9 +1158,9 @@ async function main() {
     if (nextAmbient <= 0 && world) {
       // 雨の時は雨粒の波紋がたくさん
       nextAmbient = weatherNow.rain > 0.3 ? 0.04 + Math.random() * 0.08 : 0.8 + Math.random() * 2.5;
-      const N = world.size;
+      // 開いた範囲の中で探す（枠全体だと、区画が少ない時にほとんど見つからない）
       for (let tries = 0; tries < 30; tries++) {
-        const x = (Math.random() - 0.5) * N, z = (Math.random() - 0.5) * N;
+        const x = bounds.x0 + Math.random() * bounds.w - FRAME / 2, z = bounds.z0 + Math.random() * bounds.d - FRAME / 2;
         if (isWaterAt(x, z)) { addRipple(x, z, 0.35 + Math.random() * 0.3); break; }
       }
     }

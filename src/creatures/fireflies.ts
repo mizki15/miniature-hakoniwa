@@ -31,13 +31,15 @@ export class Fireflies {
     const candidates: [number, number][] = [];
     for (let z = 2; z < N - 2; z += 2) for (let x = 2; x < N - 2; x += 2) {
       const h = w.heights[x + z * N];
+      if (h === 0) continue; // 開いていない区画の列（空気だけ）
       const top = w.voxels[x + z * N + (h - 1) * N * N];
       if (top !== GRASS || h > w.waterLevel + 6) continue;
       // 近くに水があるか
       let wet = false;
       for (let d = -4; d <= 4 && !wet; d += 2) for (let e = -4; e <= 4; e += 2) {
         const xx = x + d, zz = z + e;
-        if (xx >= 0 && zz >= 0 && xx < N && zz < N && w.heights[xx + zz * N] < w.waterLevel) { wet = true; break; }
+        // 高さ 0 の列は開いていない区画（空気だけ）なので水辺に数えない
+        if (xx >= 0 && zz >= 0 && xx < N && zz < N && w.heights[xx + zz * N] > 0 && w.heights[xx + zz * N] < w.waterLevel) { wet = true; break; }
       }
       if (wet) candidates.push([x, z]);
     }
