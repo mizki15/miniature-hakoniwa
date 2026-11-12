@@ -50,13 +50,17 @@ async function main() {
   const trackTimestamp = new URLSearchParams(location.search).has('gputime');
   const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL, trackTimestamp });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight));
+  // 表示上の大きさは CSS（100%）に任せる。第 3 引数を false にしないと、最初の大きさが
+  // canvas の style に px で固定され、全画面などで大きくなった時に余白（背景色）が出る
+  renderer.setSize(Math.max(1, window.innerWidth), Math.max(1, window.innerHeight), false);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
   await renderer.init();
   const appEl = $('app');
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
   appEl.appendChild(renderer.domElement);
   const backendName = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'WebGPU' : 'WebGL2（フォールバック）';
 
