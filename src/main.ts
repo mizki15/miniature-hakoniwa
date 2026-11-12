@@ -362,6 +362,27 @@ async function main() {
   };
   $('menuOpen').addEventListener('click', () => setMenu(true));
   $('menuClose').addEventListener('click', () => setMenu(false));
+  // 全画面表示（Fullscreen API）。ブラウザの Esc などで抜けた時もスイッチの表示を合わせる
+  const fsBtn = $<HTMLButtonElement>('fullscreen');
+  const fsSupported = !!document.fullscreenEnabled && !!document.documentElement.requestFullscreen;
+  const syncFullscreen = () => fsBtn.setAttribute('aria-checked', document.fullscreenElement ? 'true' : 'false');
+  if (!fsSupported) {
+    fsBtn.disabled = true;
+    $('fullscreenNote').textContent = 'このブラウザでは使えません（iPhone の Safari など）';
+  }
+  fsBtn.addEventListener('click', async () => {
+    // 埋め込みの画面などでは、要求が成功も失敗もせず止まることがあるので時間を区切る
+    const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 1500));
+    try {
+      const req = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      if ((await Promise.race([req, timeout])) === 'timeout' && !document.fullscreenElement) toast('この画面では全画面にできませんでした（ブラウザの設定や埋め込み表示のため）', 3500);
+    } catch {
+      toast('全画面にできませんでした', 2500);
+    }
+    syncFullscreen();
+  });
+  document.addEventListener('fullscreenchange', syncFullscreen);
+
   // パネルの外（すりガラスの部分）を押しても閉じる
   menuEl.addEventListener('pointerdown', (e) => { if (e.target === menuEl) setMenu(false); });
 
