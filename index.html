@@ -16,18 +16,27 @@
         </header>
         <div class="side-body">
           <div class="tabs"><span class="tab on">動物</span><span class="tab">植物</span><span class="tab">魚・虫</span></div>
-          <div class="dex-grid">
-            <div class="dex-card"><div class="dex-icon">?</div><div class="dex-name">？？？</div></div>
-            <div class="dex-card"><div class="dex-icon">?</div><div class="dex-name">？？？</div></div>
-            <div class="dex-card"><div class="dex-icon">?</div><div class="dex-name">？？？</div></div>
-            <div class="dex-card"><div class="dex-icon">?</div><div class="dex-name">？？？</div></div>
-            <div class="dex-card"><div class="dex-icon">?</div><div class="dex-name">？？？</div></div>
-            <div class="dex-card"><div class="dex-icon">?</div><div class="dex-name">？？？</div></div>
-            <div class="dex-card"><div class="dex-icon">?</div><div class="dex-name">？？？</div></div>
-            <div class="dex-card"><div class="dex-icon">?</div><div class="dex-name">？？？</div></div>
-            <div class="dex-card"><div class="dex-icon">?</div><div class="dex-name">？？？</div></div>
+          <div class="dex-grid" id="dexGrid"></div>
+          <div id="dexDetail">カードを選ぶと説明が出ます</div>
+          <div class="placeholder-note">（仮の登録：植物・魚・虫は準備中）</div>
+        </div>
+      </aside>
+
+      <!-- 左：エディタ（エディタモードのみ） -->
+      <aside id="editor" class="side glass">
+        <header><span>エディタ</span></header>
+        <div class="side-body">
+          <div id="tools" class="tool-list"></div>
+          <div id="seedBox">
+            <h3>種</h3>
+            <div id="seeds" class="seed-list"></div>
           </div>
-          <div class="placeholder-note">（準備中）</div>
+          <div id="toolHint" class="tool-hint"></div>
+          <div class="howto">
+            <div><b>左ドラッグ</b>：なぞった所にまとめて使う</div>
+            <div><b>右ドラッグ</b>：回転　<b>ホイール</b>：ズーム</div>
+            <div><b>中ドラッグ</b>：移動　<b>Esc</b>：見るモードへ</div>
+          </div>
         </div>
       </aside>
 
@@ -153,13 +162,15 @@
           <div id="stats"></div>
         </div>
 
-        <!-- 道具バー -->
-        <div id="toolbar" class="glass">
-          <div id="tools"></div>
-          <div id="seeds" class="sub"></div>
-          <div id="toolHint"></div>
+        <!-- モード切り替え（画面下中央） -->
+        <div id="modes" class="glass">
+          <button data-mode="view"><span class="ic">👁</span>見る<span class="k">V</span></button>
+          <button data-mode="edit"><span class="ic">🛠</span>エディタ<span class="k">E</span></button>
+          <button data-mode="status"><span class="ic">📋</span>ステータス<span class="k">S</span></button>
         </div>
         <div id="toast"></div>
+        <!-- ステータスモード：ホバーした物の情報 -->
+        <div id="tooltip" class="glass"></div>
       </main>
 
       <!-- 右：ステータス（一部はまだレイアウトのみ） -->
@@ -179,9 +190,7 @@
           </section>
           <section class="stat-block">
             <h3>住人</h3>
-            <div class="skeleton-line"></div>
-            <div class="skeleton-line short"></div>
-            <div class="skeleton-line"></div>
+            <dl id="st-residents"></dl>
           </section>
           <section class="stat-block">
             <h3>畑・素材</h3>

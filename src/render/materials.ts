@@ -208,6 +208,9 @@ export function createDetailMaterial(swayLinear = 0): THREE.MeshStandardNodeMate
   const gust2 = cos(time.mul(0.7).add(phase.mul(1.7))).mul(0.6);
   m.positionNode = pL.add(vec3(gust, 0, gust2).mul(sway));
   m.receivedShadowPositionNode = positionWorld.add(normalWorldGeometry.mul(SHADOW_OFFSET));
+  // カメラのすぐ近くの木は点描のように透かす（近づいた時に視界をふさがないように）
+  m.alphaHash = true;
+  m.opacityNode = smoothstep(2.5, 9, length(positionWorld.sub(cameraPosition)));
 
   const veg = attribute('veg', 'float');
   const base = attribute('color', 'vec3');

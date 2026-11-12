@@ -91,18 +91,57 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
   #ui:not(.expanded) .title .fold { transform: rotate(-90deg); }
 }
 
-/* 道具バー（画面下中央） */
-#toolbar { position: absolute; left: 50%; bottom: var(--gap); transform: translateX(-50%); z-index: 3; border-radius: 16px; padding: 8px 10px; display: flex; flex-direction: column; align-items: center; gap: 6px; user-select: none; }
-#tools, #toolbar .sub { display: flex; gap: 6px; }
-#toolbar button { border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.35); border-radius: 12px; min-width: 52px; padding: 4px 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; font-size: 11px; color: var(--ink); }
-#toolbar button .ic { font-size: 18px; line-height: 1.1; }
-#toolbar button .k { font-size: 9px; color: var(--muted); }
-#toolbar button.on { background: rgba(91, 143, 58, 0.85); color: #fff; border-color: rgba(91,143,58,0.9); }
-#toolbar button.on .k { color: rgba(255,255,255,0.8); }
-#toolbar .sub button { flex-direction: row; min-width: 0; padding: 3px 10px; gap: 4px; }
-#toolbar .sub:empty { display: none; }
-#toolHint { font-size: 12px; color: var(--muted); min-height: 1em; }
-#toast { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); z-index: 3; background: rgba(30, 40, 50, 0.72); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
-#toast.show { opacity: 1; }
 .stat-block .sub-h { margin-top: 10px; }
-@media (max-width: 760px) { #toolbar, #toast { display: none !important; } }
+
+/* ---------- モード ---------- */
+#modes { position: absolute; left: 50%; bottom: var(--gap); transform: translateX(-50%); z-index: 3; border-radius: 16px; padding: 6px; display: flex; gap: 6px; user-select: none; }
+#modes button { border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.35); border-radius: 12px; min-width: 76px; padding: 4px 10px; cursor: pointer; display: flex; flex-direction: column; align-items: center; font-size: 12px; color: var(--ink); }
+#modes button .ic { font-size: 18px; line-height: 1.2; }
+#modes button .k { font-size: 9px; color: var(--muted); }
+#modes button.on { background: rgba(47, 125, 225, 0.85); color: #fff; border-color: rgba(47,125,225,0.9); }
+#modes button.on .k { color: rgba(255,255,255,0.8); }
+#toast { position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 3; background: rgba(30, 40, 50, 0.72); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+#toast.show { opacity: 1; }
+
+/* パネルの表示：見る＝なし、エディタ＝エディタのみ、ステータス＝図鑑とステータス */
+#editor { left: var(--gap); }
+#layout:not(.mode-edit) #editor { transform: translateX(calc(-100% - var(--gap) * 2)); opacity: 0; pointer-events: none; }
+#layout:not(.mode-status) #left { transform: translateX(calc(-100% - var(--gap) * 2)); opacity: 0; pointer-events: none; }
+#layout:not(.mode-status) #right { transform: translateX(calc(100% + var(--gap) * 2)); opacity: 0; pointer-events: none; }
+#layout:not(.mode-status) .reopen { display: none !important; }
+#layout.mode-view #ui { left: var(--gap); }
+#layout.mode-edit #ui { left: calc(var(--side-w) + var(--gap) * 2); }
+
+/* エディタの道具一覧 */
+.tool-list { display: flex; flex-direction: column; gap: 6px; }
+.tool-list button { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 2px 8px; text-align: left; border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.3); border-radius: 12px; padding: 6px 10px; cursor: pointer; color: var(--ink); font-size: 13px; }
+.tool-list button .ic { font-size: 18px; grid-row: span 2; }
+.tool-list button .k { font-size: 10px; color: var(--muted); border: 1px solid rgba(0,0,0,0.12); border-radius: 4px; padding: 0 4px; }
+.tool-list button .d { grid-column: 2 / span 2; font-size: 10.5px; color: var(--muted); }
+.tool-list button.on { background: rgba(91, 143, 58, 0.85); color: #fff; border-color: rgba(91,143,58,0.9); }
+.tool-list button.on .d, .tool-list button.on .k { color: rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.4); }
+#seedBox { margin-top: 12px; }
+#seedBox h3 { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+.seed-list { display: flex; gap: 6px; flex-wrap: wrap; }
+.seed-list button { border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.3); border-radius: 10px; padding: 4px 8px; cursor: pointer; font-size: 12px; color: var(--ink); }
+.seed-list button .k { font-size: 10px; color: var(--muted); margin-left: 4px; }
+.seed-list button.on { background: rgba(91, 143, 58, 0.85); color: #fff; }
+.tool-hint { margin-top: 12px; font-size: 12px; color: var(--ink); min-height: 2.4em; padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,0.25); }
+.howto { margin-top: 12px; font-size: 11px; color: var(--muted); line-height: 1.7; }
+
+/* ステータスモードのツールチップ */
+#tooltip { position: absolute; z-index: 4; pointer-events: none; padding: 8px 12px; border-radius: 12px; font-size: 12px; min-width: 140px; max-width: 240px; display: none; background: rgba(255,255,255,0.55); }
+#tooltip .tt-title { font-weight: 700; font-size: 13px; margin-bottom: 2px; }
+#tooltip .tt-sub { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+#tooltip .tt-line { line-height: 1.6; }
+#tooltip .bar { height: 6px; border-radius: 3px; background: rgba(0,0,0,0.1); margin-top: 6px; overflow: hidden; }
+#tooltip .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #8fd15a, #e0b54a); }
+
+/* 図鑑：登録済みのカード */
+.dex-card.found .dex-icon { background: rgba(255,255,255,0.75); color: var(--ink); font-size: 24px; }
+.dex-card.found .dex-name { color: var(--ink); }
+.dex-card .dex-count { font-size: 10px; color: var(--muted); }
+.dex-card { cursor: pointer; }
+.dex-card.sel { outline: 2px solid rgba(47,125,225,0.7); }
+#dexDetail { margin-top: 10px; font-size: 12px; line-height: 1.6; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.3); min-height: 3em; }
+@media (max-width: 760px) { #modes, #toast, #tooltip, #editor { display: none !important; } }

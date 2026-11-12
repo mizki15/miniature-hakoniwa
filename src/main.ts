@@ -13,7 +13,8 @@ import { createDaylight } from './render/daylight';
 import { SKY, createPrecipitation, createSkyNode } from './render/sky';
 import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
 import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, weatherAt, type WeatherKind } from './weather';
-import { spawnAnimals, type Animal } from './creatures/animals';
+import { ACTIVITY_NAMES, spawnAnimals, type Animal } from './creatures/animals';
+import { renderDex } from './creatures/dex';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
 import type { TerrainParams, WorldData } from './world/terrain';
@@ -203,6 +204,7 @@ async function main() {
         for (const a of animals) a.object.removeFromParent();
         animals = spawnAnimals(w, Math.max(4, Math.round(w.size / 10)));
         for (const a of animals) diorama.add(a.object);
+        refreshDex();
 
         U.waterLevel.value = w.waterLevel;
         U.worldSize.value = w.size;
@@ -278,8 +280,10 @@ async function main() {
     if (x < 0 || z < 0 || x >= N || z >= N) return false;
     return world.voxels[x + z * N + (world.waterLevel - 1) * N * N] === WATER;
   };
-  // ---------- 道具 ----------
-  const toolsEl = $('tools'), seedsEl = $('seeds'), hintEl = $('toolHint'), toastEl = $('toast');
+  // ---------- モードと道具 ----------
+  type Mode = 'view' | 'edit' | 'status';
+  let mode: Mode = 'view';
+  const toolsEl = $('tools'), seedsEl = $('seeds'), hintEl = $('toolHint'), toastEl = $('toast'), tooltipEl = $('tooltip');
   let toastTimer = 0;
   const toast = (msg: string) => {
     toastEl.textContent = msg;
@@ -287,73 +291,181 @@ async function main() {
     clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => toastEl.classList.remove('show'), 1600);
   };
+
+  // エディタの道具一覧（「見る」はモードで切り替えるので除く）
+  const EDIT_TOOLS = TOOLS.filter((t) => t.id !== 'look');
+  let editTool: Tool = 'till';
   const toolButtons = new Map<Tool, HTMLButtonElement>();
-  for (const t of TOOLS) {
+  for (const t of EDIT_TOOLS) {
     const b = document.createElement('button');
-    b.innerHTML = `<span class="ic">${t.icon}</span>${t.name}<span class="k">${t.key}</span>`;
-    b.title = t.help;
+    b.innerHTML = `<span class="ic">${t.icon}</span><span>${t.name}</span><span class="k">${t.key}</span><span class="d">${t.help}</span>`;
     b.addEventListener('click', () => selectTool(t.id));
     toolsEl.appendChild(b);
     toolButtons.set(t.id, b);
   }
-  const seedButtons = new Map<CropKind, HTMLButtonElement>();
   const CROP_ICONS: Record<CropKind, string> = { turnip: '🥬', wheat: '🌾', pumpkin: '🎃' };
   const renderSeeds = () => {
     seedsEl.innerHTML = '';
-    if (game.tool !== 'seed') return;
     for (const k of CROP_KINDS) {
       const b = document.createElement('button');
       b.innerHTML = `${CROP_ICONS[k]} ${CROPS[k].name}<span class="k">${CROPS[k].hours}時間</span>`;
       b.classList.toggle('on', game.seed === k);
-      b.addEventListener('click', () => { game.seed = k; renderSeeds(); });
+      b.addEventListener('click', () => { game.seed = k; renderSeeds(); if (mode === 'edit') selectTool('seed'); });
       seedsEl.appendChild(b);
-      seedButtons.set(k, b);
     }
   };
+  renderSeeds();
   const selectTool = (t: Tool) => {
+    if (t === 'look') { setMode('view'); return; }
+    editTool = t;
+    if (mode !== 'edit') setMode('edit');
     game.tool = t;
     for (const [id, b] of toolButtons) b.classList.toggle('on', id === t);
-    renderSeeds();
     hintEl.textContent = TOOLS.find((x) => x.id === t)!.help;
-    if (t === 'look') game.cursor.visible = false;
   };
-  selectTool('look');
+
+  const layoutEl = $('layout');
+  const modeButtons = document.querySelectorAll<HTMLButtonElement>('#modes button');
+  const setMode = (m: Mode) => {
+    mode = m;
+    layoutEl.classList.remove('mode-view', 'mode-edit', 'mode-status');
+    layoutEl.classList.add(`mode-${m}`);
+    modeButtons.forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
+    // エディタでは左ドラッグを道具に使う（視点は右ドラッグで回す）
+    controls.mouseButtons = m === 'edit'
+      ? { LEFT: null, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE } as unknown as typeof controls.mouseButtons
+      : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+    game.tool = m === 'edit' ? editTool : 'look';
+    if (m === 'edit') selectTool(editTool);
+    game.cursor.visible = false;
+    tooltipEl.style.display = 'none';
+    if (m === 'status') refreshDex();
+  };
+  modeButtons.forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode as Mode)));
+
   window.addEventListener('keydown', (e) => {
     if ((e.target as HTMLElement).closest('input, select, textarea')) return;
-    const t = TOOLS.find((x) => x.key === e.key);
-    if (t) selectTool(t.id);
-    if (e.key === 'Escape') selectTool('look');
+    const k = e.key.toLowerCase();
+    if (k === 'v' || e.key === 'Escape') setMode('view');
+    else if (k === 'e') setMode('edit');
+    else if (k === 's') setMode('status');
+    else {
+      const t = EDIT_TOOLS.find((x) => x.key === e.key);
+      if (t) selectTool(t.id);
+    }
   });
 
   // マウスの位置から光線を作る
   const mouse = new THREE.Vector2(), raycaster = new THREE.Raycaster();
+  const mousePx = { x: 0, y: 0 };
   let mouseInside = false;
-  const setMouse = (e: PointerEvent) => {
+  const setMouse = (clientX: number, clientY: number) => {
     const rect = renderer.domElement.getBoundingClientRect();
-    mouse.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    mouse.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    mousePx.x = clientX - rect.left; mousePx.y = clientY - rect.top;
   };
-  renderer.domElement.addEventListener('pointermove', (e) => { setMouse(e); mouseInside = true; });
-  renderer.domElement.addEventListener('pointerleave', () => { mouseInside = false; game.cursor.visible = false; });
   const pickAtMouse = () => {
     raycaster.setFromCamera(mouse, camera);
     return game.pick(raycaster.ray.origin, raycaster.ray.direction);
   };
 
-  // クリック（ドラッグではない時）：道具を使う。「見る」の時は水面に波紋
+  // エディタ：左ドラッグでなぞった所にまとめて道具を使う（同じ列は 1 回だけ）
+  let stroke: { visited: Set<number>; last: { x: number; y: number }; done: number; msg: string | null } | null = null;
+  const applyStroke = (msg: string | null) => {
+    if (!stroke || !msg) return;
+    stroke.msg = msg;
+    if (/した$/.test(msg)) stroke.done++;
+  };
+  const strokeAt = (cx: number, cy: number) => {
+    if (!stroke) return;
+    // 前の位置から今の位置まで、数ピクセルおきに調べる（速く動かしても抜けないように）
+    const dx = cx - stroke.last.x, dy = cy - stroke.last.y;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 4));
+    const from = stroke.last;
+    for (let i = 1; i <= steps; i++) {
+      setMouse(from.x + (dx * i) / steps, from.y + (dy * i) / steps);
+      applyStroke(game.use(pickAtMouse(), stroke.visited));
+    }
+    stroke.last = { x: cx, y: cy };
+  };
+
   let downAt: { x: number; y: number } | null = null;
-  renderer.domElement.addEventListener('pointerdown', (e) => { downAt = { x: e.clientX, y: e.clientY }; });
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    downAt = { x: e.clientX, y: e.clientY };
+    if (mode === 'edit' && e.button === 0 && world) {
+      stroke = { visited: new Set(), last: { x: e.clientX, y: e.clientY }, done: 0, msg: null };
+      setMouse(e.clientX, e.clientY);
+      applyStroke(game.use(pickAtMouse(), stroke.visited));
+      renderer.domElement.setPointerCapture(e.pointerId);
+    }
+  });
+  renderer.domElement.addEventListener('pointermove', (e) => {
+    mouseInside = true;
+    if (stroke) strokeAt(e.clientX, e.clientY);
+    setMouse(e.clientX, e.clientY);
+  });
+  renderer.domElement.addEventListener('pointerleave', () => { mouseInside = false; game.cursor.visible = false; tooltipEl.style.display = 'none'; });
   renderer.domElement.addEventListener('pointerup', (e) => {
-    if (!downAt || !world || e.button !== 0 || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
-    setMouse(e);
-    if (game.tool !== 'look') {
-      const msg = game.use(pickAtMouse());
-      if (msg) toast(msg);
+    if (stroke) {
+      // 複数マスに使った時はまとめて知らせる
+      if (stroke.done > 1) toast(`${stroke.done} マスに「${TOOLS.find((x) => x.id === game.tool)!.name}」を使いました`);
+      else if (stroke.msg) toast(stroke.msg);
+      stroke = null;
       return;
     }
+    if (!downAt || !world || e.button !== 0 || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
+    // 見る・ステータス：水面をクリックすると波紋
+    setMouse(e.clientX, e.clientY);
     raycaster.setFromCamera(mouse, camera);
     const hit = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -(world.waterLevel - 0.15)), new THREE.Vector3());
     if (hit && isWaterAt(hit.x, hit.z)) addRipple(hit.x, hit.z, 1);
   });
+
+  // ステータスモード：ホバーした動物・作物・地面の情報を小さく出す
+  const statusCursorColor = new THREE.Color(0x7fd3ff);
+  const updateHover = () => {
+    if (mode !== 'status') return;
+    if (!mouseInside || !world) { tooltipEl.style.display = 'none'; return; }
+    raycaster.setFromCamera(mouse, camera);
+    let html = '';
+    const animalHits = raycaster.intersectObjects(animals.map((a) => a.object), true);
+    const voxelHit = game.pick(raycaster.ray.origin, raycaster.ray.direction);
+    const animalHit = animalHits[0];
+    if (animalHit && (!voxelHit || animalHit.distance < voxelHit.t + 0.5)) {
+      let o: THREE.Object3D | null = animalHit.object;
+      while (o && !o.userData.animal) o = o.parent;
+      const a = o?.userData.animal as Animal | undefined;
+      if (a) {
+        const info = a.info;
+        html = `<div class="tt-title">${info.icon} ${a.name}</div><div class="tt-sub">${info.name}</div>` +
+          `<div class="tt-line">いま：${ACTIVITY_NAMES[a.activity]}</div><div class="tt-line">好きなもの：${a.favorite}</div><div class="tt-line">得意：${info.skill}</div>`;
+        game.cursor.visible = false;
+      }
+    }
+    if (!html && voxelHit) {
+      const d = game.describe(voxelHit, lastEnv);
+      if (d) {
+        html = `<div class="tt-title">${d.title}</div>` + d.lines.map((l) => `<div class="tt-line">${l}</div>`).join('') +
+          (d.progress !== undefined ? `<div class="bar"><i style="width:${Math.round(d.progress * 100)}%"></i></div>` : '');
+        const half = world.size / 2;
+        game.cursor.visible = true;
+        game.cursor.position.set(voxelHit.x + 0.5 - half, voxelHit.y + 0.5, voxelHit.z + 0.5 - half);
+        (game.cursor.material as THREE.LineBasicMaterial).color.copy(statusCursorColor);
+      }
+    }
+    if (!html) { tooltipEl.style.display = 'none'; game.cursor.visible = false; return; }
+    tooltipEl.innerHTML = html;
+    tooltipEl.style.display = 'block';
+    // 画面の端ではみ出さないように
+    const w = tooltipEl.offsetWidth, h = tooltipEl.offsetHeight;
+    const sw = appEl.clientWidth, sh = appEl.clientHeight;
+    tooltipEl.style.left = `${Math.min(sw - w - 8, mousePx.x + 16)}px`;
+    tooltipEl.style.top = `${Math.min(sh - h - 8, mousePx.y + 16)}px`;
+  };
+
+  // 図鑑
+  const refreshDex = () => renderDex($('dexGrid'), $('dexDetail'), animals);
+
   // 魚がはねる・虫が落ちる：ときどき勝手に波紋
   let nextAmbient = 1;
   // デバッグ用（開発者ツールから確認できるように）
@@ -456,6 +568,7 @@ async function main() {
     const f = game.summary();
     $('st-farm').innerHTML = dl([['畑', `${f.fields} マス`], ['育っている', f.growing], ['収穫できる', f.ripe], ['育つ苗木', f.saplings]]);
     $('st-inv').innerHTML = dl(CROP_KINDS.map((k) => [`${CROP_ICONS[k]} ${CROPS[k].name}`, f.inventory[k] ?? 0]));
+    $('st-residents').innerHTML = dl(animals.slice(0, 10).map((a) => [`${a.info.icon} ${a.name}`, ACTIVITY_NAMES[a.activity]]));
   };
 
   // 天気
@@ -552,6 +665,8 @@ async function main() {
   new ResizeObserver(fit).observe(appEl);
   fit();
 
+  setMode('view');
+
   // 最初の画質：WebGL2 やスマホは「中」から。重ければ自動で下げる
   applyQuality(forceWebGL || isMobile || !(renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'medium' : 'high', false);
   await doRegen();
@@ -638,7 +753,8 @@ async function main() {
     // 畑・植林の時間を進める。道具を持っている時はカーソルを更新
     lastEnv = { season: s, raining: weatherNow.rain > 0.5 };
     game.tick(dt, lastEnv);
-    if (game.tool !== 'look' && mouseInside) hintEl.textContent = game.updateCursor(pickAtMouse()) || TOOLS.find((x) => x.id === game.tool)!.help;
+    if (mode === 'edit' && mouseInside && !stroke) hintEl.textContent = game.updateCursor(pickAtMouse()) || TOOLS.find((x) => x.id === game.tool)!.help;
+    updateHover();
 
     // ときどき勝手に波紋
     nextAmbient -= dt;
