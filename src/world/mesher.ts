@@ -22,6 +22,7 @@ export interface MeshOptions {
   waterLevel?: number; // 水面の高さ（上面をこの分だけ下げる）
   waterDrop?: number;
   skipBottom?: boolean; // y=0 の下面を省略
+  core?: { x0: number; x1: number; z0: number; z1: number }; // この範囲（X・Z）のボクセルの面だけ作る
 }
 
 /**
@@ -58,6 +59,8 @@ export function buildMesh(g: Grid, opt: MeshOptions = {}): MeshData {
         for (let j = 0; j < dv; j++) {
           for (let i = 0; i < du; i++, n++) {
             p[d] = xd; p[u] = i; p[v] = j;
+            const core = opt.core;
+            if (core && (p[0] < core.x0 || p[0] >= core.x1 || p[2] < core.z0 || p[2] >= core.z1)) continue;
             const a = get(p[0], p[1], p[2]);
             if (water ? a !== WATER : !isOpaque(a)) continue;
             q[0] = p[0]; q[1] = p[1]; q[2] = p[2]; q[d] += s;
@@ -151,4 +154,29 @@ export function transformMesh(m: MeshData, scale: number, ox: number, oy: number
     p[i + 2] = (p[i + 2] + oz) * scale;
   }
   return m;
+}
+
+/** チャンク（地形を X・Z 方向に CHUNK 個ずつ区切ったもの）の一辺 */
+export const CHUNK = 32;
+
+/**
+ * 1 チャンク分のメッシュを作る。
+ * 周りに 1 ボクセルの縁を付けて切り出し（AO と面の判定に隣のチャンクを使うため）、
+ * 縁のボクセル自身の面は作らない。頂点は世界座標（ボクセル単位）で返す。
+ */
+export function buildChunk(voxels: Uint8Array, N: number, H: number, cx: number, cz: number, waterLevel: number) {
+  const x0 = cx * CHUNK, z0 = cz * CHUNK;
+  const cw = Math.min(CHUNK, N - x0), cd = Math.min(CHUNK, N - z0);
+  const sx = cw + 2, sz = cd + 2;
+  const data = new Uint8Array(sx * H * sz);
+  for (let y = 0; y < H; y++) for (let z = 0; z < sz; z++) for (let x = 0; x < sx; x++) {
+    const wx = x0 + x - 1, wz = z0 + z - 1;
+    // 世界の外は空気（外周の断面が見えるように）
+    data[x + z * sx + y * sx * sz] = wx < 0 || wz < 0 || wx >= N || wz >= N ? 0 : voxels[wx + wz * N + y * N * N];
+  }
+  const grid = { sx, sy: H, sz, data };
+  const core = { x0: 1, x1: sx - 1, z0: 1, z1: sz - 1 };
+  const terrain = transformMesh(buildMesh(grid, { skipBottom: true, core }), 1, x0 - 1, 0, z0 - 1);
+  const water = transformMesh(buildMesh(grid, { water: true, waterLevel, skipBottom: true, core }), 1, x0 - 1, 0, z0 - 1);
+  return { cx, cz, terrain, water };
 }

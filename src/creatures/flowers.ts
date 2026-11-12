@@ -8,7 +8,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const lin = (hex: number) => new THREE.Color(hex); // Color(hex) は sRGB → リニアに変換される
 
-function colored(geo: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
+export function colored(geo: THREE.BufferGeometry, color: number): THREE.BufferGeometry {
   const g = geo.index ? geo.toNonIndexed() : geo;
   g.deleteAttribute('uv');
   const n = g.attributes.position.count;

@@ -17,8 +17,9 @@ import { spawnAnimals, type Animal } from './creatures/animals';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
 import type { TerrainParams, WorldData } from './world/terrain';
-import type { MeshData } from './world/mesher';
-import type { DetailSet } from './world/worker';
+import type { ChunkMesh, DetailSet } from './world/worker';
+import { GameController, TOOLS, type Tool } from './game/controller';
+import { CROPS, CROP_KINDS, type CropKind } from './game/farm';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -28,9 +29,9 @@ const WORLD_HEIGHT = 64;
 const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
 
 interface WorkerResult {
+  type: 'generate';
   world: WorldData;
-  terrain: MeshData;
-  water: MeshData;
+  chunks: ChunkMesh[];
   details: DetailSet[];
   flowerPlacements: Float32Array[];
   counts: { trees: number; flowers: number };
@@ -135,23 +136,19 @@ async function main() {
   let animals: Animal[] = [];
   let info = '';
 
-  const toGeometry = (m: MeshData) => {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(m.position, 3));
-    g.setAttribute('normal', new THREE.BufferAttribute(m.normal, 3));
-    g.setAttribute('color', new THREE.BufferAttribute(m.color, 3));
-    g.setAttribute('ao', new THREE.BufferAttribute(m.ao, 1));
-    g.setAttribute('veg', new THREE.BufferAttribute(m.veg, 1));
-    g.setIndex(new THREE.BufferAttribute(m.index, 1));
-    g.computeBoundingSphere();
-    return g;
-  };
-
   const worker = new Worker(new URL('./world/worker.ts', import.meta.url), { type: 'module' });
   const busy = document.createElement('div');
   busy.id = 'busy';
   busy.textContent = '生成中…';
   $('stage').appendChild(busy);
+
+  // 触れる・育つ要素（道具・畑・植林・地形の編集）
+  const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat });
+  let onGenerated: ((r: WorkerResult) => void) | null = null;
+  worker.onmessage = (e: MessageEvent<WorkerResult | { type: 'remesh'; chunks: ChunkMesh[] }>) => {
+    if (e.data.type === 'remesh') game.onRemesh(e.data.chunks);
+    else onGenerated?.(e.data);
+  };
 
   const clearDiorama = () => {
     diorama.traverse((o) => {
@@ -166,11 +163,10 @@ async function main() {
   const regenerate = (size: number, seed: number, detail: number, params: TerrainParams, flowerStyle: string) =>
     new Promise<void>((resolve) => {
       busy.style.display = 'grid';
-      worker.onmessage = (e: MessageEvent<WorkerResult>) => {
-        const { world: w, terrain, water, details, flowerPlacements, counts, timings } = e.data;
+      onGenerated = (res: WorkerResult) => {
+        const { world: w, chunks, details, flowerPlacements, counts, timings } = res;
         world = w;
         clearDiorama();
-        const half = w.size / 2;
 
         // ボクセルの種類を 3D テクスチャに（幅 = X, 高さ = Z, 奥行き = Y）
         typeTex?.dispose();
@@ -183,12 +179,6 @@ async function main() {
         terrainMat?.dispose();
         terrainMat = createTerrainMaterial(typeTex, w.size, w.height, liteTerrain);
 
-        const tMesh = new THREE.Mesh(toGeometry(terrain), terrainMat);
-        tMesh.castShadow = tMesh.receiveShadow = true;
-        tMesh.position.set(-half, 0, -half);
-        const wMesh = new THREE.Mesh(toGeometry(water), waterMat);
-        wMesh.position.set(-half, 0, -half);
-        wMesh.renderOrder = 1;
         // 台座（ジオラマの木の土台）
         const base = new THREE.Mesh(
           new THREE.BoxGeometry(w.size + 3, 2.4, w.size + 3),
@@ -197,39 +187,11 @@ async function main() {
         base.userData.ownMaterial = true;
         base.position.y = -1.2;
         base.receiveShadow = true;
-        diorama.add(base, tMesh, wMesh);
+        diorama.add(base);
 
-        // 小物（木・花）はインスタンス描画
-        let detailTris = 0;
-        const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
-        const addInstances = (geo: THREE.BufferGeometry, mat: THREE.Material, placements: Float32Array, kind: string, shared: boolean) => {
-          const count = placements.length / 5;
-          if (count === 0) return;
-          const im = new THREE.InstancedMesh(geo, mat, count);
-          for (let i = 0; i < count; i++) {
-            const [x, y, z, rot, s] = placements.subarray(i * 5, i * 5 + 5);
-            ps.set(x - half, y, z - half);
-            q.setFromAxisAngle(up, rot);
-            sc.setScalar(s);
-            im.setMatrixAt(i, mtx.compose(ps, q, sc));
-          }
-          im.castShadow = kind === 'tree';
-          im.receiveShadow = true;
-          im.userData.kind = kind;
-          im.userData.sharedGeometry = shared;
-          diorama.add(im);
-          const tri = geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3;
-          detailTris += tri * count;
-        };
-        for (const d of details) {
-          if (d.kind === 'flower' && flowerStyle === 'lowpoly') continue;
-          addInstances(toGeometry(d.mesh), d.kind === 'flower' ? flowerMat : detailMat, d.placements, d.kind, false);
-        }
-        // ローポリの花（細かさに関係なく使える）。ボクセルの花が作れない 1/1 でもローポリで出す
+        // 地形（チャンクごと）・木・花。ローポリの花はボクセルの花が作れない 1/1 でも使う
         const hasVoxelFlowers = details.some((d) => d.kind === 'flower');
-        if (flowerStyle === 'lowpoly' || !hasVoxelFlowers) {
-          flowerPlacements.forEach((p, v) => addInstances(lowPolyFlowers[v], flowerMat, p, 'flower', true));
-        }
+        game.load(w, chunks, details, flowerPlacements, flowerStyle === 'lowpoly' || !hasVoxelFlowers ? lowPolyFlowers : null, typeTex, terrainMat);
 
         // 雨・雪（フィールドの大きさに合わせて作り直す）
         if (precip) {
@@ -259,13 +221,12 @@ async function main() {
         controls.target.set(0, 10, 0);
         camera.position.set(r * 0.62, r * 0.55, r * 0.62);
 
-        const tris = (terrain.index.length + water.index.length) / 3 + detailTris;
-        info = `三角形 ${Math.round(tris / 1000)}k · 木 ${counts.trees} · 花 ${counts.flowers}<br>` +
+        info = `チャンク ${chunks.length} · 木 ${counts.trees} · 花 ${counts.flowers}<br>` +
           `生成 ${timings.generate.toFixed(0)}ms / 地形メッシュ ${timings.mesh.toFixed(0)}ms / 小物 ${timings.details.toFixed(0)}ms`;
         busy.style.display = 'none';
         resolve();
       };
-      worker.postMessage({ size, height: WORLD_HEIGHT, seed, detail, params });
+      worker.postMessage({ type: 'generate', size, height: WORLD_HEIGHT, seed, detail, params });
     });
 
   // ---------- 画面中央の奥行き（ボクセルのレイマーチ） ----------
@@ -317,16 +278,80 @@ async function main() {
     if (x < 0 || z < 0 || x >= N || z >= N) return false;
     return world.voxels[x + z * N + (world.waterLevel - 1) * N * N] === WATER;
   };
-  // クリック（ドラッグではない時）で水面に波紋
+  // ---------- 道具 ----------
+  const toolsEl = $('tools'), seedsEl = $('seeds'), hintEl = $('toolHint'), toastEl = $('toast');
+  let toastTimer = 0;
+  const toast = (msg: string) => {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => toastEl.classList.remove('show'), 1600);
+  };
+  const toolButtons = new Map<Tool, HTMLButtonElement>();
+  for (const t of TOOLS) {
+    const b = document.createElement('button');
+    b.innerHTML = `<span class="ic">${t.icon}</span>${t.name}<span class="k">${t.key}</span>`;
+    b.title = t.help;
+    b.addEventListener('click', () => selectTool(t.id));
+    toolsEl.appendChild(b);
+    toolButtons.set(t.id, b);
+  }
+  const seedButtons = new Map<CropKind, HTMLButtonElement>();
+  const CROP_ICONS: Record<CropKind, string> = { turnip: '🥬', wheat: '🌾', pumpkin: '🎃' };
+  const renderSeeds = () => {
+    seedsEl.innerHTML = '';
+    if (game.tool !== 'seed') return;
+    for (const k of CROP_KINDS) {
+      const b = document.createElement('button');
+      b.innerHTML = `${CROP_ICONS[k]} ${CROPS[k].name}<span class="k">${CROPS[k].hours}時間</span>`;
+      b.classList.toggle('on', game.seed === k);
+      b.addEventListener('click', () => { game.seed = k; renderSeeds(); });
+      seedsEl.appendChild(b);
+      seedButtons.set(k, b);
+    }
+  };
+  const selectTool = (t: Tool) => {
+    game.tool = t;
+    for (const [id, b] of toolButtons) b.classList.toggle('on', id === t);
+    renderSeeds();
+    hintEl.textContent = TOOLS.find((x) => x.id === t)!.help;
+    if (t === 'look') game.cursor.visible = false;
+  };
+  selectTool('look');
+  window.addEventListener('keydown', (e) => {
+    if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+    const t = TOOLS.find((x) => x.key === e.key);
+    if (t) selectTool(t.id);
+    if (e.key === 'Escape') selectTool('look');
+  });
+
+  // マウスの位置から光線を作る
+  const mouse = new THREE.Vector2(), raycaster = new THREE.Raycaster();
+  let mouseInside = false;
+  const setMouse = (e: PointerEvent) => {
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  };
+  renderer.domElement.addEventListener('pointermove', (e) => { setMouse(e); mouseInside = true; });
+  renderer.domElement.addEventListener('pointerleave', () => { mouseInside = false; game.cursor.visible = false; });
+  const pickAtMouse = () => {
+    raycaster.setFromCamera(mouse, camera);
+    return game.pick(raycaster.ray.origin, raycaster.ray.direction);
+  };
+
+  // クリック（ドラッグではない時）：道具を使う。「見る」の時は水面に波紋
   let downAt: { x: number; y: number } | null = null;
   renderer.domElement.addEventListener('pointerdown', (e) => { downAt = { x: e.clientX, y: e.clientY }; });
   renderer.domElement.addEventListener('pointerup', (e) => {
-    if (!downAt || !world || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
-    const rect = renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-    const ray = new THREE.Raycaster();
-    ray.setFromCamera(ndc, camera);
-    const hit = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -(world.waterLevel - 0.15)), new THREE.Vector3());
+    if (!downAt || !world || e.button !== 0 || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
+    setMouse(e);
+    if (game.tool !== 'look') {
+      const msg = game.use(pickAtMouse());
+      if (msg) toast(msg);
+      return;
+    }
+    raycaster.setFromCamera(mouse, camera);
+    const hit = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -(world.waterLevel - 0.15)), new THREE.Vector3());
     if (hit && isWaterAt(hit.x, hit.z)) addRipple(hit.x, hit.z, 1);
   });
   // 魚がはねる・虫が落ちる：ときどき勝手に波紋
@@ -415,6 +440,23 @@ async function main() {
     if (ambience.running) { await ambience.stop(); soundBtn.classList.remove('on'); soundBtn.textContent = '🔈 環境音'; }
     else { await ambience.start(); soundBtn.classList.add('on'); soundBtn.textContent = '🔊 環境音'; }
   });
+
+  // 時間の流れ（テスト用の早送り）
+  let lastEnv = { season: 0, raining: false };
+  $<HTMLSelectElement>('simSpeed').addEventListener('change', (e) => { game.farm.speed = parseFloat((e.target as HTMLSelectElement).value); });
+  $('skip1').addEventListener('click', () => { game.skip(1, lastEnv); toast('1 時間進めました'); });
+  $('skip6').addEventListener('click', () => { game.skip(6, lastEnv); toast('6 時間進めました'); });
+
+  // 右パネル（ステータス）
+  const dl = (rows: [string, string | number][]) => rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  const updateStatus = (hh: number, mm: number, season: number, calendarSeason: number) => {
+    $('st-time').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    $('st-season').textContent = SEASON_NAMES[season] + (season !== calendarSeason ? '（手動）' : '');
+    $('st-weather').textContent = WEATHER_NAMES[weatherOverride ?? weatherAt(new Date(), season)];
+    const f = game.summary();
+    $('st-farm').innerHTML = dl([['畑', `${f.fields} マス`], ['育っている', f.growing], ['収穫できる', f.ripe], ['育つ苗木', f.saplings]]);
+    $('st-inv').innerHTML = dl(CROP_KINDS.map((k) => [`${CROP_ICONS[k]} ${CROPS[k].name}`, f.inventory[k] ?? 0]));
+  };
 
   // 天気
   let weatherOverride: WeatherKind | null = null;
@@ -593,6 +635,11 @@ async function main() {
 
     for (const a of animals) a.update(dt, hour);
 
+    // 畑・植林の時間を進める。道具を持っている時はカーソルを更新
+    lastEnv = { season: s, raining: weatherNow.rain > 0.5 };
+    game.tick(dt, lastEnv);
+    if (game.tool !== 'look' && mouseInside) hintEl.textContent = game.updateCursor(pickAtMouse()) || TOOLS.find((x) => x.id === game.tool)!.help;
+
     // ときどき勝手に波紋
     nextAmbient -= dt;
     if (nextAmbient <= 0 && world) {
@@ -635,6 +682,7 @@ async function main() {
     fpsFrames++; fpsTime += dt;
     if (fpsTime > 0.5) {
       fps = fpsFrames / fpsTime; fpsFrames = 0; fpsTime = 0;
+      updateStatus(hh, mm, s, st.season);
       // GPU の処理時間（タイムスタンプが使える環境のみ）
       if (trackTimestamp) renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER).then(() => { gpuMs = renderer.info.render.timestamp; }).catch(() => {});
       $('stats').innerHTML = `${backendName} · ${fps.toFixed(0)} fps${gpuMs > 0 ? ` · GPU ${gpuMs.toFixed(1)}ms` : ''} · CPU 処理 ${cpuLogic.toFixed(1)}ms＋描画命令 ${cpuRender.toFixed(1)}ms · 画質 ${QUALITY_NAMES[quality]} · ピント ${focusSmoothed.toFixed(0)}<br>${info}`;
@@ -671,7 +719,7 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { bench, adapterInfo, applyQuality, fireflyData, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { bench, adapterInfo, applyQuality, fireflyData, game, selectTool, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {

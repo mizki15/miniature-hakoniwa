@@ -162,6 +162,11 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   const aoF = mix(float(0.42), float(1), attribute('ao', 'float'));
   const edge = max(abs(eu), abs(ev)).mul(U.roundEdges);
   let albedo: N = blended.mul(jitter).mul(aoF).mul(float(1).sub(edge.mul(0.06)));
+  // 畑の畝（うね）：耕した土の上面に筋を入れる
+  const ownT = typeAt(voxel);
+  const farmTop = near(ownT, 13).or(near(ownT, 14)).and(kind.lessThan(0.5));
+  const furrow = abs(sin(faceUV.x.mul(Math.PI * 3)));
+  albedo = albedo.mul(farmTop.select(furrow.mul(0.28).add(0.72), float(1)));
   // 雪：冬は上向きの面すべて、高い山の頂上は一年中
   const upFace = smoothstep(0.5, 0.9, nL.y);
   const peakSnow = smoothstep(41, 47, positionWorld.y);

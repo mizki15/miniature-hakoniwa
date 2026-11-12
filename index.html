@@ -139,11 +139,30 @@
             <div class="param"><label for="p-flowers">花の密度</label><input type="range" id="p-flowers" min="0" max="3" step="0.1" value="1" /><output></output></div>
             <div class="row"><button id="paramsReset">標準に戻す</button><span class="hint">変更後「生成」で反映</span></div>
           </details>
+          <div class="row">
+            <label>時間の流れ
+              <select id="simSpeed" title="畑や苗木の育つ速さ（テスト用の早送り）">
+                <option value="1" selected>×1（現実と同じ）</option>
+                <option value="60">×60</option>
+                <option value="600">×600</option>
+              </select>
+            </label>
+            <button id="skip1">+1時間</button>
+            <button id="skip6">+6時間</button>
+          </div>
           <div id="stats"></div>
         </div>
+
+        <!-- 道具バー -->
+        <div id="toolbar" class="glass">
+          <div id="tools"></div>
+          <div id="seeds" class="sub"></div>
+          <div id="toolHint"></div>
+        </div>
+        <div id="toast"></div>
       </main>
 
-      <!-- 右：ステータス（レイアウトのみ） -->
+      <!-- 右：ステータス（一部はまだレイアウトのみ） -->
       <aside id="right" class="side glass">
         <header>
           <button class="collapse" data-target="right" title="たたむ">›</button>
@@ -153,9 +172,9 @@
           <section class="stat-block">
             <h3>箱庭</h3>
             <dl>
-              <dt>時刻</dt><dd>—</dd>
-              <dt>季節</dt><dd>—</dd>
-              <dt>天気</dt><dd>—</dd>
+              <dt>時刻</dt><dd id="st-time">—</dd>
+              <dt>季節</dt><dd id="st-season">—</dd>
+              <dt>天気</dt><dd id="st-weather">—</dd>
             </dl>
           </section>
           <section class="stat-block">
@@ -166,8 +185,9 @@
           </section>
           <section class="stat-block">
             <h3>畑・素材</h3>
-            <div class="skeleton-line"></div>
-            <div class="skeleton-line short"></div>
+            <dl id="st-farm"></dl>
+            <h3 class="sub-h">持ち物</h3>
+            <dl id="st-inv"></dl>
           </section>
           <section class="stat-block">
             <h3>できごと</h3>

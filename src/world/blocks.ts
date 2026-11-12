@@ -11,7 +11,9 @@ export const STEM = 9;
 export const PETAL_R = 10;
 export const PETAL_Y = 11;
 export const PETAL_W = 12;
-export const BLOCK_COUNT = 13;
+export const FARMLAND = 13; // 耕した土（乾いている）
+export const WET_FARMLAND = 14; // 耕した土（湿っている）
+export const BLOCK_COUNT = 15;
 
 export const isOpaque = (t: number) => t > 0 && t !== WATER;
 
@@ -38,6 +40,8 @@ const PALETTE: Record<number, [number, number, number][]> = {
   [PETAL_R]: [hex(0xe0504a), hex(0xc8403c), hex(0xd84a44)],
   [PETAL_Y]: [hex(0xf2c94c), hex(0xd9b03c), hex(0xeac046)],
   [PETAL_W]: [hex(0xf6f2ea), hex(0xe2ddd2), hex(0xefeae0)],
+  [FARMLAND]: [hex(0x9a7448), hex(0x7d5f3f), hex(0x8b6a46)],
+  [WET_FARMLAND]: [hex(0x5e4329), hex(0x7d5f3f), hex(0x6e5136)],
 };
 
 export function faceColor(t: number, kind: FaceKind): [number, number, number] {
