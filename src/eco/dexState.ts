@@ -3,7 +3,7 @@ import { RARITY_POINTS, isVisitorId, rarityOf, type DexId } from './species';
 
 /**
  * 図鑑の段階（設計書 2.5）と、観察で入る発見ポイント（3.1 のうち観察のぶん）。
- *   ？？？（まだ来ていない）→ 見かけた（箱庭に来た）→ 観察した（カーソルを 1.5 秒合わせた）
+ *   ？？？（まだ来ていない）→ 見かけた（箱庭に来た。名前はまだ出さない）→ 観察した（カーソルを 1.5 秒合わせた）
  */
 export type Dex = SaveData['dex'];
 export type DexStage = 'unknown' | 'seen' | 'observed';
@@ -36,10 +36,4 @@ export function observe(dex: Dex, id: DexId, season: number, now: number): numbe
   if (e.seasons.includes(season)) return 0;
   e.seasons = [...e.seasons, season].sort((a, b) => a - b);
   return isVisitorId(id) ? 1 : 0;
-}
-
-/** 見かけただけの時の名前：最初の 1 文字のほかは「？」 */
-export function partialName(name: string): string {
-  const chars = [...name];
-  return chars[0] + '？'.repeat(Math.max(0, chars.length - 1));
 }

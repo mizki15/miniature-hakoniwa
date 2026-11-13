@@ -16,7 +16,7 @@ import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, weatherAt, type Weather
 import { ACTIVITY_NAMES, type Animal } from './creatures/animals';
 import { EcoManager } from './creatures/ecoManager';
 import { RARITY_STARS, VISITOR, type DexId, type Moment, type VisitorId } from './eco/species';
-import { dexStage, partialName } from './eco/dexState';
+import { dexStage } from './eco/dexState';
 import { pickNearestOnScreen } from './eco/pick';
 import type { Visitor } from './creatures/visitors';
 import { renderDex } from './creatures/dex';
@@ -638,7 +638,7 @@ async function main() {
       const def = VISITOR[t.kind === 'visitor' ? t.visitor.def.id : 'firefly'];
       const stage = dexStage(eco.dex, def.id);
       if (stage !== 'observed') {
-        return `<div class="tt-title">？ ${stage === 'seen' ? partialName(def.name) : '？？？'}</div><div class="tt-sub">${def.hint}</div>` + ringHtml(t);
+        return `<div class="tt-title">？？？</div><div class="tt-sub">${def.hint}</div>` + ringHtml(t);
       }
       return `<div class="tt-title">${def.icon} ${def.name}</div><div class="tt-sub">${RARITY_STARS[def.rarity]}</div><div class="tt-line">${def.note}</div>` + ringHtml(t);
     }
@@ -871,6 +871,12 @@ async function main() {
   const showF = () => { $('fLabel').textContent = `f/${fNumber()}`; };
   fInput.addEventListener('input', showF);
   showF();
+  // ピントの追従の速さ（1 秒あたり。大きいほど速く追いつく。3 で約 0.8 秒）
+  const focusSpeedInput = $<HTMLInputElement>('focusSpeed');
+  const focusSpeed = () => parseFloat(focusSpeedInput.value);
+  const showFocusSpeed = () => { $('focusSpeedLabel').textContent = `${focusSpeed().toFixed(1)}（約 ${(2.3 / focusSpeed()).toFixed(1)} 秒）`; };
+  focusSpeedInput.addEventListener('input', showFocusSpeed);
+  showFocusSpeed();
   const autoBtn = $('auto');
   autoBtn.addEventListener('click', () => {
     controls.autoRotate = !controls.autoRotate;
@@ -967,9 +973,9 @@ async function main() {
   });
   $('ecoCall').addEventListener('click', () => {
     // 確率を 1 にして 1 回判定する（時刻・季節・天気の条件はそのまま）
-    const before = eco.visitors.length + eco.animals.length;
-    eco.check(lastMoment, performance.now(), () => 0);
-    if (eco.visitors.length + eco.animals.length === before) toast('いまの環境・時刻では、誰も来ませんでした');
+    const r = eco.check(lastMoment, performance.now(), () => 0);
+    const parts = [r.arrived ? `訪問者が ${r.arrived} 匹来ました` : '', r.movedIn ? '住人が引っ越してきました' : '', r.left ? `${r.left} 匹が帰りました` : ''].filter(Boolean);
+    toast(r.arrived || r.movedIn ? parts.join('・') : `いまの環境・時刻では、誰も来ませんでした${r.left ? `（${r.left} 匹が帰りました）` : ''}`);
   });
   $('ecoClear').addEventListener('click', () => { eco.clearVisitors(); toast('訪問者が帰りました'); });
   $('openAll').addEventListener('click', async () => {
@@ -1260,7 +1266,7 @@ async function main() {
 
     // ピント：画面中央の奥行きに、なめらかに追従させる
     const target = centerDepth() ?? camera.position.distanceTo(controls.target);
-    focusSmoothed = focusSmoothed < 0 ? target : focusSmoothed + (target - focusSmoothed) * (1 - Math.exp(-dt * 3));
+    focusSmoothed = focusSmoothed < 0 ? target : focusSmoothed + (target - focusSmoothed) * (1 - Math.exp(-dt * focusSpeed()));
     uFocus.value = focusSmoothed;
     // f 値が大きいほどピントの合う範囲が広い
     uFocal.value = focusSmoothed * 0.05 * fNumber();

@@ -113,25 +113,26 @@ export class EcoManager {
     this.check(moment, nowReal, Math.random);
   }
 
-  /** 1 回判定する。force なら確率を 1 にする（デバッグ） */
-  check(moment: Moment, nowReal: number, rand: () => number) {
+  /** 1 回判定する。来た訪問者と引っ越してきた住人の数を返す */
+  check(moment: Moment, nowReal: number, rand: () => number): { arrived: number; left: number; movedIn: boolean } {
     // 訪問者のいる場所が、まだ合っているか（埋めた水・耕した花など）。ホタルは場所を持たない
     const input = { world: this.world!, ...this.deps.envInput() };
     const visitors = this.visitors.map((v) => ({ id: v.def.id, leavesAt: v.leavesAt, homeOk: v.def.motion === 'glow' ? undefined : fitsHabitat(input, v.def.habitat, v.home) }));
     const state: EcoState = { visitors, residents: this.animals.map((a) => a.species), openPlots: countOpen(this.world!.plots) };
     const r = checkEcosystem(state, this.env(), moment, nowReal, rand);
-    let changed = false;
-    for (const id of r.leave) { this.removeVisitor(id); changed = true; }
-    for (const id of r.arrive) { if (this.addVisitor(id, nowReal + stayMs(Math.random))) changed = true; }
+    let arrived = 0, movedIn = false;
+    for (const id of r.leave) this.removeVisitor(id);
+    for (const id of r.arrive) if (this.addVisitor(id, nowReal + stayMs(Math.random))) arrived++;
     if (r.moveIn) {
       const first = !this.dex[r.moveIn];
       const a = this.addResident(r.moveIn);
       if (a) {
         this.deps.toast(first ? '何かの気配がする…' : `${SPECIES[r.moveIn].name}の${a.name}が引っ越してきた`);
-        changed = true;
+        movedIn = true;
       }
     }
-    if (changed) this.deps.onChanged();
+    if (r.leave.length || arrived || movedIn) this.deps.onChanged();
+    return { arrived, left: r.leave.length, movedIn };
   }
 
   /** 訪問者を足す。現れる場所が無ければ来ない。初めてなら「何かの気配がする…」 */

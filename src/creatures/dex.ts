@@ -1,12 +1,12 @@
 import { ACTIVITY_NAMES, SPECIES, type Animal, type Species } from './animals';
 import type { Visitor } from './visitors';
 import { DEX_ORDER, RARITY_STARS, RESIDENT_TEXT, VISITOR, isVisitorId, rarityOf, type DexId } from '../eco/species';
-import { dexStage, partialName, type Dex } from '../eco/dexState';
+import { dexStage, type Dex } from '../eco/dexState';
 import { SEASON_NAMES } from '../calendar';
 
 /**
  * 生き物図鑑：住人 7 種と訪問者 12 種。
- *   ？？？：ヒントだけ／見かけた：シルエットと名前の一部／観察した：名前・説明・好きな環境・観察した季節
+ *   ？？？：ヒントだけ／見かけた：シルエット（名前はまだ出さない）／観察した：名前・説明・好きな環境・観察した季節
  */
 const nameOf = (id: DexId) => (isVisitorId(id) ? VISITOR[id].name : SPECIES[id as Species].name);
 const iconOf = (id: DexId) => (isVisitorId(id) ? VISITOR[id].icon : SPECIES[id as Species].icon);
@@ -23,7 +23,7 @@ export function renderDex(grid: HTMLElement, detail: HTMLElement, dex: Dex, anim
   const show = (id: DexId) => {
     const stage = dexStage(dex, id);
     if (stage !== 'observed') {
-      detail.innerHTML = `<b>${stage === 'seen' ? partialName(nameOf(id)) : '？？？'}</b><br>${hintOf(id)}` +
+      detail.innerHTML = `<b>？？？</b><br>${hintOf(id)}` +
         (stage === 'seen' ? '<br><span class="dex-muted">カーソルをしばらく合わせると観察できる</span>' : '');
       return;
     }
@@ -48,7 +48,7 @@ export function renderDex(grid: HTMLElement, detail: HTMLElement, dex: Dex, anim
     const count = isVisitorId(id) ? (visitors.some((v) => v.def.id === id) ? 'いる' : '') : (() => { const n = animals.filter((a) => a.species === id).length; return n ? `${n} 匹` : ''; })();
     card.innerHTML = stage === 'unknown'
       ? '<div class="dex-icon">?</div><div class="dex-name">？？？</div>'
-      : `<div class="dex-icon"><span class="dex-emoji">${iconOf(id)}</span></div><div class="dex-name">${stage === 'seen' ? partialName(nameOf(id)) : nameOf(id)}</div>` +
+      : `<div class="dex-icon"><span class="dex-emoji">${iconOf(id)}</span></div><div class="dex-name">${stage === 'seen' ? '？？？' : nameOf(id)}</div>` +
         (stage === 'observed' && count ? `<div class="dex-count">${count}</div>` : '');
     card.addEventListener('click', () => {
       grid.querySelectorAll('.dex-card.sel').forEach((c) => c.classList.remove('sel'));

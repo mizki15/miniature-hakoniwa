@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dexStage, markSeen, observe, partialName, type Dex } from './dexState';
+import { dexStage, markSeen, observe, type Dex } from './dexState';
 
 describe('observe', () => {
   it('firstObservePointsByRarity', () => {
@@ -36,12 +36,5 @@ describe('markSeen', () => {
     expect(markSeen(dex, 'frog', 1)).toBe(true);
     expect(markSeen(dex, 'frog', 2)).toBe(false);
     expect(dexStage(dex, 'frog')).toBe('seen');
-  });
-});
-
-describe('partialName', () => {
-  it('keeps the first character', () => {
-    expect(partialName('シマエナガ')).toBe('シ？？？？');
-    expect(partialName('魚の影')).toBe('魚？？');
   });
 });
