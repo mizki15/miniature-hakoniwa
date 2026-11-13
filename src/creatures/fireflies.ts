@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { FIREFLIES, FIREFLY_COLOR, fireflyData } from '../render/materials';
+import { FIREFLIES, FIREFLIES_ON, FIREFLY_COLOR, fireflyData } from '../render/materials';
 import type { WorldData } from '../world/terrain';
 import { GRASS } from '../world/blocks';
 
@@ -70,6 +70,7 @@ export class Fireflies {
     if (!this.present) amount = 0;
     const visible = amount > 0.01 && this.world !== null;
     this.mesh.visible = visible;
+    FIREFLIES_ON.value = visible ? 1 : 0;
     for (let i = 0; i < FIREFLIES; i++) {
       const f = this.flies[i];
       if (!f || !visible) { fireflyData[i].set(0, -100, 0, 0); continue; }

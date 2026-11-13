@@ -3,7 +3,7 @@ import {
   abs, attribute, cameraFar, cameraNear, cameraPosition, clamp, dot, exp, float, floor, fract as fractT, instanceIndex,
   int, ivec3, length, max, mix, mx_noise_float as noiseT, mx_noise_vec3, normalize, normalGeometry, normalLocal, normalWorldGeometry, perspectiveDepthToViewZ,
   positionGeometry, positionLocal, positionView, positionWorld, pow, screenUV, sin, cos, smoothstep as smoothstepT, step, texture3DLoad, time,
-  transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture, Fn, Loop,
+  transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture, Fn, If, Loop,
 } from 'three/tsl';
 import { paletteFlat, WATER } from '../world/blocks';
 import { cloudShadowAt } from './sky';
@@ -37,6 +37,8 @@ export const U = {
 export const RIPPLES = 12;
 export const rippleData = Array.from({ length: RIPPLES }, () => new THREE.Vector4(0, 0, -1000, 0));
 const ripples = uniformArray(rippleData, 'vec4');
+/** 広がっている途中の波紋があれば 1。無い時は水面の波紋の計算（12 個ぶん）を丸ごと飛ばす */
+export const RIPPLES_ON = uniform(0);
 
 /** 影の自己遮蔽（シャドウアクネ）を防ぐため、影を参照する位置を面から浮かせる量 */
 const SHADOW_OFFSET = 0.06;
@@ -47,14 +49,18 @@ export const fireflyData = Array.from({ length: FIREFLIES }, () => new THREE.Vec
 const fireflies = uniformArray(fireflyData, 'vec4');
 export const FIREFLY_COLOR = new THREE.Color(0.75, 1.0, 0.32);
 const fireflyColor = uniform(FIREFLY_COLOR);
+/** 光っているホタルがいれば 1。いない時（昼・ホタルが来ていない時）は、1 画素ごとの 32 匹ぶんの計算を飛ばす */
+export const FIREFLIES_ON = uniform(0);
 
 /** その位置がホタルからどれだけ照らされるか（距離の 2 乗で弱まる） */
 const fireflyLight = (pw: N): N => Fn(() => {
   const acc = float(0).toVar();
-  Loop(FIREFLIES, ({ i }: { i: N }) => {
-    const f: N = fireflies.element(i);
-    const d = pw.sub(f.xyz);
-    acc.addAssign(f.w.div(dot(d, d).mul(1.6).add(0.25)));
+  If(FIREFLIES_ON.greaterThan(0.5), () => {
+    Loop(FIREFLIES, ({ i }: { i: N }) => {
+      const f: N = fireflies.element(i);
+      const d = pw.sub(f.xyz);
+      acc.addAssign(f.w.div(dot(d, d).mul(1.6).add(0.25)));
+    });
   });
   return acc;
 })();
@@ -232,20 +238,27 @@ export function createWaterMaterial(): THREE.MeshStandardNodeMaterial {
   const wp: N = positionWorld.xz;
   const n1 = mx_noise_vec3(vec3(wp.mul(0.45), time.mul(0.35)));
   const n2 = mx_noise_vec3(vec3(wp.mul(1.6).add(vec2(13.1, 7.7)), time.mul(0.6)));
-  let tilt: N = n1.xz.mul(0.16).add(n2.xz.mul(0.07));
+  // 波紋：中心から広がる輪。輪の位置で法線を傾け、少し白く光らせる。広がっている波紋が無い時は計算しない
+  // 戻り値：xy＝法線の傾きに足す量、z＝輪の明るさ
+  const rippleFx: N = Fn(() => {
+    const acc = vec3(0).toVar();
+    If(RIPPLES_ON.greaterThan(0.5), () => {
+      for (let i = 0; i < RIPPLES; i++) {
+        const r: N = ripples.element(i);
+        const dv: N = wp.sub(r.xy);
+        const d: N = max(length(dv), 0.001);
+        const age: N = U.now.sub(r.z);
+        const x: N = d.sub(age.mul(1.8));
+        const env: N = exp(x.mul(x).mul(-2.2)).mul(exp(age.mul(-0.7))).mul(r.w).mul(step(0, age));
+        const push: N = dv.div(d).mul(sin(x.mul(7)).mul(env).mul(0.55));
+        acc.addAssign(vec3(push.x, push.y, env.mul(cos(x.mul(7)).mul(0.5).add(0.5))));
+      }
+    });
+    return acc;
+  })();
+  const tilt: N = n1.xz.mul(0.16).add(n2.xz.mul(0.07)).add(rippleFx.xy);
+  const ring: N = rippleFx.z;
 
-  // 波紋：中心から広がる輪。輪の位置で法線を傾け、少し白く光らせる
-  let ring: N = float(0);
-  for (let i = 0; i < RIPPLES; i++) {
-    const r: N = ripples.element(i);
-    const dv = wp.sub(r.xy);
-    const d = max(length(dv), 0.001);
-    const age = U.now.sub(r.z);
-    const x = d.sub(age.mul(1.8));
-    const env = exp(x.mul(x).mul(-2.2)).mul(exp(age.mul(-0.7))).mul(r.w).mul(step(0, age));
-    tilt = tilt.add(dv.div(d).mul(sin(x.mul(7)).mul(env).mul(0.55)));
-    ring = ring.add(env.mul(cos(x.mul(7)).mul(0.5).add(0.5)));
-  }
   const Nw = normalize(vec3(tilt.x, 1, tilt.y));
   m.normalNode = transformNormalToView(Nw);
 

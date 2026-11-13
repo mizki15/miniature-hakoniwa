@@ -8,7 +8,8 @@ import { Ambience } from './audio';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { denoise } from 'three/addons/tsl/display/DenoiseNode.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RIPPLES, U, createDetailMaterial, createTerrainMaterial, createWaterMaterial, fireflyData, rippleData } from './render/materials';
+import { FIREFLIES_ON, RIPPLES, RIPPLES_ON, U, createDetailMaterial, createTerrainMaterial, createWaterMaterial, fireflyData, rippleData } from './render/materials';
+import { SAMPLES as QUALITY_SAMPLES, nextQuality } from './render/autoQuality';
 import { createDaylight } from './render/daylight';
 import { SKY, createPrecipitation, createSkyNode } from './render/sky';
 import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
@@ -1165,6 +1166,8 @@ async function main() {
     timer.update(t);
     const dt = Math.min(timer.getDelta(), 0.1);
     U.now.value = timer.getElapsed();
+    // 広がっている途中の波紋があるか（10 秒でほぼ消える）。無ければ水面の波紋の計算を飛ばす
+    RIPPLES_ON.value = rippleData.some((r) => r.w > 0 && U.now.value - r.z >= 0 && U.now.value - r.z < 10) ? 1 : 0;
 
     if (snapT < 1) {
       snapT = Math.min(1, snapT + dt * 2.2);
@@ -1302,18 +1305,16 @@ async function main() {
       // GPU の処理時間（タイムスタンプが使える環境のみ）
       if (trackTimestamp) renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER).then(() => { gpuMs = renderer.info.render.timestamp; }).catch(() => {});
       $('stats').innerHTML = `${backendName} · ${fps.toFixed(0)} fps${gpuMs > 0 ? ` · GPU ${gpuMs.toFixed(1)}ms` : ''} · CPU 処理 ${cpuLogic.toFixed(1)}ms＋描画命令 ${cpuRender.toFixed(1)}ms · 画質 ${QUALITY_NAMES[quality]} · ピント ${focusSmoothed.toFixed(0)}<br>${info}`;
-      // 自動画質：重い時は一段ずつ下げる（上げ下げを繰り返さないよう、下げるだけ）
-      if (qualityAuto && fps > 0 && performance.now() - lastQualityChange > 4000) {
+      // 自動画質：重い時は下げる（上げ下げを繰り返さないよう、下げるだけ）。
+      // 変えた直後・箱庭を作っている間の 1.5 秒は見ない（シェーダーの準備で一瞬重くなるため）。2 秒ぶんの中央値で決める
+      if (qualityAuto && fps > 0 && !game.locked && performance.now() - lastQualityChange > 1500) {
         fpsWindow.push(fps);
-        if (fpsWindow.length >= 6) {
-          const avg = fpsWindow.reduce((a, b) => a + b, 0) / fpsWindow.length;
+        if (fpsWindow.length >= QUALITY_SAMPLES) {
+          const next = nextQuality(quality, fpsWindow);
           fpsWindow.length = 0;
-          if (avg < 40 && quality !== 'low') {
-            applyQuality(quality === 'high' ? 'medium' : 'low');
-            lastQualityChange = performance.now();
-          }
+          if (next) { applyQuality(next); lastQualityChange = performance.now(); }
         }
-      }
+      } else fpsWindow.length = 0;
     }
   };
   renderer.setAnimationLoop(loop);
@@ -1335,7 +1336,7 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {
