@@ -13,7 +13,12 @@ import { createDaylight } from './render/daylight';
 import { SKY, createPrecipitation, createSkyNode } from './render/sky';
 import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
 import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, weatherAt, type WeatherKind } from './weather';
-import { ACTIVITY_NAMES, spawnAnimals, type Animal } from './creatures/animals';
+import { ACTIVITY_NAMES, type Animal } from './creatures/animals';
+import { EcoManager } from './creatures/ecoManager';
+import { RARITY_STARS, VISITOR, type DexId, type Moment, type VisitorId } from './eco/species';
+import { dexStage, partialName } from './eco/dexState';
+import { pickNearestOnScreen } from './eco/pick';
+import type { Visitor } from './creatures/visitors';
 import { renderDex } from './creatures/dex';
 import { OldSaveError, SAVE_VERSION, decodeSave, encodeSave, type SaveData } from './save/format';
 import { loadLocal, requestPersist, saveLocal } from './save/store';
@@ -135,7 +140,6 @@ async function main() {
   const ambience = new Ambience();
   let liteTerrain = false;
   let world: WorldData | null = null;
-  let animals: Animal[] = [];
   let info = '';
 
   const worker = new Worker(new URL('./world/worker.ts', import.meta.url), { type: 'module' });
@@ -146,6 +150,12 @@ async function main() {
 
   // 触れる・育つ要素（道具・畑・植林・地形の編集）
   const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat });
+  // 生き物（住人・訪問者・図鑑・来るかどうかの判定）
+  const eco = new EcoManager({
+    diorama, envInput: () => game.envInput(), toast: (m, ms) => toast(m, ms), fireflies,
+    onChanged: () => { game.unsaved = true; refreshDex(); },
+  });
+  game.onEnvChanged = () => eco.envDirty();
   let onGenerated: ((r: InitResult) => void) | null = null;
   const onPlot = (r: PlotResult) => {
     game.addPlot(r);
@@ -245,7 +255,7 @@ async function main() {
         game.load(w, chunks, models, placements, flowerStyle === 'lowpoly' || !hasVoxelFlowers ? lowPolyFlowers : null, typeTex, terrainMat);
         game.onPlotsChanged = () => applyBounds(false);
         // ほかの区画がまだせり上がっている時は、全部そろってから足す（途中の区画に置くと浮いて見える）
-        game.onPlotRisen = () => { if (!game.isRising()) fillCreatures(false); };
+        game.onPlotRisen = () => { if (!game.isRising()) fillCreatures(); };
         game.gen = res.gen;
         game.locked = false;
 
@@ -254,6 +264,7 @@ async function main() {
         U.detail.value = detail;
         controls.minDistance = 3;
         applyBounds(true);
+        eco.reset(w, game.farm.simMs);
 
         info = `チャンク ${chunks.length} · 木 ${counts.trees} · 花 ${counts.flowers}<br>` +
           `生成 ${timings.generate.toFixed(0)}ms / 地形メッシュ ${timings.mesh.toFixed(0)}ms / 小物 ${timings.details.toFixed(0)}ms`;
@@ -270,19 +281,8 @@ async function main() {
   let bounds = boundsOf(1 << START_PLOT);
   /** 開いた範囲の大きさ（縦横の大きい方） */
   let extent = 64;
-  /** 動物は開いた面積に応じて（最大 24 匹）。区画を開いた時は今いる動物を残して足す */
-  const fillCreatures = (first: boolean) => {
-    const w = world!;
-    const want = Math.min(24, Math.max(4, Math.round(Math.sqrt(countOpen(w.plots) * 4096) / 10)));
-    if (first) { for (const a of animals) a.object.removeFromParent(); animals = []; }
-    if (animals.length < want) {
-      const add = spawnAnimals(w, want - animals.length, animals.length);
-      for (const a of add) diorama.add(a.object);
-      animals = [...animals, ...add];
-    }
-    refreshDex();
-    fireflies.setWorld(w);
-  };
+  /** ホタルのすみかを開いた範囲に合わせる（住人は引っ越しで増える。区画を開いても増やさない） */
+  const fillCreatures = () => { fireflies.setWorld(world!); };
 
   const applyBounds = (first: boolean) => {
     const w = world!;
@@ -304,7 +304,7 @@ async function main() {
     scene.add(precip.rain, precip.snow);
 
     // 動物・ホタルは、区画を開いた時はせり上がりきってから足す（onPlotRisen）
-    if (first) fillCreatures(true);
+    if (first) fillCreatures();
     let maxH = 0; for (let i = 0; i < w.heights.length; i++) maxH = Math.max(maxH, w.heights[i]);
     birds.setWorld({ cx, cz, extent }, maxH);
     refreshGhosts();
@@ -575,17 +575,40 @@ async function main() {
   });
 
   // 見るモード：作物・動物にホバーすると情報を小さく出す。右クリックで固定（他の所を触るまで）
-  type Target = { kind: 'animal'; animal: Animal } | { kind: 'crop'; col: number };
+  type Target = { kind: 'animal'; animal: Animal } | { kind: 'crop'; col: number } | { kind: 'visitor'; visitor: Visitor } | { kind: 'firefly'; pos: THREE.Vector3 };
   let pinned: Target | null = null;
-  const sameTarget = (a: Target | null, b: Target | null) =>
-    !!a && !!b && a.kind === b.kind && (a.kind === 'animal' ? a.animal === (b as { animal: Animal }).animal : a.col === (b as { col: number }).col);
+  /** 同じ対象か（観察の時間を続けて数えるかどうかにも使う。ホタルはどの粒でも同じ） */
+  const targetKey = (t: Target | null) =>
+    !t ? '' : t.kind === 'animal' ? `a${t.animal.id}` : t.kind === 'crop' ? `c${t.col}` : t.kind === 'visitor' ? `v${t.visitor.def.id}` : 'firefly';
+  const sameTarget = (a: Target | null, b: Target | null) => !!a && !!b && targetKey(a) === targetKey(b);
+  /** 図鑑の対象（作物は対象外） */
+  const dexIdOf = (t: Target | null): DexId | null =>
+    !t ? null : t.kind === 'animal' ? t.animal.species : t.kind === 'visitor' ? t.visitor.def.id : t.kind === 'firefly' ? 'firefly' : null;
+  const tmpP = new THREE.Vector3();
+  /** 画面上でマウスから 28px 以内の訪問者・ホタル（小さく速いので、レイではなく画面の距離で選ぶ） */
+  const visitorAtMouse = (): Target | null => {
+    const r = renderer.domElement.getBoundingClientRect();
+    const pts: { x: number; y: number; id: number }[] = [];
+    const toScreen = (p: THREE.Vector3, id: number) => {
+      tmpP.copy(p).project(camera);
+      if (tmpP.z < 1) pts.push({ x: (tmpP.x + 1) / 2 * r.width, y: (1 - tmpP.y) / 2 * r.height, id });
+    };
+    eco.visitors.forEach((v, i) => { if (v.def.motion !== 'glow') toScreen(v.anchor, i); });
+    const flies = eco.visitors.some((v) => v.def.id === 'firefly') ? fireflies.positions() : [];
+    flies.forEach((p, i) => toScreen(p, 1000 + i));
+    const id = pickNearestOnScreen(pts, mousePx.x, mousePx.y);
+    if (id === null) return null;
+    return id >= 1000 ? { kind: 'firefly', pos: flies[id - 1000] } : { kind: 'visitor', visitor: eco.visitors[id] };
+  };
 
   /** マウスの下にある作物か動物（地面などは対象外） */
   const targetAtMouse = (): Target | null => {
     if (!world) return null;
+    const vt = visitorAtMouse();
+    if (vt) return vt;
     raycaster.setFromCamera(mouse, camera);
     const voxelHit = game.pick(raycaster.ray.origin, raycaster.ray.direction);
-    const animalHit = raycaster.intersectObjects(animals.map((a) => a.object), true)[0];
+    const animalHit = raycaster.intersectObjects(eco.animals.map((a) => a.object), true)[0];
     if (animalHit && (!voxelHit || animalHit.distance < voxelHit.t + 0.5)) {
       let o: THREE.Object3D | null = animalHit.object;
       while (o && !o.userData.animal) o = o.parent;
@@ -595,11 +618,29 @@ async function main() {
     return col !== null ? { kind: 'crop', col } : null;
   };
 
+  /** 観察の進み具合の輪（まだ観察していない生き物にカーソルを合わせている間） */
+  const ringHtml = (t: Target) => {
+    const id = dexIdOf(t);
+    if (!id || !eco.needsObserving(id, lastMoment.season)) return '';
+    const k = observing && observing.key === targetKey(t) ? Math.min(1, observing.t / OBSERVE_SECONDS) : 0;
+    return `<div class="tt-observe"><span class="ring" style="--p:${(k * 100).toFixed(0)}%"></span>観察中…</div>`;
+  };
   const targetHtml = (t: Target): string | null => {
     if (t.kind === 'animal') {
       const a = t.animal, info = a.info;
       return `<div class="tt-title">${info.icon} ${a.name}</div><div class="tt-sub">${info.name}</div>` +
-        `<div class="tt-line">いま：${ACTIVITY_NAMES[a.activity]}</div><div class="tt-line">好きなもの：${a.favorite}</div><div class="tt-line">得意：${info.skill}</div>`;
+        `<div class="tt-line">いま：${ACTIVITY_NAMES[a.activity]}</div><div class="tt-line">好きなもの：${a.favorite}</div><div class="tt-line">得意：${info.skill}</div>` + ringHtml(t);
+    }
+    if (t.kind === 'visitor' || t.kind === 'firefly') {
+      // 去った訪問者・消えたホタルは対象から外す
+      if (t.kind === 'visitor' && !eco.visitors.includes(t.visitor)) return null;
+      if (t.kind === 'firefly' && !eco.visitors.some((v) => v.def.id === 'firefly')) return null;
+      const def = VISITOR[t.kind === 'visitor' ? t.visitor.def.id : 'firefly'];
+      const stage = dexStage(eco.dex, def.id);
+      if (stage !== 'observed') {
+        return `<div class="tt-title">？ ${stage === 'seen' ? partialName(def.name) : '？？？'}</div><div class="tt-sub">${def.hint}</div>` + ringHtml(t);
+      }
+      return `<div class="tt-title">${def.icon} ${def.name}</div><div class="tt-sub">${RARITY_STARS[def.rarity]}</div><div class="tt-line">${def.note}</div>` + ringHtml(t);
     }
     const d = game.describeCrop(t.col, lastEnv);
     if (!d) return null;
@@ -608,15 +649,35 @@ async function main() {
   };
 
   const targetWorldPos = (t: Target) =>
-    t.kind === 'animal' ? t.animal.object.position.clone().add(new THREE.Vector3(0, 1.2, 0)) : game.colTop(t.col).add(new THREE.Vector3(0, 0.4, 0));
+    t.kind === 'animal' ? t.animal.object.position.clone().add(new THREE.Vector3(0, 1.2, 0))
+      : t.kind === 'visitor' ? t.visitor.anchor.clone() : t.kind === 'firefly' ? t.pos.clone() : game.colTop(t.col).add(new THREE.Vector3(0, 0.4, 0));
+
+  /** 観察：同じ生き物にカーソルを 1.5 秒合わせ続けると図鑑に「観察した」と載る */
+  const OBSERVE_SECONDS = 1.5;
+  let observing: { key: string; t: number } | null = null;
+  let hoverTarget: Target | null = null;
+  const updateObserve = (dt: number) => {
+    const t = mode === 'view' ? hoverTarget : null;
+    const id = dexIdOf(t);
+    if (!t || !id || !eco.needsObserving(id, lastMoment.season)) { observing = null; return; }
+    const key = targetKey(t);
+    if (!observing || observing.key !== key) observing = { key, t: 0 };
+    observing.t += dt;
+    if (observing.t >= OBSERVE_SECONDS) {
+      observing = null;
+      const pts = eco.observe(id, lastMoment.season);
+      if (pts > 0) { progress.points += pts; refreshGhosts(); }
+    }
+  };
 
   const statusCursorColor = new THREE.Color(0x7fd3ff);
   const tmpV = new THREE.Vector3();
   const updateHover = () => {
-    if (mode !== 'view' || !world) return;
+    if (mode !== 'view' || !world) { hoverTarget = null; return; }
     // 固定表示が優先。対象が消えたら（収穫など）固定をやめる
     if (pinned && !targetHtml(pinned)) pinned = null;
     const t = pinned ?? (mouseInside ? targetAtMouse() : null);
+    hoverTarget = t;
     const html = t ? targetHtml(t) : null;
     if (!t || !html) { tooltipEl.style.display = 'none'; game.cursor.visible = false; return; }
     tooltipEl.innerHTML = (pinned ? '<span class="pin">📌 固定中</span>' : '') + html;
@@ -659,7 +720,7 @@ async function main() {
   renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
   // 図鑑
-  const refreshDex = () => renderDex($('dexGrid'), $('dexDetail'), animals);
+  const refreshDex = () => renderDex($('dexGrid'), $('dexDetail'), eco.dex, eco.animals, eco.visitors);
 
   // 魚がはねる・虫が落ちる：ときどき勝手に波紋
   let nextAmbient = 1;
@@ -750,6 +811,8 @@ async function main() {
 
   // 時間の流れ（テスト用の早送り）
   let lastEnv = { season: 0, raining: false };
+  /** いまの暦・時刻・天気（生き物の判定に使う） */
+  let lastMoment: Moment = { season: 0, seasonProgress: 0, hour: 12, raining: false };
   $<HTMLSelectElement>('simSpeed').addEventListener('change', (e) => { game.farm.speed = parseFloat((e.target as HTMLSelectElement).value); });
   $('skip1').addEventListener('click', () => { game.skip(1, lastEnv); toast('1 時間進めました'); });
   $('skip6').addEventListener('click', () => { game.skip(6, lastEnv); toast('6 時間進めました'); });
@@ -761,9 +824,11 @@ async function main() {
     $('st-season').textContent = SEASON_NAMES[season] + (season !== calendarSeason ? '（手動）' : '');
     $('st-weather').textContent = WEATHER_NAMES[weatherOverride ?? weatherAt(new Date(), season)];
     const f = game.summary();
-    $('st-farm').innerHTML = dl([['畑', `${f.fields} マス`], ['育っている', f.growing], ['収穫できる', f.ripe], ['育つ苗木', f.saplings], ['🔑 土地の権利', rights()], ['開いた土地', `${world ? countOpen(world.plots) : 0} / 16`]]);
+    $('st-farm').innerHTML = dl([['畑', `${f.fields} マス`], ['育っている', f.growing], ['収穫できる', f.ripe], ['育つ苗木', f.saplings], ['🔑 土地の権利', rights()], ['次の権利まで', `あと ${3 - (progress.points % 3)} ポイント`], ['開いた土地', `${world ? countOpen(world.plots) : 0} / 16`]]);
+    const e = eco.env();
+    $('st-env').innerHTML = dl([['🌼 花', e.flowers], ['🌳 木', e.trees], ['🌿 草地', e.grass], ['💧 水辺', e.waterside], ['🐟 深い水', e.deepWater], ['🟫 畑', e.farmland]]);
     $('st-inv').innerHTML = dl(CROP_KINDS.map((k) => [`${CROP_ICONS[k]} ${CROPS[k].name}`, f.inventory[k] ?? 0]));
-    $('st-residents').innerHTML = dl(animals.slice(0, 10).map((a) => [`${a.info.icon} ${a.name}`, ACTIVITY_NAMES[a.activity]]));
+    $('st-residents').innerHTML = dl(eco.animals.slice(0, 10).map((a) => [`${a.info.icon} ${a.name}`, ACTIVITY_NAMES[a.activity]]));
   };
 
   // 天気
@@ -829,7 +894,7 @@ async function main() {
   };
   const buildSave = (): SaveData => ({
     version: SAVE_VERSION, savedAt: Date.now(), world: worldSettings!, plots: world!.plots,
-    ...game.exportState(), progress: { ...progress }, dex: {}, residents: [],
+    ...game.exportState(), progress: { ...progress }, dex: structuredClone(eco.dex), residents: eco.residentsSave(),
   });
 
   // 閉じていた間の季節と天気（オフライン進行で使う）
@@ -848,6 +913,9 @@ async function main() {
     await startWorld(s.seed, s.detail, s.params, s.flowerStyle, save.plots, save.edits);
     worldSettings = { ...s };
     game.restore(save);
+    // 住人は畑・苗木を戻した後に（苗木の列に住人を戻さないように）
+    eco.restore(save.dex ?? {}, save.residents ?? []);
+    eco.resetClock(game.farm.simMs);
     if (!catchUp) return;
     const target = save.farm.simMs + Math.max(0, Date.now() - save.savedAt);
     const r = game.catchUp(target, envAt);
@@ -855,6 +923,8 @@ async function main() {
       const news = [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : ''].filter(Boolean).join('・');
       toast(`おかえりなさい。${fmtHours(r.hours)}たちました${news ? `：${news}` : ''}`, 5000);
     }
+    // 閉じていた間は引っ越してこない（判定の基準をいまにそろえる）
+    eco.resetClock(game.farm.simMs);
   };
 
   /** keep = true：今の状態（編集・畑）を保ったまま作り直す（小物の細かさ・花・画質の変更） */
@@ -864,12 +934,16 @@ async function main() {
       const s = buildSave();
       const ui = settingsFromUI();
       s.world = { ...worldSettings, detail: ui.detail, flowerStyle: ui.flowerStyle };
+      // 来ていた訪問者は、作り直した後も残りの時間だけいる（画質の自動切り替えで消えないように）
+      const stays = eco.visitorStays;
       await loadFrom(s, false);
+      eco.readdVisitors(stays);
       game.unsaved = true;
     } else {
       const s = settingsFromUI();
       progress = { points: 0, rightsUsed: 0, unlocks: [], firsts: [], newMarks: [] };
       await startWorld(s.seed, s.detail, s.params, s.flowerStyle, 1 << START_PLOT);
+      eco.restore({}, null);
       worldSettings = s;
       game.unsaved = true;
     }
@@ -891,6 +965,13 @@ async function main() {
     refreshGhosts();
     toast(`土地の権利：${rights()}`);
   });
+  $('ecoCall').addEventListener('click', () => {
+    // 確率を 1 にして 1 回判定する（時刻・季節・天気の条件はそのまま）
+    const before = eco.visitors.length + eco.animals.length;
+    eco.check(lastMoment, performance.now(), () => 0);
+    if (eco.visitors.length + eco.animals.length === before) toast('いまの環境・時刻では、誰も来ませんでした');
+  });
+  $('ecoClear').addEventListener('click', () => { eco.clearVisitors(); toast('訪問者が帰りました'); });
   $('openAll').addEventListener('click', async () => {
     if (!world || opening) return;
     // 残りの区画を 1 つずつ開く（権利が足りなければ足す）。途中で箱庭が作り直されたら止める
@@ -1144,7 +1225,8 @@ async function main() {
     diorama.children.forEach((o) => { if (o.userData.kind === 'flower') o.visible = U.snow.value < 0.5; });
     $('seasonLabel').textContent = `いまの暦：${SEASON_NAMES[st.season]}${st.blend > 0 ? `→${SEASON_NAMES[st.next]}` : ''}`;
 
-    for (const a of animals) a.update(dt, hour);
+    lastMoment = { season: s, seasonProgress: seasonOverride === null ? st.progress : 0.3, hour, raining: weatherNow.rain > 0.5 };
+    eco.update(dt, hour, lastMoment, game.farm.simMs, performance.now());
 
     // 畑・植林の時間を進める。道具を持っている時はカーソルを更新
     lastEnv = { season: s, raining: weatherNow.rain > 0.5 };
@@ -1162,6 +1244,7 @@ async function main() {
       }
     }
     updateHover();
+    updateObserve(dt);
 
     // ときどき勝手に波紋
     nextAmbient -= dt;
@@ -1246,7 +1329,7 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {

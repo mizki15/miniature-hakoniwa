@@ -180,7 +180,8 @@ export function generatePlot(world: World, plot: number, seed: number, params: T
         const variant = conifer ? 4 + Math.floor(hash2(seed, x, z, 13) * 2) : Math.floor(hash2(seed, x, z, 13) * 4);
         trees.push({ variant, x: x + 0.5, y: h, z: z + 0.5, rot: Math.floor(hash2(seed, x, z, 14) * 4) * (Math.PI / 2), scale: 0.85 + hash2(seed, x, z, 15) * 0.35 });
       }
-      world.walkable[x + z * N] = (top === GRASS || top === SAND || top === DIRT) && !isTree ? 1 : 0;
+      // 水面より下の列（湖や川の底）は歩けない
+      world.walkable[x + z * N] = (top === GRASS || top === SAND || top === DIRT) && !isTree && h >= world.waterLevel ? 1 : 0;
 
       // 花（草地に散らばせる。木の根元は避ける）
       if (top !== GRASS || isTree || x < 1 || z < 1 || x >= N - 1 || z >= N - 1) continue;
@@ -230,7 +231,7 @@ export function applyEdits(world: World, edits: number[]) {
     }
     world.heights[col] = h;
     const top = h > 0 ? world.voxels[x + z * N + (h - 1) * N * N] : 0;
-    world.walkable[col] = (top === GRASS || top === SAND || top === DIRT || top === 13 || top === 14) && !treeCols.has(col) ? 1 : 0;
+    world.walkable[col] = (top === GRASS || top === SAND || top === DIRT || top === 13 || top === 14) && !treeCols.has(col) && h >= world.waterLevel ? 1 : 0;
   }
   world.flowers = world.flowers.filter((f) => !cols.has(Math.floor(f.x) + Math.floor(f.z) * N));
 }

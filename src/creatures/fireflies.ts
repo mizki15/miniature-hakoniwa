@@ -55,8 +55,19 @@ export class Fireflies {
     });
   }
 
+  /** ホタルの訪問者が来ている時だけ光る（生態系の判定で来る） */
+  private present = false;
+  setPresent(on: boolean) { this.present = on; }
+
+  /** 光っている粒の位置（観察の判定に使う） */
+  positions(): THREE.Vector3[] {
+    if (!this.mesh.visible) return [];
+    return this.flies.filter((_, i) => fireflyData[i].w > 0.05).map((f) => f.pos);
+  }
+
   /** amount：0..1（夜・季節・天気から決める出現量） */
   update(t: number, amount: number) {
+    if (!this.present) amount = 0;
     const visible = amount > 0.01 && this.world !== null;
     this.mesh.visible = visible;
     for (let i = 0; i < FIREFLIES; i++) {

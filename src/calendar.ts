@@ -10,6 +10,7 @@ export interface SeasonState {
   season: number; // 0..3
   next: number;
   blend: number; // 0..1（次の季節への移り具合）
+  progress: number; // 0..1（季節＝暦の月の中の進み具合。初夏などの判定に使う）
 }
 
 export function seasonAt(date: Date): SeasonState {
@@ -18,7 +19,7 @@ export function seasonAt(date: Date): SeasonState {
   const daysInMonth = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
   const day = date.getUTCDate() - 1 + date.getUTCHours() / 24;
   const blend = Math.min(1, Math.max(0, (day - (daysInMonth - 3)) / 3));
-  return { season, next: (season + 1) % 4, blend };
+  return { season, next: (season + 1) % 4, blend, progress: Math.min(1, day / daysInMonth) };
 }
 
 /** 季節ごとの草（上面）と葉の色 */

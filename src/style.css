@@ -140,8 +140,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 #tooltip .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #8fd15a, #e0b54a); }
 
 /* 図鑑：登録済みのカード */
-.dex-card.found .dex-icon { background: rgba(255,255,255,0.75); color: var(--ink); font-size: 24px; }
-.dex-card.found .dex-name { color: var(--ink); }
+.dex-card.observed .dex-icon, .dex-card.seen .dex-icon { background: rgba(255,255,255,0.75); color: var(--ink); font-size: 24px; }
+.dex-card.observed .dex-name { color: var(--ink); }
 .dex-card .dex-count { font-size: 10px; color: var(--muted); }
 .dex-card { cursor: pointer; }
 .dex-card.sel { outline: 2px solid rgba(47,125,225,0.7); }
@@ -191,7 +191,7 @@ body.night .side header { text-shadow: none; }
 body.night .tab:not(.on), body.night .dex-card, body.night .skeleton-line, body.night #dexDetail, body.night .tool-hint { background: rgba(255, 255, 255, 0.08); }
 body.night .dex-card { border-color: rgba(255, 255, 255, 0.14); }
 body.night .dex-icon { background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.45); }
-body.night .dex-card.found .dex-icon { background: rgba(255, 255, 255, 0.85); }
+body.night .dex-card.observed .dex-icon, body.night .dex-card.seen .dex-icon { background: rgba(255, 255, 255, 0.85); }
 body.night #ui button:not(.on), body.night .tool-list button:not(.on), body.night .seed-list button:not(.on), body.night #modes button:not(.on), body.night .reopen {
   background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2); color: var(--ink);
 }
@@ -208,3 +208,14 @@ body.night #tooltip .bar { background: rgba(255, 255, 255, 0.15); }
 .switch[aria-checked="true"] { background: #2f7de1; }
 .switch[aria-checked="true"] span { transform: translateX(20px); }
 .switch:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 観察の進み具合の輪 */
+#tooltip .tt-observe { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--muted); }
+#tooltip .ring { width: 14px; height: 14px; border-radius: 50%; background: conic-gradient(#e0b54a var(--p), rgba(0,0,0,0.12) 0); -webkit-mask: radial-gradient(circle, transparent 3.5px, #000 4px); mask: radial-gradient(circle, transparent 3.5px, #000 4px); }
+
+/* 図鑑：見出し・見かけただけ（シルエット）・観察した季節 */
+.dex-head { grid-column: 1 / -1; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.dex-card.seen .dex-emoji { filter: brightness(0) opacity(0.55); }
+.dex-season { display: inline-block; padding: 0 4px; margin-right: 2px; border-radius: 4px; color: var(--muted); opacity: 0.45; }
+.dex-season.on { opacity: 1; color: var(--ink); background: rgba(224,181,74,0.35); }
+.dex-muted { color: var(--muted); font-size: 11px; }

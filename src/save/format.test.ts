@@ -13,6 +13,10 @@ describe('save v2', () => {
   it('roundtrips', async () => {
     expect(await decodeSave(await encodeSave(v2()))).toEqual(v2());
   });
+  it('dexAndResidentsRoundtrip', async () => {
+    const d = { ...v2(), dex: { butterfly: { seenAt: 10, observedAt: 20, seasons: [0, 1] }, rabbit: { seenAt: 5, seasons: [] } }, residents: [['rabbit', 70, 90, 'こむぎ'], ['duck', 74, 80, 'もち']] as SaveData['residents'] };
+    expect(await decodeSave(await encodeSave(d))).toEqual(d);
+  });
   it('rejects v1 with OldSaveError', async () => {
     const old = { ...v2(), version: 1 } as SaveData;
     await expect(decodeSave(await encodeSave(old))).rejects.toBeInstanceOf(OldSaveError);

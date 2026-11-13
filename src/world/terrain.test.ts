@@ -43,6 +43,12 @@ describe('generatePlot', () => {
     for (let z = 64; z < 128; z++) for (let x = 64; x < 128; x++) if (w.heights[x + z * FRAME] < w.waterLevel) water++;
     expect(water).toBeGreaterThan(64);
   });
+  it('columns under the water surface are not walkable', () => {
+    const w = gen([5]);
+    let under = 0;
+    for (let c = 0; c < FRAME * FRAME; c++) if (w.heights[c] > 0 && w.heights[c] < w.waterLevel) { under++; expect(w.walkable[c]).toBe(0); }
+    expect(under).toBeGreaterThan(0);
+  });
   it('applyEdits ignores closed plots', () => {
     const w = gen([5]);
     applyEdits(w, [0 + 0 * FRAME + 20 * FRAME * FRAME, 3]);

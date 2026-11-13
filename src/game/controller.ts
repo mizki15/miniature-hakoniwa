@@ -181,12 +181,26 @@ export class GameController {
     for (const o of risers) o.position.y = -RISE_DEPTH;
     this.addTreeCols(r.placements);
     // 木と花は、地面がせり上がりきってから置く（全部の区画で 1 つの InstancedMesh なので一緒には動かせない）
-    this.rising.push({ objs: risers, t: 0, done: () => { this.addDecor(r.placements); this.onPlotRisen?.(); } });
+    this.rising.push({ objs: risers, t: 0, done: () => { this.addDecor(r.placements); this.onEnvChanged?.(); this.onPlotRisen?.(); } });
     this.onPlotsChanged?.();
   }
 
   /** 区画が増えた時に呼ぶ（main が台座・カメラの範囲などを直す） */
   onPlotsChanged: (() => void) | null = null;
+  /** 環境（花・木・畑・作物・地形）が変わったかもしれない時に呼ぶ（main が環境の数を数え直す印を付ける） */
+  onEnvChanged: (() => void) | null = null;
+
+  /** 環境を数えるための材料（花の列・木の列・畑・作物の数） */
+  envInput() {
+    const N = this.world!.size;
+    const flowerCols: number[] = [];
+    for (const d of this.decor) {
+      if (d.kind !== 'flower') continue;
+      for (let i = 0; i < d.placements.length; i += 5) flowerCols.push(Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * N);
+    }
+    return { flowerCols, treeCols: this.treeCols as ReadonlySet<number>, farmland: this.farmland as ReadonlySet<number>, crops: this.farm.crops.size };
+  }
+
   /** せり上がっている途中の区画があるか */
   isRising() { return this.rising.some((r) => r.t < 1); }
   /** 開いた区画がせり上がりきった時に呼ぶ（main が動物などを足す。せり上がる途中だと宙に浮いて見えるため） */
@@ -279,6 +293,7 @@ export class GameController {
     const w = this.world!;
     // 開いていない区画は変えない。作り直している間も変えない
     if (this.locked || !canSetCol(w.plots, x, z)) return;
+    this.onEnvChanged?.();
     const i = this.idx(x, y, z);
     if (w.voxels[i] === t) return;
     w.voxels[i] = t;
@@ -290,7 +305,8 @@ export class GameController {
     const col = x + z * w.size;
     w.heights[col] = h;
     const top = h > 0 ? w.voxels[this.idx(x, h - 1, z)] : AIR;
-    w.walkable[col] = (top === GRASS || top === SAND || top === DIRT || isFarm(top)) && !this.treeCols.has(col) ? 1 : 0;
+    // 水面より下の列（湖や川の底）は歩けない
+    w.walkable[col] = (top === GRASS || top === SAND || top === DIRT || isFarm(top)) && !this.treeCols.has(col) && h >= w.waterLevel ? 1 : 0;
     this.typeTex!.needsUpdate = true;
     this.irrigatedCache.clear();
     // このチャンクと、縁なら隣のチャンクも作り直す
@@ -528,6 +544,7 @@ export class GameController {
   }
 
   private rebuildCrops() {
+    this.onEnvChanged?.();
     const w = this.world!;
     const half = w.size / 2;
     for (const m of this.cropMeshes) { this.deps.diorama.remove(m); m.dispose(); }
@@ -557,6 +574,7 @@ export class GameController {
 
   /** 植えた木：苗木 → 小さな木 → 大きな木 */
   private rebuildGrowing() {
+    this.onEnvChanged?.();
     const w = this.world!;
     const half = w.size / 2;
     for (const m of this.growingMeshes) { this.deps.diorama.remove(m); m.dispose(); }
