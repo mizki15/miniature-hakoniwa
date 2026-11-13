@@ -244,6 +244,8 @@ async function main() {
         const hasVoxelFlowers = models.some((d) => d.kind === 'flower');
         game.load(w, chunks, models, placements, flowerStyle === 'lowpoly' || !hasVoxelFlowers ? lowPolyFlowers : null, typeTex, terrainMat);
         game.onPlotsChanged = () => applyBounds(false);
+        // ほかの区画がまだせり上がっている時は、全部そろってから足す（途中の区画に置くと浮いて見える）
+        game.onPlotRisen = () => { if (!game.isRising()) fillCreatures(false); };
         game.gen = res.gen;
         game.locked = false;
 
@@ -268,6 +270,20 @@ async function main() {
   let bounds = boundsOf(1 << START_PLOT);
   /** 開いた範囲の大きさ（縦横の大きい方） */
   let extent = 64;
+  /** 動物は開いた面積に応じて（最大 24 匹）。区画を開いた時は今いる動物を残して足す */
+  const fillCreatures = (first: boolean) => {
+    const w = world!;
+    const want = Math.min(24, Math.max(4, Math.round(Math.sqrt(countOpen(w.plots) * 4096) / 10)));
+    if (first) { for (const a of animals) a.object.removeFromParent(); animals = []; }
+    if (animals.length < want) {
+      const add = spawnAnimals(w, want - animals.length, animals.length);
+      for (const a of add) diorama.add(a.object);
+      animals = [...animals, ...add];
+    }
+    refreshDex();
+    fireflies.setWorld(w);
+  };
+
   const applyBounds = (first: boolean) => {
     const w = world!;
     bounds = boundsOf(w.plots);
@@ -287,17 +303,8 @@ async function main() {
     precip.snow.position.set(cx, 0, cz);
     scene.add(precip.rain, precip.snow);
 
-    // 動物は開いた面積に応じて（最大 24 匹）。区画を開いた時は今いる動物を残して足す
-    const want = Math.min(24, Math.max(4, Math.round(Math.sqrt(countOpen(w.plots) * 4096) / 10)));
-    if (first) { for (const a of animals) a.object.removeFromParent(); animals = []; }
-    if (animals.length < want) {
-      const add = spawnAnimals(w, want - animals.length, animals.length);
-      for (const a of add) diorama.add(a.object);
-      animals = [...animals, ...add];
-    }
-    refreshDex();
-
-    fireflies.setWorld(w);
+    // 動物・ホタルは、区画を開いた時はせり上がりきってから足す（onPlotRisen）
+    if (first) fillCreatures(true);
     let maxH = 0; for (let i = 0; i < w.heights.length; i++) maxH = Math.max(maxH, w.heights[i]);
     birds.setWorld({ cx, cz, extent }, maxH);
     refreshGhosts();
@@ -494,15 +501,17 @@ async function main() {
     raycaster.setFromCamera(mouse, camera);
     return game.pick(raycaster.ray.origin, raycaster.ray.direction);
   };
-  /** マウスの先にある「開ける区画の枠」（地形の方が手前なら -1） */
+  /**
+   * マウスの先にある「開ける区画の枠」（地形の方が手前なら -1）と、地形の当たり。
+   * 地形の当たりはカーソルにも使うので、1 回だけ求めて返す
+   */
   const ghostAtMouse = () => {
-    if (mode !== 'edit' || !world) return -1;
-    raycaster.setFromCamera(mouse, camera);
+    const hit = pickAtMouse();
+    if (mode !== 'edit' || !world) return { plot: -1, hit };
     const plot = ghosts.pick(raycaster.ray);
-    if (plot < 0) return -1;
-    const hit = game.pick(raycaster.ray.origin, raycaster.ray.direction);
     // 開いた区画の地形に当たっているなら、そちらを優先する
-    return hit && plotOfCol(hit.x, hit.z) !== plot && isOpen(world.plots, plotOfCol(hit.x, hit.z)) ? -1 : plot;
+    const terrainFirst = hit && plotOfCol(hit.x, hit.z) !== plot && isOpen(world.plots, plotOfCol(hit.x, hit.z));
+    return { plot: plot < 0 || terrainFirst ? -1 : plot, hit };
   };
 
   // エディタ：左ドラッグでなぞった所にまとめて道具を使う（同じ列は 1 回だけ）
@@ -530,7 +539,7 @@ async function main() {
     downAt = { x: e.clientX, y: e.clientY };
     if (mode === 'edit' && e.button === 0 && world) {
       setMouse(e.clientX, e.clientY);
-      const plot = ghostAtMouse();
+      const { plot } = ghostAtMouse();
       if (plot >= 0) {
         const r = openPlot(plot);
         if (typeof r === 'string') { if (r) toast(r); }
@@ -884,8 +893,9 @@ async function main() {
   });
   $('openAll').addEventListener('click', async () => {
     if (!world || opening) return;
-    // 残りの区画を 1 つずつ開く（権利が足りなければ足す）
-    for (let next = openable(world.plots); next.length; next = openable(world.plots)) {
+    // 残りの区画を 1 つずつ開く（権利が足りなければ足す）。途中で箱庭が作り直されたら止める
+    const startGen = gen;
+    for (let next = openable(world.plots); next.length && gen === startGen; next = openable(world.plots)) {
       if (rights() === 0) progress.points += 3;
       const r = openPlot(next[0]);
       if (typeof r === 'string') break;
@@ -1141,13 +1151,13 @@ async function main() {
     game.tick(dt, lastEnv);
     // ドラッグ中もカーソル（白い枠）をマウスに追従させる。ドラッグ中は使った直後のマスが赤くならないよう白のまま
     if (mode === 'edit' && mouseInside) {
-      const gp = stroke ? -1 : ghostAtMouse();
+      const { plot: gp, hit } = stroke ? { plot: -1, hit: pickAtMouse() } : ghostAtMouse();
       ghosts.setHover(gp);
       if (gp >= 0) {
         game.cursor.visible = false;
         hintEl.textContent = rights() > 0 ? 'クリックでこの土地を開く（権利 1）' : '土地の権利が足りません';
       } else {
-        const msg = game.updateCursor(pickAtMouse(), !!stroke);
+        const msg = game.updateCursor(hit, !!stroke);
         if (!stroke) hintEl.textContent = msg || TOOLS.find((x) => x.id === game.tool)!.help;
       }
     }

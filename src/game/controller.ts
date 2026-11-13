@@ -126,7 +126,7 @@ export class GameController {
     }
     this.flowerShared = !!lowPolyFlowers;
     if (lowPolyFlowers) this.flowerGeos = lowPolyFlowers;
-    for (const p of placements) this.addDecor(p);
+    for (const p of placements) { this.addTreeCols(p); this.addDecor(p); }
     this.deps.diorama.add(this.cursor);
   }
 
@@ -134,11 +134,15 @@ export class GameController {
    * 区画の木・花を足す。InstancedMesh は種類ごとに 1 つ（全部の区画をまとめる）。
    * 区画ごとに分けると画面外を描かずに済むが、描画命令が増えてかえって重くなったため（16 区画で 144 → 9）。
    */
-  private addDecor(p: PlotPlacements) {
+  /** 木の根元の列を覚える（耕す・掘るの判定、歩けるか）。見た目より先に、区画を開いた時点ですぐ効かせる */
+  private addTreeCols(p: PlotPlacements) {
     const w = this.world!;
+    for (const pl of p.trees) for (let i = 0; i < pl.length; i += 5) this.treeCols.add(Math.floor(pl[i]) + Math.floor(pl[i + 2]) * w.size);
+  }
+
+  private addDecor(p: PlotPlacements) {
     const add = (kind: 'tree' | 'flower', v: number, pl: Float32Array, geo: THREE.BufferGeometry | undefined, mat: THREE.Material, shared: boolean) => {
       if (!geo) return;
-      if (kind === 'tree') for (let i = 0; i < pl.length; i += 5) this.treeCols.add(Math.floor(pl[i]) + Math.floor(pl[i + 2]) * w.size);
       let d = this.decor.find((x) => x.kind === kind && x.variant === v);
       if (!d) { d = { kind, variant: v, geo, mat, placements: new Float32Array(0), mesh: null, shared }; this.decor.push(d); }
       if (pl.length === 0 && d.mesh) return;
@@ -175,13 +179,18 @@ export class GameController {
       if (isNew) risers.push(m.terrain, m.water);
     }
     for (const o of risers) o.position.y = -RISE_DEPTH;
+    this.addTreeCols(r.placements);
     // 木と花は、地面がせり上がりきってから置く（全部の区画で 1 つの InstancedMesh なので一緒には動かせない）
-    this.rising.push({ objs: risers, t: 0, done: () => this.addDecor(r.placements) });
+    this.rising.push({ objs: risers, t: 0, done: () => { this.addDecor(r.placements); this.onPlotRisen?.(); } });
     this.onPlotsChanged?.();
   }
 
   /** 区画が増えた時に呼ぶ（main が台座・カメラの範囲などを直す） */
   onPlotsChanged: (() => void) | null = null;
+  /** せり上がっている途中の区画があるか */
+  isRising() { return this.rising.some((r) => r.t < 1); }
+  /** 開いた区画がせり上がりきった時に呼ぶ（main が動物などを足す。せり上がる途中だと宙に浮いて見えるため） */
+  onPlotRisen: (() => void) | null = null;
 
   /** まだワーカーに送っていない編集の差分（[番号, 種類, ...]）。取り出すと空になる */
   pendingDelta(): number[] {
@@ -199,6 +208,8 @@ export class GameController {
     if (old) {
       for (const m of [old.terrain, old.water]) { this.deps.diorama.remove(m); m.geometry.dispose(); }
     }
+    // せり上がっている途中のチャンクを作り直した時は、高さを引き継いで一緒にせり上げ続ける
+    const y = old ? old.terrain.position.y : 0;
     const terrain = new THREE.Mesh(toGeometry(c.terrain), this.terrainMat!);
     terrain.castShadow = terrain.receiveShadow = true;
     terrain.position.set(-half, 0, -half);
@@ -206,6 +217,10 @@ export class GameController {
     const water = new THREE.Mesh(toGeometry(c.water), this.deps.waterMat);
     water.position.set(-half, 0, -half);
     water.renderOrder = 1;
+    terrain.position.y = water.position.y = y;
+    if (old && y !== 0) {
+      for (const r of this.rising) r.objs = r.objs.map((o) => (o === old.terrain ? terrain : o === old.water ? water : o));
+    }
     this.deps.diorama.add(terrain, water);
     const m = { terrain, water };
     this.chunks.set(key, m);
@@ -295,12 +310,10 @@ export class GameController {
   /** 作り直しが必要なチャンクをワーカーに頼む（1 度に 1 回ずつ） */
   flushRemesh() {
     if (this.locked || this.remeshInFlight || this.dirty.size === 0 || !this.world) return;
-    const w = this.world;
     const chunks = [...this.dirty].map((k) => k.split(',').map(Number) as [number, number]);
     this.dirty.clear();
     this.remeshInFlight = true;
     // ボクセル全体は送らず、前回からの差分だけを送る（ワーカーも同じ世界を持っている）
-    void w;
     this.deps.worker.postMessage({ type: 'remesh', gen: this.gen, id: ++this.remeshId, delta: this.pendingDelta(), chunks });
   }
 
