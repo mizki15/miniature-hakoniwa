@@ -3,6 +3,8 @@ import type { WorldData } from '../world/terrain';
 import type { VisitorDef } from '../eco/species';
 import { mergeModel } from './animals';
 
+export interface TreeShape { ground: number; top: number; radius: number; trunk: number }
+
 /**
  * 訪問者（しばらく滞在して去る生き物）の見た目と動き。
  * モデルは基本形状の組み合わせの仮のもの。部品は mergeModel で 1 つのメッシュにまとめる（描画命令を増やさない）。
@@ -32,10 +34,12 @@ function buildVisitorModel(id: VisitorDef['id']): THREE.Group | null {
     case 'sparrow': return bird(0x8a5a36, 0x6b4428, 0x3a2a1a, 0.9);
     case 'frog': g.add(ball(0.13, 0x6aa84f, 0, 0.08, 0, 0.7), ball(0.04, 0xf4f4e8, 0.06, 0.17, 0.08), ball(0.04, 0xf4f4e8, -0.06, 0.17, 0.08), box(0.08, 0.04, 0.12, 0x5a9440, 0.1, 0.02, -0.04), box(0.08, 0.04, 0.12, 0x5a9440, -0.1, 0.02, -0.04)); break;
     case 'fish': {
-      const m = new THREE.Mesh(new THREE.CircleGeometry(0.35, 10), new THREE.MeshBasicMaterial({ color: 0x0b1a26, transparent: true, opacity: 0.45, depthWrite: false }));
+      const m = new THREE.Mesh(new THREE.CircleGeometry(0.35, 10), new THREE.MeshBasicMaterial({ color: 0x0b1a26, transparent: true, opacity: 0.5, depthWrite: false }));
       m.rotation.x = -Math.PI / 2; m.scale.set(0.55, 1, 1);
       const tail = new THREE.Mesh(new THREE.CircleGeometry(0.14, 3), m.material);
       tail.rotation.x = -Math.PI / 2; tail.position.z = -0.38;
+      // 水面（renderOrder 1）の後で描く。水の下に置くと、深い水の色に隠れてほとんど見えない
+      m.renderOrder = tail.renderOrder = 2;
       g.add(m, tail);
       return g; // 半透明の影なのでまとめない
     }
@@ -58,13 +62,17 @@ export class Visitor {
   private hopT = 0;
   private heading = 0;
 
-  /** home：現れる場所の列（x + z*size）。second：ミツバチが行き来するもう 1 つの列 */
-  constructor(readonly def: VisitorDef, private world: WorldData, readonly home: number, public leavesAt: number, second?: number) {
+  /** とまる木の形（キツツキ・シマエナガ・フクロウ） */
+  private tree: TreeShape;
+
+  /** home：現れる場所の列（x + z*size）。second：ミツバチが行き来するもう 1 つの列。tree：とまる木の形 */
+  constructor(readonly def: VisitorDef, private world: WorldData, readonly home: number, public leavesAt: number, second?: number, tree?: TreeShape | null) {
     const N = world.size;
     this.hx = (home % N) + 0.5; this.hz = Math.floor(home / N) + 0.5;
     this.ground = world.heights[home];
     this.px = this.tx = this.hx; this.pz = this.tz = this.hz;
     if (second !== undefined) { this.tx = (second % N) + 0.5; this.tz = Math.floor(second / N) + 0.5; }
+    this.tree = tree ?? { ground: this.ground, top: this.ground + 7, radius: 2.4, trunk: 0.65 };
     const model = buildVisitorModel(def.id);
     if (model) this.object.add(def.id === 'fish' ? model : mergeModel(model));
     this.object.scale.setScalar(def.motion === 'perch' || def.id === 'kingfisher' || def.id === 'sparrow' ? 1.6 : 1.4);
@@ -131,11 +139,12 @@ export class Visitor {
         break;
       }
       case 'perch': {
-        // 木の幹（キツツキ）・枝（シマエナガ）・木の上（フクロウ）
-        const off = this.def.id === 'woodpecker' ? 0.32 : this.def.id === 'longtailedTit' ? 1.4 : 0;
-        const up = this.def.id === 'woodpecker' ? 0.9 + Math.floor(t / 4) % 2 * 0.3 : this.def.id === 'longtailedTit' ? 2.2 : 3.8;
+        // 木の形に合わせてとまる：キツツキは幹の外側（葉より下）、シマエナガは葉の外側の縁、フクロウはてっぺん
+        const tr = this.tree, h = tr.top - tr.ground;
+        const off = this.def.id === 'woodpecker' ? tr.trunk + 0.12 : this.def.id === 'longtailedTit' ? tr.radius + 0.1 : 0;
+        const up = this.def.id === 'woodpecker' ? h * 0.18 + Math.floor(t / 4) % 2 * 0.25 : this.def.id === 'longtailedTit' ? h * 0.45 : h + 0.05;
         x = this.hx + off; z = this.hz;
-        y = this.ground + up;
+        y = tr.ground + up;
         if (this.def.id === 'woodpecker') x -= Math.max(0, Math.sin(t * 18)) * 0.04; // こつこつ
         break;
       }
@@ -144,7 +153,7 @@ export class Visitor {
         z = this.hz + Math.cos(t * 0.21) * 2.2;
         // 深い水からはみ出す時は戻る
         if (this.groundAt(x, z) > wl - 2) { x = this.px; z = this.pz; }
-        y = wl - 0.55;
+        y = wl - 0.13; // 水面（水面の高さ − 0.15）のすぐ上に影を落とす
         break;
       }
       case 'glow': return;
@@ -158,6 +167,7 @@ export class Visitor {
 
   dispose() {
     this.object.removeFromParent();
-    this.object.traverse((o) => { const m = o as THREE.Mesh; if (m.geometry) m.geometry.dispose(); });
+    // デバッグの目印（共有の形）は捨てない
+    this.object.traverse((o) => { const m = o as THREE.Mesh; if (m.geometry && !o.parent?.userData.marker) m.geometry.dispose(); });
   }
 }

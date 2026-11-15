@@ -18,6 +18,8 @@ const OVERCAST = C(0x9aa3ad);
 export interface Daylight {
   sun: THREE.DirectionalLight;
   hemi: THREE.HemisphereLight;
+  /** 夜の明るさの倍率（1 が標準。月の光と空からの光に、夜の度合いに応じて掛ける） */
+  nightBrightness: number;
   /** 時刻（0..24）と天気を反映する */
   apply(hour: number, focus: THREE.Vector3, radius: number, weather: WeatherParams): void;
 }
@@ -46,6 +48,7 @@ export function createDaylight(scene: THREE.Scene): Daylight {
 
   return {
     sun, hemi,
+    nightBrightness: 1,
     apply(hour, focus, radius, weather) {
       // 6 時に日の出、18 時に日の入り
       const elev = Math.sin(((hour - 6) / 12) * Math.PI);
@@ -64,7 +67,9 @@ export function createDaylight(scene: THREE.Scene): Daylight {
       sun.target.position.copy(focus);
       mixSet(sun.color, 'light', day, dusk);
       const base = isDay ? 0.4 + 2.4 * smooth(-0.05, 0.35, elev) : 0.55;
-      sun.intensity = base * (isDay ? weather.sun : 0.6 + 0.4 * (1 - weather.cloudCover));
+      // 夜の明るさ：昼は 1、夜になるほど nightBrightness に近づく
+      const nightK = 1 + (this.nightBrightness - 1) * (1 - day);
+      sun.intensity = base * (isDay ? weather.sun : 0.6 + 0.4 * (1 - weather.cloudCover)) * nightK;
 
       const cam = sun.shadow.camera;
       cam.left = -radius; cam.right = radius; cam.top = radius; cam.bottom = -radius;
@@ -74,7 +79,7 @@ export function createDaylight(scene: THREE.Scene): Daylight {
       mixSet(hemi.color, 'hemiSky', day, dusk);
       mixSet(hemi.groundColor, 'hemiGround', day, dusk);
       // 曇りの日は日差しが弱いぶん、空からの光を少し増やす
-      hemi.intensity = (0.45 + 0.7 * day) * (1 + overcast * 0.35);
+      hemi.intensity = (0.45 + 0.7 * day) * (1 + overcast * 0.35) * nightK;
 
       // 空の色（曇り・雨は灰色がかる）
       mixSet(SKY.zenith.value, 'top', day, dusk).lerp(OVERCAST, overcast * 0.8);

@@ -113,10 +113,15 @@
             <span id="focusSpeedLabel"></span>
           </div>
           <div class="row">
+            <label title="夜の月明かりと空からの光の強さ（昼は変わらない）">夜の明るさ <input type="range" id="nightBright" min="0.3" max="3" step="0.1" value="1" /></label>
+            <span id="nightBrightLabel"></span>
+          </div>
+          <div class="row">
             <button id="rightPlus" title="土地の権利を 1 つ増やす（発見ポイント +3。テスト用）">🔑 権利 +1</button>
             <button id="openAll" title="残りの区画をすべて開く（テスト用）">全区画を開く</button>
             <button id="ecoCall" title="来るかどうかの判定を、確率 1 で 1 回行う（テスト用）">🐾 生き物を呼ぶ</button>
             <button id="ecoClear" title="訪問者をみんな帰す（テスト用）">訪問者を帰す</button>
+            <label title="住人（黄色）と訪問者（水色）に、地形を透かして見える目印を付ける"><input type="checkbox" id="ecoHighlight" /> 生き物を透かして表示</label>
             <label>小物
               <select id="detail" title="木や花のボクセルの細かさ（地面に対する比）">
                 <option value="1">1/1</option>

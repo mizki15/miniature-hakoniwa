@@ -201,6 +201,31 @@ export class GameController {
     return { flowerCols, treeCols: this.treeCols as ReadonlySet<number>, farmland: this.farmland as ReadonlySet<number>, crops: this.farm.crops.size };
   }
 
+  /**
+   * その列に立っている木の形（鳥がとまる位置に使う）。ground：根元の高さ、top：てっぺん、radius：葉の広がり、trunk：幹の太さ（半径）。
+   * 木が無い・まだ小さい苗木なら null
+   */
+  treeShape(col: number): { ground: number; top: number; radius: number; trunk: number } | null {
+    const N = this.world!.size;
+    const shape = (variant: number, ground: number, s: number) => {
+      const geo = this.treeGeos[variant];
+      if (!geo) return null;
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      const b = geo.boundingBox!;
+      return { ground, top: ground + b.max.y * s, radius: b.max.x * s, trunk: 0.65 * s };
+    };
+    for (const d of this.decor) {
+      if (d.kind !== 'tree') continue;
+      for (let i = 0; i < d.placements.length; i += 5) {
+        if (Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * N === col) return shape(d.variant, d.placements[i + 1], d.placements[i + 4]);
+      }
+    }
+    // 植えて育った木（半分以上育ったものだけ）
+    const sp = this.farm.saplings.find((x) => x.col === col);
+    if (sp && sp.progress >= 0.6) return shape(sp.variant, this.world!.heights[col], 0.25 + 0.75 * ((sp.progress - 0.25) / 0.75));
+    return null;
+  }
+
   /** せり上がっている途中の区画があるか */
   isRising() { return this.rising.some((r) => r.t < 1); }
   /** 開いた区画がせり上がりきった時に呼ぶ（main が動物などを足す。せり上がる途中だと宙に浮いて見えるため） */

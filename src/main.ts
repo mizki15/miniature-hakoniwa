@@ -153,7 +153,7 @@ async function main() {
   const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat });
   // 生き物（住人・訪問者・図鑑・来るかどうかの判定）
   const eco = new EcoManager({
-    diorama, envInput: () => game.envInput(), toast: (m, ms) => toast(m, ms), fireflies,
+    diorama, envInput: () => game.envInput(), toast: (m, ms) => toast(m, ms), fireflies, treeShape: (c) => game.treeShape(c),
     onChanged: () => { game.unsaved = true; refreshDex(); },
   });
   game.onEnvChanged = () => eco.envDirty();
@@ -476,10 +476,21 @@ async function main() {
   // パネルの外（すりガラスの部分）を押しても閉じる
   menuEl.addEventListener('pointerdown', (e) => { if (e.target === menuEl) setMenu(false); });
 
+  /** 押している移動キー（WASD・Space・Shift）。e.code で見るので、日本語入力中でも効く */
+  const moveKeys = new Set<string>();
+  const MOVE_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight'];
+  window.addEventListener('keyup', (e) => moveKeys.delete(e.code));
+  window.addEventListener('blur', () => moveKeys.clear());
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { setMenu(!menuOpen()); return; }
     if (menuOpen()) return; // メニューを開いている間は他のキーを受け付けない
-    if ((e.target as HTMLElement).closest?.('input, select, textarea')) return;
+    if ((e.target as HTMLElement).closest?.('input[type="text"], input[type="number"], textarea, select')) return;
+    if (MOVE_CODES.includes(e.code)) {
+      moveKeys.add(e.code);
+      // Space でボタンが押されたり、ページが動いたりしないように
+      if (e.code === 'Space') e.preventDefault();
+      return;
+    }
     const k = e.key.toLowerCase();
     if (k === 'v') setMode('view');
     else if (k === 'e') setMode('edit');
@@ -718,7 +729,10 @@ async function main() {
     const t = targetAtMouse();
     pinned = t && !sameTarget(t, pinned) ? t : null;
   });
-  renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+  // ブラウザの右クリックメニューは出さない（文字を入力する欄だけは、貼り付けなどに使えるよう残す）
+  document.addEventListener('contextmenu', (e) => {
+    if (!(e.target as HTMLElement).closest?.('input[type="text"], input[type="number"], textarea')) e.preventDefault();
+  });
 
   // 図鑑
   const refreshDex = () => renderDex($('dexGrid'), $('dexDetail'), eco.dex, eco.animals, eco.visitors);
@@ -878,6 +892,17 @@ async function main() {
   const showFocusSpeed = () => { $('focusSpeedLabel').textContent = `${focusSpeed().toFixed(1)}（約 ${(2.3 / focusSpeed()).toFixed(1)} 秒）`; };
   focusSpeedInput.addEventListener('input', showFocusSpeed);
   showFocusSpeed();
+  // 夜の明るさ（この端末に覚えておく）
+  const nightInput = $<HTMLInputElement>('nightBright');
+  const NIGHT_KEY = 'hakoniwa.nightBrightness';
+  const storedNight = parseFloat(localStorage.getItem(NIGHT_KEY) ?? '');
+  if (storedNight >= 0.3 && storedNight <= 3) nightInput.value = String(storedNight);
+  const applyNight = () => {
+    daylight.nightBrightness = parseFloat(nightInput.value);
+    $('nightBrightLabel').textContent = `× ${daylight.nightBrightness.toFixed(1)}`;
+  };
+  nightInput.addEventListener('input', () => { applyNight(); localStorage.setItem(NIGHT_KEY, nightInput.value); });
+  applyNight();
   const autoBtn = $('auto');
   autoBtn.addEventListener('click', () => {
     controls.autoRotate = !controls.autoRotate;
@@ -979,6 +1004,7 @@ async function main() {
     toast(r.arrived || r.movedIn ? parts.join('・') : `いまの環境・時刻では、誰も来ませんでした${r.left ? `（${r.left} 匹が帰りました）` : ''}`);
   });
   $('ecoClear').addEventListener('click', () => { eco.clearVisitors(); toast('訪問者が帰りました'); });
+  $<HTMLInputElement>('ecoHighlight').addEventListener('change', (e) => eco.setHighlight((e.target as HTMLInputElement).checked));
   $('openAll').addEventListener('click', async () => {
     if (!world || opening) return;
     // 残りの区画を 1 つずつ開く（権利が足りなければ足す）。途中で箱庭が作り直されたら止める
@@ -1177,6 +1203,33 @@ async function main() {
       spherical.theta = snapFrom + (snapTo - snapFrom) * e;
       offset.setFromSpherical(spherical);
       camera.position.copy(controls.target).add(offset);
+    }
+    // WASD：見ている向きに沿って水平に移動、Space：上へ、Shift：下へ。速さは注視点までの距離に比例
+    if (moveKeys.size && !menuOpen()) {
+      const fwd = new THREE.Vector3();
+      camera.getWorldDirection(fwd);
+      fwd.y = 0;
+      if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
+      fwd.normalize();
+      const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+      const has = (c: string) => moveKeys.has(c);
+      const mv = new THREE.Vector3()
+        .addScaledVector(fwd, (has('KeyW') ? 1 : 0) - (has('KeyS') ? 1 : 0))
+        .addScaledVector(right, (has('KeyD') ? 1 : 0) - (has('KeyA') ? 1 : 0));
+      if (mv.lengthSq() > 0) mv.normalize();
+      mv.y = (has('Space') ? 1 : 0) - (has('ShiftLeft') || has('ShiftRight') ? 1 : 0);
+      const speed = Math.max(6, camera.position.distanceTo(controls.target) * 0.9);
+      mv.multiplyScalar(speed * dt);
+      // 注視点が箱庭から離れすぎないように
+      const lim = extent / 2 + 24;
+      const cx = bounds.cx - FRAME / 2, cz = bounds.cz - FRAME / 2;
+      const t = controls.target.clone().add(mv);
+      t.x = Math.min(cx + lim, Math.max(cx - lim, t.x));
+      t.z = Math.min(cz + lim, Math.max(cz - lim, t.z));
+      t.y = Math.min(90, Math.max(0, t.y));
+      const d = t.sub(controls.target);
+      controls.target.add(d);
+      camera.position.add(d);
     }
     controls.update(dt);
     // 地面の下にカメラが潜らないようにする（見上げる時）

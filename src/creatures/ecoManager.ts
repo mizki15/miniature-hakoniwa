@@ -8,7 +8,7 @@ import { VISITOR, type DexId, type Moment, type VisitorId } from '../eco/species
 import { markSeen, observe, type Dex } from '../eco/dexState';
 import { SPECIES, NAMES, makeResident, type Animal, type Species } from './animals';
 import { pickName, placeResident, restorePlace } from './place';
-import { Visitor } from './visitors';
+import { Visitor, type TreeShape } from './visitors';
 import type { Fireflies } from './fireflies';
 
 export interface EcoDeps {
@@ -17,6 +17,8 @@ export interface EcoDeps {
   envInput: () => Omit<EnvInput, 'world'>;
   toast: (msg: string, ms?: number) => void;
   fireflies: Fireflies;
+  /** その列の木の形（鳥がとまる位置）。木が無い・小さい苗木なら null */
+  treeShape: (col: number) => TreeShape | null;
   /** 住人・訪問者が増えた・減った・図鑑が変わった時 */
   onChanged: () => void;
 }
@@ -25,6 +27,49 @@ export interface EcoDeps {
  * 生き物のまとめ役：住人（保存する）と訪問者（保存しない）、図鑑、来るかどうかの判定。
  * 判定の中身は eco/ の純粋な関数。ここは置く・消す・時刻の管理だけをする。
  */
+/**
+ * デバッグ用の目印：地形や木を透かして見える丸い印（画面上でいつも同じ大きさ）と、上に伸びる柱。
+ * 住人は黄色、訪問者は水色。形と材質は全員で共有する
+ */
+function ringTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d')!;
+  g.fillStyle = 'rgba(255,255,255,0.35)';
+  g.beginPath(); g.arc(32, 32, 26, 0, Math.PI * 2); g.fill();
+  g.lineWidth = 7; g.strokeStyle = '#fff';
+  g.beginPath(); g.arc(32, 32, 26, 0, Math.PI * 2); g.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+let ringTex: THREE.CanvasTexture | null = null;
+const markerBeam = new THREE.CylinderGeometry(0.06, 0.06, 12, 6).translate(0, 6.5, 0);
+const markerMats: Partial<Record<'resident' | 'visitor', [THREE.SpriteMaterial, THREE.MeshBasicMaterial]>> = {};
+function matsOf(kind: 'resident' | 'visitor') {
+  if (!markerMats[kind]) {
+    ringTex ??= ringTexture();
+    const color = kind === 'resident' ? 0xffd84a : 0x5fe3ff;
+    markerMats[kind] = [
+      new THREE.SpriteMaterial({ map: ringTex, color, sizeAttenuation: false, depthTest: false, depthWrite: false, transparent: true }),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, depthTest: false, depthWrite: false }),
+    ];
+  }
+  return markerMats[kind]!;
+}
+function makeMarker(kind: 'resident' | 'visitor', parentScale: number): THREE.Group {
+  const g = new THREE.Group();
+  const [ringMat, beamMat] = matsOf(kind);
+  const ring = new THREE.Sprite(ringMat), beam = new THREE.Mesh(markerBeam, beamMat);
+  ring.scale.set(0.045, 0.045, 1); // 画面の高さに対する大きさ（遠くても同じ）
+  ring.position.y = 0.3;
+  ring.renderOrder = beam.renderOrder = 999; // 何よりも後に、透かして描く
+  g.add(ring, beam);
+  g.scale.setScalar(1 / parentScale); // 生き物の大きさによらず同じ大きさに
+  g.userData.marker = true;
+  return g;
+}
+
 export class EcoManager {
   animals: Animal[] = [];
   dex: Dex = {};
@@ -36,8 +81,23 @@ export class EcoManager {
   private lastCheckSim = 0;
   private lastCheckReal = -Infinity;
   private nextId = 0;
+  /** デバッグ：全部の生き物に、透かして見える目印を付ける */
+  private highlight = false;
 
   constructor(private deps: EcoDeps) {}
+
+  /** 目印を付ける・外す（デバッグ「生き物を透かして表示」） */
+  setHighlight(on: boolean) {
+    this.highlight = on;
+    for (const a of this.animals) this.mark(a.object, 'resident');
+    for (const v of this.visitors) this.mark(v.object, 'visitor');
+  }
+
+  private mark(o: THREE.Object3D, kind: 'resident' | 'visitor') {
+    const old = o.children.find((c) => c.userData.marker);
+    if (old && !this.highlight) o.remove(old);
+    if (!old && this.highlight) o.add(makeMarker(kind, o.scale.x));
+  }
 
   /** 箱庭を作った時：生き物を全部片付ける（住人・図鑑は restore で入れる） */
   reset(world: WorldData, simMs: number) {
@@ -93,6 +153,7 @@ export class EcoManager {
     const a = makeResident(this.world!, sp, at[0], at[1], this.nextId++, name ?? pickName(NAMES, used));
     this.animals.push(a);
     this.deps.diorama.add(a.object);
+    this.mark(a.object, 'resident');
     return a;
   }
 
@@ -140,7 +201,8 @@ export class EcoManager {
     if (!this.world || this.visitors.some((v) => v.def.id === id)) return false;
     const def = VISITOR[id];
     const input = { world: this.world, ...this.deps.envInput() };
-    const cols = habitatCols(input, def.habitat);
+    // とまる鳥は、育った木だけ（小さい苗木にはとまらない）
+    const cols = def.motion === 'perch' ? habitatCols(input, def.habitat).filter((c) => this.deps.treeShape(c)) : habitatCols(input, def.habitat);
     if (cols.length === 0) return false;
     const pick = (a: number[]) => a[Math.floor(Math.random() * a.length)];
     let second: number | undefined;
@@ -150,9 +212,11 @@ export class EcoManager {
       const flowers = habitatCols(input, 'flower'), farm = habitatCols(input, 'farm');
       if (flowers.length && farm.length) { home = pick(flowers); second = pick(farm); }
     }
-    const v = new Visitor(def, this.world, home, leavesAt, second);
+    const v = new Visitor(def, this.world, home, leavesAt, second, def.motion === 'perch' ? this.deps.treeShape(home) : null);
     this.visitors.push(v);
     this.deps.diorama.add(v.object);
+    // ホタルは見た目を持たない（光そのものが目印）
+    if (def.motion !== 'glow') this.mark(v.object, 'visitor');
     if (id === 'firefly') this.deps.fireflies.setPresent(true);
     if (markSeen(this.dex, id, Date.now())) this.deps.toast('何かの気配がする…');
     return true;
