@@ -98,10 +98,11 @@ describe('parseBuilding: checks', () => {
 });
 
 // ---------- 形の変換（Task 3） ----------
-import { readFileSync } from 'node:fs';
+import asymmetricJson from './fixtures/asymmetric.geo.json?raw';
+import rotatedJson from './fixtures/rotated.geo.json?raw';
+import rotatedExpected from './fixtures/rotated.expected.json';
 import { transformCubes, resolveBones as resolve } from './geoParse';
 
-const fixture = (f: string) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
 /** 行列 m で単位立方体の 8 隅を写す */
 const cornersOf = (m: number[]) => {
   const out: [number, number, number][] = [];
@@ -110,7 +111,7 @@ const cornersOf = (m: number[]) => {
   }
   return out;
 };
-const center = (m: number[]) => cornersOf(m).reduce((a, p) => a.map((v, i) => v + p[i] / 8), [0, 0, 0]);
+const center = (m: number[]) => cornersOf(m).reduce<number[]>((a, p) => a.map((v, i) => v + p[i] / 8), [0, 0, 0]);
 
 describe('parseBuilding: transforms', () => {
   it('cubeCorners', () => {
@@ -128,7 +129,7 @@ describe('parseBuilding: transforms', () => {
   });
   it('asymmetricMatchesBlockbench', () => {
     // Blockbench の画面では、扉（wood）は北（−Z）の面、煙突（brick）は東（+X）にある
-    const d = ok(parseBuilding(fixture('asymmetric.geo.json')));
+    const d = ok(parseBuilding(asymmetricJson));
     const door = d.cubes.find((c) => c.color === 'wood')!;
     const chimney = d.cubes.find((c) => c.color === 'brick')!;
     expect(center(door.m)[2]).toBeLessThan(-1);
@@ -137,9 +138,9 @@ describe('parseBuilding: transforms', () => {
   it('rotatedMatchesBlockbench', () => {
     // 底面が y = 0 にない見本なので、ずらす前の変換（Blockbench の単位）で比べる
     const issues: never[] = [];
-    const r = resolve(JSON.parse(fixture('rotated.geo.json')), issues)!;
+    const r = resolve(JSON.parse(rotatedJson), issues)!;
     const cubes = transformCubes(r.bones);
-    const expected = JSON.parse(fixture('rotated.expected.json')).cubes as [number, number, number][][];
+    const expected = rotatedExpected.cubes as [number, number, number][][];
     expect(cubes.length).toBe(2);
     cubes.forEach((c, k) => {
       const got = cornersOf(c.m);
