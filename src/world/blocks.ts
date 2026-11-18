@@ -20,7 +20,7 @@ export const isOpaque = (t: number) => t > 0 && t !== WATER;
 /** 面の種類：0=上面, 1=下面, 2=側面 */
 export type FaceKind = 0 | 1 | 2;
 
-const hex = (h: number): [number, number, number] => {
+export const hexToLinear = (h: number): [number, number, number] => {
   const c = [(h >> 16) & 255, (h >> 8) & 255, h & 255].map((v) => v / 255);
   // sRGB → リニア（three.js の頂点カラーはリニア前提）
   return c.map((v) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4))) as [number, number, number];
@@ -28,20 +28,20 @@ const hex = (h: number): [number, number, number] => {
 
 /** ブロック種別 × 面の種類（上・下・側）ごとの色 */
 const PALETTE: Record<number, [number, number, number][]> = {
-  [GRASS]: [hex(0x7cbf4a), hex(0x8b6a46), hex(0x6a9e3e)],
-  [DIRT]: [hex(0x8b6a46), hex(0x7d5f3f), hex(0x8b6a46)],
-  [STONE]: [hex(0x9298a0), hex(0x7f858c), hex(0x8a9098)],
-  [SAND]: [hex(0xe6d49c), hex(0xd8c58c), hex(0xdccb92)],
-  [WATER]: [hex(0x3a7fa0), hex(0x3a7fa0), hex(0x3a7fa0)],
-  [LOG]: [hex(0xa07a4e), hex(0xa07a4e), hex(0x6e4c2e)],
-  [LEAVES]: [hex(0x4f9a3c), hex(0x3f8030), hex(0x4a9238)],
-  [CONIFER]: [hex(0x2f6b3a), hex(0x24552e), hex(0x2c6436)],
-  [STEM]: [hex(0x4f8a34), hex(0x4f8a34), hex(0x4f8a34)],
-  [PETAL_R]: [hex(0xe0504a), hex(0xc8403c), hex(0xd84a44)],
-  [PETAL_Y]: [hex(0xf2c94c), hex(0xd9b03c), hex(0xeac046)],
-  [PETAL_W]: [hex(0xf6f2ea), hex(0xe2ddd2), hex(0xefeae0)],
-  [FARMLAND]: [hex(0x9a7448), hex(0x7d5f3f), hex(0x8b6a46)],
-  [WET_FARMLAND]: [hex(0x5e4329), hex(0x7d5f3f), hex(0x6e5136)],
+  [GRASS]: [hexToLinear(0x7cbf4a), hexToLinear(0x8b6a46), hexToLinear(0x6a9e3e)],
+  [DIRT]: [hexToLinear(0x8b6a46), hexToLinear(0x7d5f3f), hexToLinear(0x8b6a46)],
+  [STONE]: [hexToLinear(0x9298a0), hexToLinear(0x7f858c), hexToLinear(0x8a9098)],
+  [SAND]: [hexToLinear(0xe6d49c), hexToLinear(0xd8c58c), hexToLinear(0xdccb92)],
+  [WATER]: [hexToLinear(0x3a7fa0), hexToLinear(0x3a7fa0), hexToLinear(0x3a7fa0)],
+  [LOG]: [hexToLinear(0xa07a4e), hexToLinear(0xa07a4e), hexToLinear(0x6e4c2e)],
+  [LEAVES]: [hexToLinear(0x4f9a3c), hexToLinear(0x3f8030), hexToLinear(0x4a9238)],
+  [CONIFER]: [hexToLinear(0x2f6b3a), hexToLinear(0x24552e), hexToLinear(0x2c6436)],
+  [STEM]: [hexToLinear(0x4f8a34), hexToLinear(0x4f8a34), hexToLinear(0x4f8a34)],
+  [PETAL_R]: [hexToLinear(0xe0504a), hexToLinear(0xc8403c), hexToLinear(0xd84a44)],
+  [PETAL_Y]: [hexToLinear(0xf2c94c), hexToLinear(0xd9b03c), hexToLinear(0xeac046)],
+  [PETAL_W]: [hexToLinear(0xf6f2ea), hexToLinear(0xe2ddd2), hexToLinear(0xefeae0)],
+  [FARMLAND]: [hexToLinear(0x9a7448), hexToLinear(0x7d5f3f), hexToLinear(0x8b6a46)],
+  [WET_FARMLAND]: [hexToLinear(0x5e4329), hexToLinear(0x7d5f3f), hexToLinear(0x6e5136)],
 };
 
 export function faceColor(t: number, kind: FaceKind): [number, number, number] {
