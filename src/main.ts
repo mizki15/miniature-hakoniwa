@@ -926,7 +926,7 @@ async function main() {
   };
   const buildSave = (): SaveData => ({
     version: SAVE_VERSION, savedAt: Date.now(), world: worldSettings!, plots: world!.plots,
-    ...game.exportState(), progress: { ...progress }, dex: structuredClone(eco.dex), residents: eco.residentsSave(),
+    ...game.exportState(), progress: { ...progress }, dex: structuredClone(eco.dex), residents: eco.residentsSave(), buildings: { designs: [], placed: [] }, // 仮（Task 8 で game から出す）
   });
 
   // 閉じていた間の季節と天気（オフライン進行で使う）
