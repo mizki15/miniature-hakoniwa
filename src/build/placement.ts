@@ -60,6 +60,8 @@ export function canPlace(d: BuildingDesign, rot: Rot, x: number, z: number, size
     let lo = Infinity, hi = -Infinity;
     for (const c of cols) { const h = ground.height(c); lo = Math.min(lo, h); hi = Math.max(hi, h); }
     if (hi - lo > MAX_STEP) return { ok: false, msg: '地面の高さがそろっていません（坂や段差の上には置けません）' };
+    // 建物の底は原点の列の地面に置く。それより高い列が足元にあると、建物が地面にめり込む
+    if (hi > ground.height(x + z * size)) return { ok: false, msg: '地面にめり込みます（足元に高い所があります）' };
     for (const c of cols) { const why = ground.blocked(c); if (why) return { ok: false, msg: why }; }
   }
   return { ok: true };

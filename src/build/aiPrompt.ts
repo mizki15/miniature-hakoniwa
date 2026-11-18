@@ -16,9 +16,13 @@ const EXAMPLE = `{
       { "name": "stone", "pivot": [0, 0, 0], "cubes": [ { "origin": [-24, 0, -24], "size": [48, 4, 48] } ] },
       { "name": "wall",  "pivot": [0, 0, 0], "cubes": [ { "origin": [-20, 4, -20], "size": [40, 28, 40] } ] },
       { "name": "wood_door", "parent": "wall", "pivot": [0, 0, 0], "cubes": [ { "origin": [-5, 4, -21], "size": [10, 20, 1] } ] },
-      { "name": "roof", "pivot": [0, 32, 0], "cubes": [
-        { "origin": [-24, 30, -24], "size": [26, 3, 48], "pivot": [0, 32, 0], "rotation": [0, 0, -30] },
-        { "origin": [-2, 30, -24], "size": [26, 3, 48], "pivot": [0, 32, 0], "rotation": [0, 0, 30] }
+      { "name": "wall_gable", "pivot": [0, 0, 0], "cubes": [
+        { "origin": [-13, 32, -20], "size": [26, 4, 40] },
+        { "origin": [-6, 36, -20], "size": [12, 4, 40] }
+      ] },
+      { "name": "roof", "pivot": [0, 44, 0], "cubes": [
+        { "origin": [-28, 44, -24], "size": [28, 3, 48], "pivot": [0, 44, 0], "rotation": [0, 0, -30] },
+        { "origin": [0, 44, -24], "size": [28, 3, 48], "pivot": [0, 44, 0], "rotation": [0, 0, 30] }
       ] }
     ]
   }]

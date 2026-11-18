@@ -55,12 +55,26 @@ describe('placement: ground', () => {
     expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, slope)).toEqual({ ok: false, msg: '地面の高さがそろっていません（坂や段差の上には置けません）' });
   });
   it('allowsOneStep', () => {
-    const step = { height: (col: number) => ((col % FRAME) > 96 ? 11 : 10), blocked: () => null };
+    const step = { height: (col: number) => ((col % FRAME) > 96 ? 9 : 10), blocked: () => null };
     expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, step)).toEqual({ ok: true });
     expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, flat(10))).toEqual({ ok: true });
   });
   it('refusesBlockedColumns', () => {
     const tree = { height: () => 10, blocked: (col: number) => (col === 97 + 96 * FRAME ? '木があります' : null) };
     expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, tree)).toEqual({ ok: false, msg: '木があります' });
+  });
+});
+
+describe('placement: sinking', () => {
+  const house = d([-1, 0, -1], [1, 2, 1]);
+  it('refusesSinkingIntoHigherGround', () => {
+    // 建物の原点の列（96, 96）より 1 段高い列が足元にあると、建物がめり込む
+    const step = { height: (col: number) => ((col % FRAME) > 96 ? 11 : 10), blocked: () => null };
+    expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, step)).toEqual({ ok: false, msg: '地面にめり込みます（足元に高い所があります）' });
+  });
+  it('allowsLowerGroundBeside', () => {
+    // 低い列は、1 段までなら置ける（少し浮くだけ）
+    const step = { height: (col: number) => ((col % FRAME) > 96 ? 9 : 10), blocked: () => null };
+    expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, step)).toEqual({ ok: true });
   });
 });

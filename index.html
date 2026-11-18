@@ -32,6 +32,7 @@
           <div id="buildBox">
             <h3>建物</h3>
             <div id="shelf" class="seed-list"></div>
+            <button id="openViewer" type="button" class="open-viewer">🔍 棚を見る</button>
             <details id="buildImport">
               <summary>建物を読み込む</summary>
               <label class="build-label" for="buildIdea">作ってほしいもの</label>
@@ -232,6 +233,29 @@
           <div class="placeholder-note">（準備中）</div>
         </div>
       </aside>
+    </div>
+
+    <!-- 建物の棚のビューワー（エディタの「建物」欄から開く） -->
+    <div id="viewer" aria-hidden="true">
+      <div class="viewer-panel" role="dialog" aria-label="建物の棚">
+        <header class="viewer-head"><span>🏠 建物の棚</span><button id="viewerClose" type="button" title="閉じる（Esc）">×</button></header>
+        <div class="viewer-body">
+          <ul id="viewerList" class="viewer-list"></ul>
+          <div class="viewer-stage">
+            <canvas id="viewerCanvas"></canvas>
+            <div id="viewerEmpty" class="viewer-empty" hidden>まだ建物がありません。「建物を読み込む」から入れてください</div>
+            <div class="viewer-info">
+              <div id="viewerName" class="viewer-name"></div>
+              <div id="viewerStats" class="viewer-stats"></div>
+              <div class="viewer-hint">ドラッグで回す・ホイールで寄る</div>
+              <div class="viewer-actions">
+                <button id="viewerPlace" type="button" class="primary">箱庭に置く</button>
+                <button id="viewerDelete" type="button">棚から消す</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Esc メニュー（画面全体をすりガラスにして表示） -->

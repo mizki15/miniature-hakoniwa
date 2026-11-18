@@ -35,6 +35,8 @@ import { GameController, TOOLS, type Tool } from './game/controller';
 import { parseBuilding, type ParseIssue } from './build/geoParse';
 import { buildFixPrompt, buildPrompt } from './build/aiPrompt';
 import { LIMITS } from './build/limits';
+import { BuildingViewer } from './build/viewer';
+import { designStats } from './build/stats';
 import { CROPS, CROP_KINDS, type CropKind } from './game/farm';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -498,6 +500,61 @@ async function main() {
   });
   renderShelf();
 
+  // ---------- 建物の棚のビューワー（エディタの「建物」欄から開く窓） ----------
+  const viewerEl = $('viewer');
+  const viewerList = $('viewerList');
+  let viewer: BuildingViewer | null = null;
+  let viewerSel: string | null = null;
+  const viewerIsOpen = () => viewerEl.classList.contains('open');
+  const renderViewer = () => {
+    const designs = [...game.designs.values()];
+    if (!viewerSel || !game.designs.has(viewerSel)) viewerSel = game.selectedDesign && game.designs.has(game.selectedDesign) ? game.selectedDesign : designs[0]?.id ?? null;
+    viewerList.replaceChildren(...designs.map((d) => {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = `🏠 ${d.name}`;
+      b.title = d.name;
+      b.classList.toggle('on', d.id === viewerSel);
+      b.addEventListener('click', () => { viewerSel = d.id; renderViewer(); });
+      li.appendChild(b);
+      return li;
+    }));
+    const d = viewerSel ? game.designs.get(viewerSel)! : null;
+    $('viewerEmpty').hidden = !!d;
+    $('viewerName').textContent = d ? d.name : '';
+    $('viewerStats').textContent = d ? designStats(d).label : '';
+    $<HTMLButtonElement>('viewerPlace').disabled = !d;
+    $<HTMLButtonElement>('viewerDelete').disabled = !d;
+    viewer?.show(d);
+  };
+  const setViewer = async (open: boolean) => {
+    viewerEl.classList.toggle('open', open);
+    viewerEl.setAttribute('aria-hidden', String(!open));
+    if (!open) { viewer?.close(); return; }
+    viewer ??= new BuildingViewer($<HTMLCanvasElement>('viewerCanvas'), forceWebGL);
+    await viewer.open();
+    renderViewer();
+  };
+  $('openViewer').addEventListener('click', () => void setViewer(true));
+  $('viewerClose').addEventListener('click', () => void setViewer(false));
+  viewerEl.addEventListener('pointerdown', (e) => { if (e.target === viewerEl) void setViewer(false); });
+  $('viewerPlace').addEventListener('click', () => {
+    if (!viewerSel) return;
+    game.selectedDesign = viewerSel;
+    void setViewer(false);
+    selectTool('build');
+    toast('置く場所をクリックしてください（R で向きを変える）');
+  });
+  $('viewerDelete').addEventListener('click', () => {
+    const d = viewerSel ? game.designs.get(viewerSel) : undefined;
+    if (!d || !confirm(`「${d.name}」を棚から消しますか？ 箱庭に置いた分も消えます。`)) return;
+    game.removeDesign(d.id);
+    viewerSel = null;
+    renderShelf();
+    renderViewer();
+  });
+
   const layoutEl = $('layout');
   const modeButtons = document.querySelectorAll<HTMLButtonElement>('#modes button[data-mode]');
   const setMode = (m: Mode) => {
@@ -565,6 +622,7 @@ async function main() {
   window.addEventListener('keyup', (e) => moveKeys.delete(e.code));
   window.addEventListener('blur', () => moveKeys.clear());
   window.addEventListener('keydown', (e) => {
+    if (viewerIsOpen()) { if (e.key === 'Escape') void setViewer(false); return; } // 棚を見ている間は、Esc で閉じるだけ
     if (e.key === 'Escape') { setMenu(!menuOpen()); return; }
     if (menuOpen()) return; // メニューを開いている間は他のキーを受け付けない
     if ((e.target as HTMLElement).closest?.('input[type="text"], input[type="number"], textarea, select')) return;
