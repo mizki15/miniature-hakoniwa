@@ -96,3 +96,91 @@ describe('parseBuilding: checks', () => {
     expect(r.ok).toBe(true);
   });
 });
+
+// ---------- 形の変換（Task 3） ----------
+import { readFileSync } from 'node:fs';
+import { transformCubes, resolveBones as resolve } from './geoParse';
+
+const fixture = (f: string) => readFileSync(new URL(`./fixtures/${f}`, import.meta.url), 'utf8');
+/** 行列 m で単位立方体の 8 隅を写す */
+const cornersOf = (m: number[]) => {
+  const out: [number, number, number][] = [];
+  for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]) {
+    out.push([0, 1, 2].map((r) => m[r * 4] * x + m[r * 4 + 1] * y + m[r * 4 + 2] * z + m[r * 4 + 3]) as [number, number, number]);
+  }
+  return out;
+};
+const center = (m: number[]) => cornersOf(m).reduce((a, p) => a.map((v, i) => v + p[i] / 8), [0, 0, 0]);
+
+describe('parseBuilding: transforms', () => {
+  it('cubeCorners', () => {
+    const d = ok(parseBuilding(geo([{ name: 'wall', cubes: [cube([-8, 0, -8], [16, 16, 16])] }])));
+    expect(d.bounds.min).toEqual([-0.5, 0, -0.5]);
+    expect(d.bounds.max).toEqual([0.5, 1, 0.5]);
+  });
+  it('inflate', () => {
+    const d = ok(parseBuilding(geo([{ name: 'wall', cubes: [{ ...cube([-8, 0, -8], [16, 16, 16]), inflate: 1 }] }])));
+    // 1/16 ずつ広がり、底面を y = 0 にずらすので高さは 18/16
+    expect(d.bounds.min[0]).toBeCloseTo(-9 / 16);
+    expect(d.bounds.max[0]).toBeCloseTo(9 / 16);
+    expect(d.bounds.min[1]).toBe(0);
+    expect(d.bounds.max[1]).toBeCloseTo(18 / 16);
+  });
+  it('asymmetricMatchesBlockbench', () => {
+    // Blockbench の画面では、扉（wood）は北（−Z）の面、煙突（brick）は東（+X）にある
+    const d = ok(parseBuilding(fixture('asymmetric.geo.json')));
+    const door = d.cubes.find((c) => c.color === 'wood')!;
+    const chimney = d.cubes.find((c) => c.color === 'brick')!;
+    expect(center(door.m)[2]).toBeLessThan(-1);
+    expect(center(chimney.m)[0]).toBeGreaterThan(0.5);
+  });
+  it('rotatedMatchesBlockbench', () => {
+    // 底面が y = 0 にない見本なので、ずらす前の変換（Blockbench の単位）で比べる
+    const issues: never[] = [];
+    const r = resolve(JSON.parse(fixture('rotated.geo.json')), issues)!;
+    const cubes = transformCubes(r.bones);
+    const expected = JSON.parse(fixture('rotated.expected.json')).cubes as [number, number, number][][];
+    expect(cubes.length).toBe(2);
+    cubes.forEach((c, k) => {
+      const got = cornersOf(c.m);
+      for (const e of expected[k]) {
+        const best = Math.min(...got.map((p) => Math.hypot(p[0] - e[0], p[1] - e[1], p[2] - e[2])));
+        expect(best).toBeLessThan(0.01 * 16);
+      }
+    });
+  });
+  it('tooWide', () => {
+    const r = parseBuilding(geo([{ name: 'wall', cubes: [cube([-64, 0, -8], [129, 16, 16])] }]));
+    expect(codes(r)).toEqual(['too_wide']);
+    expect(msgs(r)).toContain('8.1');
+    expect(msgs(r)).toContain('8 マス');
+  });
+  it('tooTall', () => {
+    expect(codes(parseBuilding(geo([{ name: 'wall', cubes: [cube([-8, 0, -8], [16, 193, 16])] }])))).toEqual(['too_tall']);
+  });
+  it('rotationCountsForBounds', () => {
+    const r = parseBuilding(geo([{ name: 'wall', cubes: [{ origin: [-60, 0, -60], size: [120, 2, 120], pivot: [0, 0, 0], rotation: [0, 45, 0] }] }]));
+    expect(codes(r)).toEqual(['too_wide']);
+  });
+  it('notGrounded', () => {
+    expect(codes(parseBuilding(geo([{ name: 'wall', cubes: [cube([-8, 4, -8])] }])))).toEqual(['not_grounded']);
+    const d = ok(parseBuilding(geo([{ name: 'wall', cubes: [cube([-8, 0.4, -8])] }])));
+    expect(d.bounds.min[1]).toBe(0);
+  });
+  it('emptyAfterDroppingZeroCubes', () => {
+    expect(codes(parseBuilding(geo([{ name: 'wall', cubes: [cube([0, 0, 0], [0, 0, 0])] }])))).toEqual(['empty']);
+  });
+  it('keepsFlatPlanes', () => {
+    // 厚さ 0 の板（Blockbench でよく使う）は残す
+    expect(ok(parseBuilding(geo([{ name: 'wall', cubes: [cube([-8, 0, -8], [16, 16, 0])] }]))).cubes.length).toBe(1);
+  });
+  it('sameDesignSameId', () => {
+    const a = ok(parseBuilding(geo([{ name: 'wall', cubes: [cube()] }])));
+    const reordered = JSON.stringify({ 'minecraft:geometry': [{ bones: [{ cubes: [{ size: [16, 16, 16], origin: [-8, 0, -8] }], name: 'wall' }], description: { identifier: 'geometry.test' } }], format_version: '1.12.0' }, null, 2);
+    const b = ok(parseBuilding(reordered));
+    const moved = ok(parseBuilding(geo([{ name: 'wall', cubes: [cube([-7, 0, -8])] }])));
+    expect(a.id).toMatch(/^[0-9a-f]{8}$/);
+    expect(b.id).toBe(a.id);
+    expect(moved.id).not.toBe(a.id);
+  });
+});

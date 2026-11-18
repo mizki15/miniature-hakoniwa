@@ -3,7 +3,7 @@
  * データは数値と名前としてだけ読む。three.js に頼らない純粋な関数なので、テストから直接呼べる。
  * 規格：docs/superpowers/specs/2026-11-19-building-import-design.md
  */
-import { LIMITS } from './limits';
+import { LIMITS, UNITS_PER_VOXEL } from './limits';
 import { colorOfName } from './palette';
 
 export type IssueCode =
@@ -160,6 +160,83 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
   return { name, bones };
 }
 
+// ---------- 形の変換 ----------
+// Bedrock の値は、Blockbench の画面に対して X が反転し、回転の X・Y の符号が反転している（設計書 §5）。
+// ここでは画面の座標に戻してから組み立てる。行列は 3×4（行優先）のアフィン変換
+
+type M34 = number[];
+const ident = (): M34 => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
+const translate = (x: number, y: number, z: number): M34 => [1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z];
+const scale = (x: number, y: number, z: number): M34 => [x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0];
+function mul(a: M34, b: M34): M34 {
+  const o = new Array(12).fill(0);
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 4; c++) {
+      o[r * 4 + c] = a[r * 4] * b[c] + a[r * 4 + 1] * b[4 + c] + a[r * 4 + 2] * b[8 + c] + (c === 3 ? a[r * 4 + 3] : 0);
+    }
+  }
+  return o;
+}
+/** 回転（度、画面の向き）。three.js の Euler 'ZYX' と同じ：Rz·Ry·Rx */
+function rotZYX(rx: number, ry: number, rz: number): M34 {
+  const d = Math.PI / 180;
+  const [cx, sx, cy, sy, cz, sz] = [Math.cos(rx * d), Math.sin(rx * d), Math.cos(ry * d), Math.sin(ry * d), Math.cos(rz * d), Math.sin(rz * d)];
+  const Rx = [1, 0, 0, 0, 0, cx, -sx, 0, 0, sx, cx, 0];
+  const Ry = [cy, 0, sy, 0, 0, 1, 0, 0, -sy, 0, cy, 0];
+  const Rz = [cz, -sz, 0, 0, sz, cz, 0, 0, 0, 0, 1, 0];
+  return mul(Rz, mul(Ry, Rx));
+}
+/** pivot まわりの回転（Bedrock の値を受け取り、画面の向きに直す） */
+function rotAbout(pivot: Vec3, rot: Vec3): M34 {
+  if (rot[0] === 0 && rot[1] === 0 && rot[2] === 0) return ident();
+  const [px, py, pz] = [-pivot[0], pivot[1], pivot[2]];
+  return mul(translate(px, py, pz), mul(rotZYX(-rot[0], -rot[1], rot[2]), translate(-px, -py, -pz)));
+}
+
+/**
+ * 直方体を、Blockbench の画面の座標（単位は Blockbench の 1 = 1/16 ボクセル）の行列にする。
+ * 大きさがすべて 0 の直方体は捨てる
+ */
+export function transformCubes(bones: ResolvedBone[], withInflate = true): BuildingCube[] {
+  const boneM: (M34 | undefined)[] = [];
+  const matOf = (i: number): M34 => {
+    const cached = boneM[i];
+    if (cached) return cached;
+    const b = bones[i];
+    const own = rotAbout(b.pivot, b.rotation);
+    return (boneM[i] = b.parent >= 0 ? mul(matOf(b.parent), own) : own);
+  };
+  const out: BuildingCube[] = [];
+  bones.forEach((b, i) => {
+    for (const c of b.cubes) {
+      if (c.size[0] === 0 && c.size[1] === 0 && c.size[2] === 0) continue;
+      const k = withInflate ? c.inflate : 0;
+      const from: Vec3 = [-(c.origin[0] + c.size[0]) - k, c.origin[1] - k, c.origin[2] - k];
+      const m = mul(mul(matOf(i), rotAbout(c.pivot, c.rotation)), mul(translate(...from), scale(c.size[0] + 2 * k, c.size[1] + 2 * k, c.size[2] + 2 * k)));
+      out.push({ m, color: b.color ?? '' });
+    }
+  });
+  return out;
+}
+
+/** 行列 m で写した単位立方体の 8 隅 */
+function corners(m: M34): Vec3[] {
+  const out: Vec3[] = [];
+  for (const x of [0, 1]) for (const y of [0, 1]) for (const z of [0, 1]) {
+    out.push([0, 1, 2].map((r) => m[r * 4] * x + m[r * 4 + 1] * y + m[r * 4 + 2] * z + m[r * 4 + 3]) as Vec3);
+  }
+  return out;
+}
+
+/** FNV-1a 32 ビット → 8 桁の 16 進 */
+function fnv1a(s: string) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+}
+
+const fmt = (v: number) => (Math.round(v * 10) / 10).toString();
+
 /** 建物の JSON を検査して、箱庭で使う形にする */
 export function parseBuilding(text: string): ParseResult {
   const bytes = new TextEncoder().encode(text).length;
@@ -175,5 +252,37 @@ export function parseBuilding(text: string): ParseResult {
   const issues: ParseIssue[] = [];
   const r = resolveBones(json, issues);
   if (!r || issues.length) return { ok: false, issues };
-  return { ok: true, design: { id: '', name: r.name, cubes: [], bounds: { min: [0, 0, 0], max: [0, 0, 0] } } };
+
+  const cubes = transformCubes(r.bones);
+  if (!cubes.length) return { ok: false, issues: [{ code: 'empty', message: '大きさのある直方体が 1 つもありません。' }] };
+
+  // 外形（Blockbench の単位）
+  const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (const c of cubes) for (const p of corners(c.m)) for (let a = 0; a < 3; a++) { min[a] = Math.min(min[a], p[a]); max[a] = Math.max(max[a], p[a]); }
+  const EPS = 1e-6;
+  const W = LIMITS.widthUnits, H = LIMITS.heightUnits, U = UNITS_PER_VOXEL;
+  const wide = Math.max(max[0] - min[0], max[2] - min[2]);
+  if (wide > W + EPS) {
+    issues.push({ code: 'too_wide', message: `建物の幅か奥行が ${fmt(wide / U)} マス（${fmt(wide)} 単位）あります。回転した分も含めて ${W / U} マス（${W} 単位）以内にしてください。` });
+  }
+  if (max[1] - min[1] > H + EPS) {
+    issues.push({ code: 'too_tall', message: `建物の高さが ${fmt((max[1] - min[1]) / U)} マス（${fmt(max[1] - min[1])} 単位）あります。${H / U} マス（${H} 単位）以内にしてください。` });
+  }
+  // 地面に着いているかは、膨らみ（inflate）を除いた形で見る（Blockbench で y = 0 に置いた直方体を膨らませても、置き直さなくてよいように）
+  let ground = Infinity;
+  for (const c of transformCubes(r.bones, false)) for (const p of corners(c.m)) ground = Math.min(ground, p[1]);
+  if (Math.abs(ground) > LIMITS.groundTolerance + EPS) {
+    issues.push({ code: 'not_grounded', message: `一番低い所が y = ${fmt(ground)} にあります。建物の底を y = 0 にそろえてください。` });
+  }
+  if (issues.length) return { ok: false, issues };
+
+  // ボクセル単位にし、底面をちょうど y = 0 にずらす
+  const toVoxel = mul(translate(0, -min[1] / U, 0), scale(1 / U, 1 / U, 1 / U));
+  const out = cubes.map((c) => ({ m: mul(toVoxel, c.m), color: c.color }));
+  const bounds = {
+    min: [min[0] / U, 0, min[2] / U] as Vec3,
+    max: [max[0] / U, (max[1] - min[1]) / U, max[2] / U] as Vec3,
+  };
+  const key = out.map((c) => c.m.map((v) => (Math.round(v * 1e4) / 1e4).toString()).join(',') + ':' + c.color).join(';');
+  return { ok: true, design: { id: fnv1a(key), name: r.name, cubes: out, bounds } };
 }
