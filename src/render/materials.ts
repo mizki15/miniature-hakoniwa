@@ -199,7 +199,7 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
  * 小物（木・花）：頂点カラー・季節の色・AO・風で揺れる。
  * swayLinear：背の低いもの（花）向けの揺れ。高さに比例して揺らす
  */
-export function createDetailMaterial(swayLinear = 0): THREE.MeshStandardNodeMaterial {
+export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean } = {}): THREE.MeshStandardNodeMaterial {
   const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
   const pL: N = positionLocal; // ※インスタンスの行列を適用した後の座標（箱庭全体の中での位置）
   const pG: N = positionGeometry; // モデル自身の座標（根元が y=0）
@@ -212,7 +212,8 @@ export function createDetailMaterial(swayLinear = 0): THREE.MeshStandardNodeMate
   const sway = hgt.mul(hgt).mul(0.0022).add(hgt.mul(swayLinear)).min(0.25).mul(U.wind);
   const gust = sin(time.mul(0.9).add(phase)).mul(0.7).add(sin(time.mul(2.3).add(phase.mul(2.1))).mul(0.3));
   const gust2 = cos(time.mul(0.7).add(phase.mul(1.7))).mul(0.6);
-  m.positionNode = pL.add(vec3(gust, 0, gust2).mul(sway));
+  // 建物など、風で揺らさないもの（sway: false）には付けない
+  if (opts.sway !== false) m.positionNode = pL.add(vec3(gust, 0, gust2).mul(sway));
   m.receivedShadowPositionNode = positionWorld.add(normalWorldGeometry.mul(SHADOW_OFFSET));
   // カメラのすぐ近くの木は点描のように透かす（近づいた時に視界をふさがないように）
   m.alphaHash = true;

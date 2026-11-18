@@ -127,6 +127,7 @@ async function main() {
   const waterMat = createWaterMaterial();
   const detailMat = createDetailMaterial();
   const flowerMat = createDetailMaterial(0.12); // 花は背が低いので高さに比例して揺らす
+  const buildingMat = createDetailMaterial(0, { sway: false }); // 建物は風で揺らさない
   const lowPolyFlowers = [0, 1, 2].map((v) => buildLowPolyFlower(v));
   let precip: { rain: THREE.InstancedMesh; snow: THREE.InstancedMesh } | null = null;
   const rainAmount = uniform(0);
@@ -150,7 +151,7 @@ async function main() {
   $('stage').appendChild(busy);
 
   // 触れる・育つ要素（道具・畑・植林・地形の編集）
-  const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat });
+  const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat, buildingMat });
   // 生き物（住人・訪問者・図鑑・来るかどうかの判定）
   const eco = new EcoManager({
     diorama, envInput: () => game.envInput(), toast: (m, ms) => toast(m, ms), fireflies, treeShape: (c) => game.treeShape(c),
@@ -494,6 +495,7 @@ async function main() {
     const k = e.key.toLowerCase();
     if (k === 'v') setMode('view');
     else if (k === 'e') setMode('edit');
+    else if (k === 'r' && mode === 'edit' && game.tool === 'build') game.rotateBuild(); // 次に置く建物の向き（カーソルの枠は毎フレーム作り直す）
     else {
       const t = EDIT_TOOLS.find((x) => x.key === e.key);
       if (t) selectTool(t.id);
@@ -926,7 +928,7 @@ async function main() {
   };
   const buildSave = (): SaveData => ({
     version: SAVE_VERSION, savedAt: Date.now(), world: worldSettings!, plots: world!.plots,
-    ...game.exportState(), progress: { ...progress }, dex: structuredClone(eco.dex), residents: eco.residentsSave(), buildings: { designs: [], placed: [] }, // 仮（Task 8 で game から出す）
+    ...game.exportState(), progress: { ...progress }, dex: structuredClone(eco.dex), residents: eco.residentsSave(),
   });
 
   // 閉じていた間の季節と天気（オフライン進行で使う）

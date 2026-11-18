@@ -9,8 +9,14 @@ import { CROPS, Farm, type CropKind } from './farm';
 import { buildCropGeometry, buildSaplingGeometry } from './cropModels';
 import { raycastVoxels, type VoxelHit } from './picking';
 import type { SaveData } from '../save/format';
+import type { BuildingDesign } from '../build/geoParse';
+import { buildBuildingMesh } from '../build/geoMesh';
+import { canPlace, footprintCols, rayHitPlaced, rotatedBounds, type Rot } from '../build/placement';
 
-export type Tool = 'look' | 'till' | 'seed' | 'water' | 'harvest' | 'plant' | 'dig' | 'raise';
+export type Tool = 'look' | 'till' | 'seed' | 'water' | 'harvest' | 'plant' | 'dig' | 'raise' | 'build' | 'unbuild';
+
+/** 置いた建物 1 棟 */
+interface PlacedBuilding { id: string; x: number; z: number; rot: Rot }
 
 export const TOOLS: { id: Tool; name: string; icon: string; key: string; help: string }[] = [
   { id: 'look', name: '見る', icon: '👁', key: '1', help: '眺めるだけ。水面をクリックすると波紋' },
@@ -21,6 +27,8 @@ export const TOOLS: { id: Tool; name: string; icon: string; key: string; help: s
   { id: 'plant', name: '植林', icon: '🌳', key: '6', help: '苗木を植える（約 1 日で木になる）' },
   { id: 'dig', name: '掘る', icon: '🕳', key: '7', help: 'ブロックを掘る。水のそばを掘ると水が流れ込む' },
   { id: 'raise', name: '土を盛る', icon: '⬆', key: '8', help: '土のブロックを置く' },
+  { id: 'build', name: '建物を置く', icon: '🏠', key: '9', help: '棚で選んだ建物を地面に置く（R で向きを変える）' },
+  { id: 'unbuild', name: '片付ける', icon: '🧹', key: '0', help: '置いた建物を取り除く（棚には残る）' },
 ];
 
 export function toGeometry(m: MeshData) {
@@ -43,6 +51,8 @@ export interface ControllerDeps {
   waterMat: THREE.Material;
   detailMat: THREE.Material;
   flowerMat: THREE.Material;
+  /** 建物（風で揺れない） */
+  buildingMat: THREE.Material;
 }
 
 const isFarm = (t: number) => t === FARMLAND || t === WET_FARMLAND;
@@ -52,6 +62,17 @@ const RISE_DEPTH = 6;
 const RISE_SECONDS = 0.6;
 
 export class GameController {
+  /** 建物の棚（id → 建物） */
+  designs = new Map<string, BuildingDesign>();
+  /** 棚で選んでいる建物 */
+  selectedDesign: string | null = null;
+  /** 次に置く建物の向き */
+  buildRot: Rot = 0;
+  private placed: PlacedBuilding[] = [];
+  private buildingMeshes: THREE.InstancedMesh[] = [];
+  private buildingGeos = new Map<string, THREE.BufferGeometry>();
+  /** 最後に pick() に渡した光線（建物を片付ける時の当たりに使う） */
+  private lastRay: { origin: [number, number, number]; dir: [number, number, number] } | null = null;
   farm = new Farm();
   tool: Tool = 'look';
   seed: CropKind = 'turnip';
@@ -117,6 +138,9 @@ export class GameController {
     this.flowerGeos = [];
     this.delta = [];
     this.rising = [];
+    // 置いた建物は箱庭ごと。棚（designs）は新しい箱庭にも持ち越す
+    this.placed = [];
+    this.buildingMeshes = [];
     for (const c of chunks) this.setChunk(c);
 
     // 木・花の形は種類ごとに 1 つ。ローポリの花はボクセルの花が作れない 1/1 でも使う
@@ -420,13 +444,57 @@ export class GameController {
   pick(origin: THREE.Vector3, dir: THREE.Vector3): VoxelHit | null {
     const w = this.world;
     if (!w) return null;
+    this.lastRay = { origin: [origin.x, origin.y, origin.z], dir: [dir.x, dir.y, dir.z] };
     return raycastVoxels(w.voxels, w.size, w.height, origin, dir, false);
   }
 
+  /** 置いた建物と、その高さ（建物の原点の列の地面） */
+  private placedWithY() {
+    const w = this.world!;
+    return this.placed.flatMap((p) => {
+      const design = this.designs.get(p.id);
+      return design ? [{ ...p, design, y: w.heights[p.x + p.z * w.size] }] : [];
+    });
+  }
+
+  /** 建物の道具の判定。box はカーソルの枠（箱庭の中での中心と大きさ）、index は片付ける建物の番号 */
+  private checkBuilding(hit: VoxelHit | null): { ok: boolean; x: number; y: number; z: number; msg: string; box?: { center: THREE.Vector3; size: THREE.Vector3 }; index?: number } | null {
+    const w = this.world!;
+    const half = w.size / 2;
+    const boxOf = (b: { min: number[]; max: number[] }, ox: number, oy: number, oz: number) => ({
+      center: new THREE.Vector3(ox + 0.5 - half + (b.min[0] + b.max[0]) / 2, oy + (b.min[1] + b.max[1]) / 2, oz + 0.5 - half + (b.min[2] + b.max[2]) / 2),
+      size: new THREE.Vector3(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]),
+    });
+    if (this.tool === 'unbuild') {
+      const list = this.placedWithY();
+      const i = this.lastRay ? rayHitPlaced(list, this.lastRay.origin, this.lastRay.dir, half) : -1;
+      if (i < 0) return hit ? { ok: false, x: hit.x, y: hit.y, z: hit.z, msg: '建物を選んでください' } : null;
+      const p = list[i];
+      return { ok: true, x: p.x, y: p.y, z: p.z, msg: `「${p.design.name}」を片付ける`, box: boxOf(rotatedBounds(p.design, p.rot), p.x, p.y, p.z), index: i };
+    }
+    if (!hit) return null;
+    const { x, y, z } = hit;
+    const col = x + z * w.size;
+    const fail = (msg: string) => ({ ok: false, x, y, z, msg });
+    if (hit.ny !== 1 || y !== w.heights[col] - 1) return fail('地面の上面を選んでください');
+    const d = this.selectedDesign ? this.designs.get(this.selectedDesign) : undefined;
+    if (!d) return fail('棚から建物を選んでください');
+    const box = boxOf(rotatedBounds(d, this.buildRot), x, y + 1, z);
+    const can = canPlace(d, this.buildRot, x, z, w.size, w.plots);
+    if (!can.ok) return { ...fail(can.msg), box };
+    const mine = new Set(footprintCols(d, this.buildRot, x, z, w.size));
+    for (const p of this.placedWithY()) {
+      if (footprintCols(p.design, p.rot, p.x, p.z, w.size).some((c) => mine.has(c))) return { ...fail('ほかの建物と重なっています'), box };
+    }
+    return { ok: true, x, y, z, msg: `「${d.name}」を置く`, box };
+  }
+
   /** その場所にこの道具が使えるか。使えるなら対象のマス、使えないなら理由 */
-  check(hit: VoxelHit | null): { ok: boolean; x: number; y: number; z: number; msg: string } | null {
+  check(hit: VoxelHit | null): { ok: boolean; x: number; y: number; z: number; msg: string; box?: { center: THREE.Vector3; size: THREE.Vector3 }; index?: number } | null {
     const w = this.world;
-    if (!w || !hit || this.tool === 'look') return null;
+    if (!w || this.tool === 'look') return null;
+    if (this.tool === 'build' || this.tool === 'unbuild') return this.checkBuilding(hit);
+    if (!hit) return null;
     const { x, y, z } = hit;
     const col = x + z * w.size;
     const t = this.get(x, y, z);
@@ -489,13 +557,28 @@ export class GameController {
     const w = this.world!;
     const { x, y, z } = c;
     const col = x + z * w.size;
+    const building = this.tool === 'build' || this.tool === 'unbuild';
     if (visited) {
-      if (visited.has(col)) return null;
+      // 建物は、なぞっても 1 回のドラッグで 1 棟だけ
+      if (visited.has(col) || (building && visited.size)) return null;
       visited.add(col);
     }
     if (!c.ok) return c.msg;
     this.unsaved = true;
     switch (this.tool) {
+      case 'build': {
+        const d = this.designs.get(this.selectedDesign!)!;
+        for (const fc of footprintCols(d, this.buildRot, x, z, w.size)) this.removeFlowersAt(fc % w.size, Math.floor(fc / w.size));
+        this.placed.push({ id: d.id, x, z, rot: this.buildRot });
+        this.rebuildBuildings();
+        return `「${d.name}」を置きました`;
+      }
+      case 'unbuild': {
+        const p = this.placedWithY()[c.index!];
+        this.placed = this.placed.filter((q) => !(q.id === p.id && q.x === p.x && q.z === p.z && q.rot === p.rot));
+        this.rebuildBuildings();
+        return `「${p.design.name}」を片付けました`;
+      }
       case 'till':
         this.removeFlowersAt(x, z);
         this.setVoxel(x, y, z, FARMLAND);
@@ -548,13 +631,73 @@ export class GameController {
     return null;
   }
 
+  // ---------- 建物の棚 ----------
+
+  /** 棚に建物を足す。同じ建物（id が同じ）がすでにあれば足さない */
+  addDesign(d: BuildingDesign): 'added' | 'exists' {
+    if (this.designs.has(d.id)) return 'exists';
+    this.designs.set(d.id, d);
+    this.unsaved = true;
+    return 'added';
+  }
+
+  /** 棚から建物を消す。置いてある分も消す */
+  removeDesign(id: string) {
+    if (!this.designs.delete(id)) return;
+    this.placed = this.placed.filter((p) => p.id !== id);
+    this.buildingGeos.get(id)?.dispose();
+    this.buildingGeos.delete(id);
+    if (this.selectedDesign === id) this.selectedDesign = null;
+    this.unsaved = true;
+    this.rebuildBuildings();
+  }
+
+  /** 次に置く建物の向きを 90° 回す */
+  rotateBuild() { this.buildRot = ((this.buildRot + 1) % 4) as Rot; }
+
+  /** 置いた建物の描画を作り直す（建物の種類ごとに InstancedMesh 1 つ） */
+  private rebuildBuildings() {
+    const w = this.world;
+    for (const m of this.buildingMeshes) { this.deps.diorama.remove(m); m.dispose(); }
+    this.buildingMeshes = [];
+    if (!w) return;
+    const half = w.size / 2;
+    const groups = new Map<string, ReturnType<GameController['placedWithY']>>();
+    for (const p of this.placedWithY()) {
+      if (!groups.has(p.id)) groups.set(p.id, []);
+      groups.get(p.id)!.push(p);
+    }
+    const mtx = new THREE.Matrix4(), rot = new THREE.Matrix4();
+    for (const [id, list] of groups) {
+      let geo = this.buildingGeos.get(id);
+      if (!geo) { geo = toGeometry(buildBuildingMesh(this.designs.get(id)!)); this.buildingGeos.set(id, geo); }
+      const im = new THREE.InstancedMesh(geo, this.deps.buildingMat, list.length);
+      list.forEach((p, i) => {
+        mtx.makeTranslation(p.x + 0.5 - half, p.y, p.z + 0.5 - half).multiply(rot.makeRotationY((p.rot * Math.PI) / 2));
+        im.setMatrixAt(i, mtx);
+      });
+      im.castShadow = true;
+      im.receiveShadow = true;
+      im.userData.sharedGeometry = true;
+      this.buildingMeshes.push(im);
+      this.deps.diorama.add(im);
+    }
+  }
+
   /** カーソル（選んでいるマスの枠）を更新する。neutral なら使えるかどうかに関係なく白で表示 */
   updateCursor(hit: VoxelHit | null, neutral = false): string {
     const c = this.check(hit);
     if (!c || !this.world) { this.cursor.visible = false; return ''; }
     const half = this.world.size / 2;
     this.cursor.visible = true;
-    this.cursor.position.set(c.x + 0.5 - half, c.y + 0.5, c.z + 0.5 - half);
+    if (c.box) {
+      // 建物：外形の大きさの枠
+      this.cursor.position.copy(c.box.center);
+      this.cursor.scale.set(Math.max(c.box.size.x, 0.05), Math.max(c.box.size.y, 0.05), Math.max(c.box.size.z, 0.05));
+    } else {
+      this.cursor.position.set(c.x + 0.5 - half, c.y + 0.5, c.z + 0.5 - half);
+      this.cursor.scale.set(1, 1, 1);
+    }
     (this.cursor.material as THREE.LineBasicMaterial).color.set(c.ok || neutral ? 0xffffff : 0xff6a5a);
     return c.msg;
   }
@@ -706,7 +849,7 @@ export class GameController {
   // ---------- 保存・読み込み ----------
 
   /** 保存用：地形の差分と畑の状態 */
-  exportState(): Pick<SaveData, 'edits' | 'farm'> {
+  exportState(): Pick<SaveData, 'edits' | 'farm' | 'buildings'> {
     const edits: number[] = [];
     for (const [i, t] of this.edits) edits.push(i, t);
     const f = this.farm;
@@ -718,6 +861,10 @@ export class GameController {
         crops: [...f.crops.values()].map((c) => [c.col, c.kind, +c.progress.toFixed(5)]),
         saplings: f.saplings.map((s) => [s.col, s.variant, s.rot, +s.progress.toFixed(5)]),
         wet: [...f.wetUntil.entries()].filter(([, u]) => u > f.simMs),
+      },
+      buildings: {
+        designs: [...this.designs.values()],
+        placed: this.placed.map((p) => [p.id, p.x, p.z, p.rot]),
       },
     };
   }
@@ -741,8 +888,15 @@ export class GameController {
       w.walkable[col] = 0;
     }
     for (const [col, until] of save.farm.wet) f.wetUntil.set(col, until);
+    // 建物：棚は保存のものに置き換える
+    for (const g of this.buildingGeos.values()) g.dispose();
+    this.buildingGeos.clear();
+    this.designs = new Map(save.buildings.designs.map((d) => [d.id, d]));
+    this.placed = save.buildings.placed.filter(([id]) => this.designs.has(id)).map(([id, x, z, rot]) => ({ id, x, z, rot }));
+    if (this.selectedDesign && !this.designs.has(this.selectedDesign)) this.selectedDesign = null;
     this.rebuildCrops();
     this.rebuildGrowing();
+    this.rebuildBuildings();
     this.wetCheck = 0;
     this.unsaved = false;
   }
