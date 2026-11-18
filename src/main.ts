@@ -32,6 +32,9 @@ import { FRAME, PLOT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable
 import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
 import { GameController, TOOLS, type Tool } from './game/controller';
+import { parseBuilding, type ParseIssue } from './build/geoParse';
+import { buildFixPrompt, buildPrompt } from './build/aiPrompt';
+import { LIMITS } from './build/limits';
 import { CROPS, CROP_KINDS, type CropKind } from './game/farm';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -414,7 +417,86 @@ async function main() {
     game.tool = t;
     for (const [id, b] of toolButtons) b.classList.toggle('on', id === t);
     hintEl.textContent = TOOLS.find((x) => x.id === t)!.help;
+    renderShelf();
   };
+
+  // ---------- 建物の棚と読み込み ----------
+  // 読み込んだ建物の名前や問題の文は、すべて textContent で出す（HTML として読ませない）
+  const shelfEl = $('shelf');
+  const issuesBox = $('buildIssues'), issueList = $('buildIssueList');
+  let lastIssues: ParseIssue[] = [];
+  const copyText = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); toast('コピーしました'); } catch { toast('コピーできませんでした'); }
+  };
+  function renderShelf() {
+    shelfEl.replaceChildren();
+    for (const d of game.designs.values()) {
+      const item = document.createElement('span');
+      item.className = 'shelf-item';
+      const b = document.createElement('button');
+      b.textContent = `🏠 ${d.name}`;
+      b.classList.toggle('on', game.selectedDesign === d.id && game.tool === 'build');
+      b.addEventListener('click', () => { game.selectedDesign = d.id; selectTool('build'); });
+      const del = document.createElement('button');
+      del.className = 'del';
+      del.textContent = '×';
+      del.title = '棚から消す（置いた分も消えます）';
+      del.addEventListener('click', () => {
+        if (!confirm(`「${d.name}」を棚から消しますか？ 箱庭に置いた分も消えます。`)) return;
+        game.removeDesign(d.id);
+        renderShelf();
+      });
+      item.append(b, del);
+      shelfEl.appendChild(item);
+    }
+  }
+  const showIssues = (issues: ParseIssue[]) => {
+    lastIssues = issues;
+    issueList.replaceChildren(...issues.map((i) => { const li = document.createElement('li'); li.textContent = i.message; return li; }));
+    issuesBox.hidden = issues.length === 0;
+  };
+  const importBuilding = (text: string) => {
+    const r = parseBuilding(text);
+    if (!r.ok) { showIssues(r.issues); toast(`読み込めませんでした（問題 ${r.issues.length} 件）`); return; }
+    showIssues([]);
+    const added = game.addDesign(r.design) === 'added';
+    toast(added ? `「${r.design.name}」を棚に入れました` : '同じ建物がもう棚にあります');
+    game.selectedDesign = r.design.id;
+    selectTool('build');
+  };
+  $('buildCopyPrompt').addEventListener('click', () => copyText(buildPrompt($<HTMLTextAreaElement>('buildIdea').value)));
+  $('buildCopyFix').addEventListener('click', () => copyText(buildFixPrompt(lastIssues)));
+  $('buildLoad').addEventListener('click', () => {
+    const ta = $<HTMLTextAreaElement>('buildPaste');
+    if (!ta.value.trim()) { toast('AI の返事や .geo.json の中身を貼ってください'); return; }
+    importBuilding(ta.value);
+  });
+  const readFile = async (f: File) => {
+    if (f.size > LIMITS.fileBytes * 4) { showIssues([{ code: 'file_size', message: `ファイルが ${Math.ceil(f.size / 1024)} KB あります。${LIMITS.fileBytes / 1024} KB 以下にしてください。` }]); return; }
+    importBuilding(await f.text());
+  };
+  $<HTMLInputElement>('buildFile').addEventListener('change', (e) => {
+    const input = e.target as HTMLInputElement;
+    const f = input.files?.[0];
+    input.value = '';
+    if (f) void readFile(f);
+  });
+  // 箱庭の画面に .geo.json を落としても読み込む（エディタのとき）
+  const layoutDrop = $('layout');
+  layoutDrop.addEventListener('dragover', (e) => {
+    if (mode !== 'edit' || !e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    layoutDrop.classList.add('drop-target');
+  });
+  layoutDrop.addEventListener('dragleave', () => layoutDrop.classList.remove('drop-target'));
+  layoutDrop.addEventListener('drop', (e) => {
+    layoutDrop.classList.remove('drop-target');
+    const f = e.dataTransfer?.files[0];
+    if (mode !== 'edit' || !f) return;
+    e.preventDefault();
+    void readFile(f);
+  });
+  renderShelf();
 
   const layoutEl = $('layout');
   const modeButtons = document.querySelectorAll<HTMLButtonElement>('#modes button[data-mode]');
@@ -797,6 +879,8 @@ async function main() {
   };
   const QUALITY_NAMES: Record<Quality, string> = { high: '高', medium: '中', low: '低' };
   const isMobile = navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) < 820;
+  // スマホは閲覧限定：建物の棚と読み込みは出さない（置いた建物は表示する）
+  if (isMobile) $('buildBox').hidden = true;
   let quality: Quality = 'high';
   let qualityAuto = true;
   const setChecked = (id: string, v: boolean) => { $<HTMLInputElement>(id).checked = v; };
@@ -947,6 +1031,7 @@ async function main() {
     await startWorld(s.seed, s.detail, s.params, s.flowerStyle, save.plots, save.edits);
     worldSettings = { ...s };
     game.restore(save);
+    renderShelf();
     // 住人は畑・苗木を戻した後に（苗木の列に住人を戻さないように）
     eco.restore(save.dex ?? {}, save.residents ?? []);
     eco.resetClock(game.farm.simMs);

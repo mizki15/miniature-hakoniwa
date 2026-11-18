@@ -185,3 +185,11 @@ describe('parseBuilding: transforms', () => {
     expect(moved.id).not.toBe(a.id);
   });
 });
+
+describe('parseBuilding: collects issues across stages', () => {
+  it('collectsColorAndSizeIssuesTogether', () => {
+    // 色の問題があっても、外形の検査まで進めて両方を伝える
+    const r = parseBuilding(geo([{ name: 'wall', cubes: [cube()] }, { name: 'door', cubes: [cube()] }, { name: 'roof', cubes: [cube([-80, 16, -8], [160, 4, 16])] }]));
+    expect(codes(r).sort()).toEqual(['no_color', 'too_wide']);
+  });
+});

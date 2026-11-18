@@ -251,10 +251,13 @@ export function parseBuilding(text: string): ParseResult {
   }
   const issues: ParseIssue[] = [];
   const r = resolveBones(json, issues);
-  if (!r || issues.length) return { ok: false, issues };
+  if (!r) return { ok: false, issues };
 
+  // 色などの問題があっても、外形の検査まで進めて、問題をまとめて伝える（読めなかった直方体は除いてある）
   const cubes = transformCubes(r.bones);
-  if (!cubes.length) return { ok: false, issues: [{ code: 'empty', message: '大きさのある直方体が 1 つもありません。' }] };
+  if (!cubes.length) {
+    return { ok: false, issues: issues.length ? issues : [{ code: 'empty', message: '大きさのある直方体が 1 つもありません。' }] };
+  }
 
   // 外形（Blockbench の単位）
   const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];

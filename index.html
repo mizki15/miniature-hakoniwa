@@ -29,6 +29,25 @@
             <h3>種</h3>
             <div id="seeds" class="seed-list"></div>
           </div>
+          <div id="buildBox">
+            <h3>建物</h3>
+            <div id="shelf" class="seed-list"></div>
+            <details id="buildImport">
+              <summary>建物を読み込む</summary>
+              <label class="build-label" for="buildIdea">作ってほしいもの</label>
+              <textarea id="buildIdea" rows="2" placeholder="例：赤い屋根の小さな木の小屋。正面に扉、横に窓が 1 つ"></textarea>
+              <button id="buildCopyPrompt" type="button">AI に頼む文をコピー</button>
+              <textarea id="buildPaste" rows="3" placeholder="AI の返事や .geo.json の中身をここに貼る"></textarea>
+              <div class="build-row">
+                <button id="buildLoad" type="button">読み込む</button>
+                <label class="build-file">ファイルを選ぶ<input id="buildFile" type="file" accept=".json,.geo.json,application/json" hidden></label>
+              </div>
+              <div id="buildIssues" hidden>
+                <ul id="buildIssueList"></ul>
+                <button id="buildCopyFix" type="button">AI に直してもらう文をコピー</button>
+              </div>
+            </details>
+          </div>
           <div id="toolHint" class="tool-hint"></div>
           <div class="howto">
             <div><b>左ドラッグ</b>：なぞった所にまとめて使う</div>
