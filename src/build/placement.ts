@@ -40,11 +40,28 @@ export function footprintCols(d: BuildingDesign, rot: Rot, x: number, z: number,
   return footprint(d, rot, x, z, size).filter((c) => c >= 0);
 }
 
-/** そこに置けるか。足元がすべて枠の中の、開いた区画にあること */
-export function canPlace(d: BuildingDesign, rot: Rot, x: number, z: number, size: number, plots: number): { ok: true } | { ok: false; msg: string } {
+/**
+ * 足元の地面の様子。height：列の地面の高さ。blocked：その列に置けない理由（木・作物・水など）、なければ null
+ */
+export interface Ground { height: (col: number) => number; blocked: (col: number) => string | null }
+
+/** 足元の高さの差がこれより大きければ、坂や段差とみなして置かない */
+const MAX_STEP = 1;
+
+/**
+ * そこに置けるか。足元がすべて枠の中の、開いた区画にあること。
+ * ground を渡すと、足元の高さがそろっているか（差 1 まで）と、木・作物・水などがないかも見る
+ */
+export function canPlace(d: BuildingDesign, rot: Rot, x: number, z: number, size: number, plots: number, ground?: Ground): { ok: true } | { ok: false; msg: string } {
   const cols = footprint(d, rot, x, z, size);
   if (cols.some((c) => c < 0)) return { ok: false, msg: '箱庭の外にはみ出します' };
   if (cols.some((c) => !isOpenCol(plots, c % size, Math.floor(c / size)))) return { ok: false, msg: '開いていない土地にかかっています' };
+  if (ground) {
+    let lo = Infinity, hi = -Infinity;
+    for (const c of cols) { const h = ground.height(c); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+    if (hi - lo > MAX_STEP) return { ok: false, msg: '地面の高さがそろっていません（坂や段差の上には置けません）' };
+    for (const c of cols) { const why = ground.blocked(c); if (why) return { ok: false, msg: why }; }
+  }
   return { ok: true };
 }
 

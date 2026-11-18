@@ -193,3 +193,22 @@ describe('parseBuilding: collects issues across stages', () => {
     expect(codes(r).sort()).toEqual(['no_color', 'too_wide']);
   });
 });
+
+describe('parseBuilding: review fixes', () => {
+  it('rejectsHugeNumbers', () => {
+    // 1 つずつは有限でも、足すと無限大になり NaN の形ができる
+    const r = parseBuilding(geo([{ name: 'wall', cubes: [cube([1e308, 0, 0], [1e308, 16, 16])] }]));
+    expect(r.ok).toBe(false);
+    expect(codes(r)).toContain('bad_number');
+  });
+  it('braceInProseBeforeJson', () => {
+    const text = 'はい、{ } を使った JSON です。\n```json\n' + geo([{ name: 'wall', cubes: [cube()] }]) + '\n```';
+    expect(parseBuilding(text).ok).toBe(true);
+  });
+  it('picksAnswerNotPromptExampleWhenWholeChatPasted', () => {
+    const mine = geo([{ name: 'wall', cubes: [cube()] }]).replace('geometry.test', 'geometry.answer');
+    const example = geo([{ name: 'stone', cubes: [cube()] }]).replace('geometry.test', 'geometry.example');
+    const r = parseBuilding(`## 例\n${example}\n\n（AI の返事）\n\`\`\`json\n${mine}\n\`\`\``);
+    expect(r.ok && r.design.name).toBe('answer');
+  });
+});

@@ -46,3 +46,21 @@ describe('placement', () => {
     expect(rayHitPlaced(placed, [0, 11, 0.5], [-1, 0, 0], 128)).toBe(-1);
   });
 });
+
+describe('placement: ground', () => {
+  const house = d([-1, 0, -1], [1, 2, 1]);
+  const flat = (h: number) => ({ height: () => h, blocked: () => null });
+  it('refusesSlope', () => {
+    const slope = { height: (col: number) => 10 + (col % FRAME) - 96, blocked: () => null };
+    expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, slope)).toEqual({ ok: false, msg: '地面の高さがそろっていません（坂や段差の上には置けません）' });
+  });
+  it('allowsOneStep', () => {
+    const step = { height: (col: number) => ((col % FRAME) > 96 ? 11 : 10), blocked: () => null };
+    expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, step)).toEqual({ ok: true });
+    expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, flat(10))).toEqual({ ok: true });
+  });
+  it('refusesBlockedColumns', () => {
+    const tree = { height: () => 10, blocked: (col: number) => (col === 97 + 96 * FRAME ? '木があります' : null) };
+    expect(canPlace(house, 0, 96, 96, FRAME, 0xffff, tree)).toEqual({ ok: false, msg: '木があります' });
+  });
+});

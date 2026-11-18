@@ -480,7 +480,15 @@ export class GameController {
     const d = this.selectedDesign ? this.designs.get(this.selectedDesign) : undefined;
     if (!d) return fail('棚から建物を選んでください');
     const box = boxOf(rotatedBounds(d, this.buildRot), x, y + 1, z);
-    const can = canPlace(d, this.buildRot, x, z, w.size, w.plots);
+    const can = canPlace(d, this.buildRot, x, z, w.size, w.plots, {
+      height: (c) => w.heights[c],
+      blocked: (c) => {
+        if (this.treeCols.has(c)) return '木があります';
+        if (this.farm.crops.has(c)) return '作物があります';
+        if (this.get(c % w.size, w.heights[c], Math.floor(c / w.size)) === WATER) return '水の上には置けません';
+        return null;
+      },
+    });
     if (!can.ok) return { ...fail(can.msg), box };
     const mine = new Set(footprintCols(d, this.buildRot, x, z, w.size));
     for (const p of this.placedWithY()) {

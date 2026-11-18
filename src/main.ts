@@ -783,6 +783,7 @@ async function main() {
     if (t.kind === 'crop') {
       game.cursor.visible = true;
       game.cursor.position.copy(game.colTop(t.col)).add(tmpV.set(0, -0.5, 0));
+      game.cursor.scale.set(1, 1, 1); // 「建物を置く」で建物の大きさにした枠を、1 マスに戻す
       (game.cursor.material as THREE.LineBasicMaterial).color.copy(statusCursorColor);
     } else game.cursor.visible = false;
     // 位置：固定中は対象の横（動物は動くのでついていく）、ホバー中はマウスの横

@@ -33,13 +33,8 @@ export interface RawCube { origin: Vec3; size: Vec3; pivot: Vec3; rotation: Vec3
 /** 検査を通ったグループ */
 export interface ResolvedBone { name: string; parent: number; pivot: Vec3; rotation: Vec3; cubes: RawCube[]; color: string | null }
 
-/**
- * AI の返事などに混ざった前置き・コードブロックの記号を除き、最初の { から対応する } までを返す。
- * 見つからなければ元の文字列
- */
-export function extractJson(text: string): string {
-  const start = text.indexOf('{');
-  if (start < 0) return text;
+/** start の { に対応する } の位置（なければ −1） */
+function balancedEnd(text: string, start: number): number {
   let depth = 0;
   let inStr = false;
   for (let i = start; i < text.length; i++) {
@@ -49,13 +44,42 @@ export function extractJson(text: string): string {
       else if (ch === '"') inStr = false;
     } else if (ch === '"') inStr = true;
     else if (ch === '{') depth++;
-    else if (ch === '}' && --depth === 0) return text.slice(start, i + 1);
+    else if (ch === '}' && --depth === 0) return i;
   }
-  return text.slice(start);
+  return -1;
 }
 
+/** 前置きの文の { } などで、何度も試しすぎないための上限 */
+const MAX_TRIES = 50;
+
+/**
+ * AI の返事などに混ざった前置き・コードブロックの記号を除き、JSON の部分を返す。
+ * 文の中の { } を飛ばし、JSON として読める { … } のうち "minecraft:geometry" を持つ最後のもの
+ * （会話をまるごと貼った時、説明文の例より後にある AI の答え）を選ぶ。
+ * 読めるものがなければ最初の { から後ろ、{ がなければ元の文字列
+ */
+export function extractJson(text: string): string {
+  let firstStart = -1, lastParsed: string | null = null, lastGeometry: string | null = null;
+  let i = text.indexOf('{');
+  for (let tries = 0; i >= 0 && tries < MAX_TRIES; tries++) {
+    if (firstStart < 0) firstStart = i;
+    const end = balancedEnd(text, i);
+    if (end < 0) break;
+    const cand = text.slice(i, end + 1);
+    let parsed: unknown;
+    try { parsed = JSON.parse(cand); } catch { i = text.indexOf('{', i + 1); continue; }
+    lastParsed = cand;
+    if (isObj(parsed) && 'minecraft:geometry' in parsed) lastGeometry = cand;
+    i = text.indexOf('{', end + 1);
+  }
+  return lastGeometry ?? lastParsed ?? (firstStart >= 0 ? text.slice(firstStart) : text);
+}
+
+/** 座標・大きさ・回転として受け付ける数の大きさの上限（足し算で無限大にならないように） */
+const MAX_ABS = 1e5;
+
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_ABS;
 const isVec3 = (v: unknown): v is Vec3 => Array.isArray(v) && v.length === 3 && v.every(isNum);
 
 /** JSON を読み、グループの親子と色まで決める。問題は issues に足す */
@@ -88,7 +112,7 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
     for (const key of ['pivot', 'rotation'] as const) {
       if (b[key] === undefined) continue;
       if (isVec3(b[key])) bone[key] = b[key] as Vec3;
-      else issues.push({ code: 'bad_number', message: `グループ「${bname}」の ${key} が数 3 つの並びになっていません。` });
+      else issues.push({ code: 'bad_number', message: `グループ「${bname}」の ${key} が数 3 つの並び（それぞれ ±100000 以内）になっていません。` });
     }
     if (b.cubes === undefined) return;
     if (!Array.isArray(b.cubes)) { issues.push({ code: 'bad_number', message: `グループ「${bname}」の cubes が一覧（[ ]）になっていません。` }); return; }
@@ -98,12 +122,12 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
       if (!isObj(c)) { issues.push({ code: 'bad_number', message: `${where}が { } の形になっていません。` }); return; }
       let good = true;
       for (const key of ['origin', 'size'] as const) {
-        if (!isVec3(c[key])) { issues.push({ code: 'bad_number', message: `${where}の ${key} が数 3 つの並びになっていません。` }); good = false; }
+        if (!isVec3(c[key])) { issues.push({ code: 'bad_number', message: `${where}の ${key} が数 3 つの並び（それぞれ ±100000 以内）になっていません。` }); good = false; }
       }
       for (const key of ['pivot', 'rotation'] as const) {
-        if (c[key] !== undefined && !isVec3(c[key])) { issues.push({ code: 'bad_number', message: `${where}の ${key} が数 3 つの並びになっていません。` }); good = false; }
+        if (c[key] !== undefined && !isVec3(c[key])) { issues.push({ code: 'bad_number', message: `${where}の ${key} が数 3 つの並び（それぞれ ±100000 以内）になっていません。` }); good = false; }
       }
-      if (c.inflate !== undefined && !isNum(c.inflate)) { issues.push({ code: 'bad_number', message: `${where}の inflate が数になっていません。` }); good = false; }
+      if (c.inflate !== undefined && !isNum(c.inflate)) { issues.push({ code: 'bad_number', message: `${where}の inflate が数（±100000 以内）になっていません。` }); good = false; }
       if (!good) return;
       const size = c.size as Vec3;
       if (size.some((s) => s < 0)) { issues.push({ code: 'negative_size', message: `${where}の size に負の数があります。0 以上にしてください。` }); return; }
@@ -255,6 +279,10 @@ export function parseBuilding(text: string): ParseResult {
 
   // 色などの問題があっても、外形の検査まで進めて、問題をまとめて伝える（読めなかった直方体は除いてある）
   const cubes = transformCubes(r.bones);
+  // 念のため：組み立てた行列がすべて有限か（NaN・無限大の形を GPU や保存へ渡さない）
+  if (cubes.some((c) => c.m.some((v) => !Number.isFinite(v)))) {
+    return { ok: false, issues: [...issues, { code: 'bad_number', message: '座標や大きさの数が大きすぎて、形を作れません。' }] };
+  }
   if (!cubes.length) {
     return { ok: false, issues: issues.length ? issues : [{ code: 'empty', message: '大きさのある直方体が 1 つもありません。' }] };
   }
