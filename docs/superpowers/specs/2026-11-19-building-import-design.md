@@ -209,6 +209,19 @@ interface BuildingDesign {
 3. 書き出した JSON のフィールド名（`origin`・`size`・`pivot`・`rotation`・`inflate`・`parent`）と、`format_version` の値を記録する。
 4. 入れ子のグループで、子の `pivot` が絶対座標か相対座標かを確かめる。
 
+### 確かめた結果（2026-11-19、Blockbench 5.2.2 Web 版、Bedrock Entity 形式）
+
+見本：`src/build/fixtures/asymmetric.geo.json`、`rotated.geo.json`（画面上の角の座標は `rotated.expected.json`）
+
+- (a) **X は反転して書き出される**。画面で x 12〜18 にある直方体が `origin [-18, …]`、`size [6, …]` になる。画面の座標に戻すには `x0 = -(origin.x + size.x)`、`x1 = -origin.x`、`pivot.x` は符号を反転する。Y・Z はそのまま。北（North）は −Z、東（East）は +X（画面の座標で）
+- (b) **回転は X・Y の符号が反転して書き出される**（Z はそのまま）。画面の回転に戻すには `[-rx, -ry, rz]`（度）。回転の順番は three.js の `Euler` の `'ZYX'`（行列は Rz·Ry·Rx）
+- (c) **`pivot` はグループも直方体も絶対座標**（親のグループの位置からの相対ではない）。子のグループには `"parent"` が付く。グループの変換は「親の変換 × 自分の pivot まわりの回転」、直方体はさらに「× 直方体の pivot まわりの回転」
+- (d) `format_version` は `"1.12.0"`。回転のないグループには `rotation` が付かない。`uv` は `[0, 0]` の形（箱 UV）
+
+この変換で計算した角は、Blockbench の画面上の角と 0.001 単位以内で一致した。
+
+ゲームでは**画面の座標（反転を戻した後）をそのまま箱庭の座標**として使う。そうすれば、Blockbench で見た形と同じになる。
+
 あわせて、AI に渡す説明文で ChatGPT と Claude（無料版）に 2〜3 棟作らせ、検査の合格率とエラーの文の分かりやすさを見る。
 
 ---
