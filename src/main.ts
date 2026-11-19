@@ -906,6 +906,7 @@ async function main() {
     diorama.traverse((o) => {
       if (!(o instanceof THREE.Mesh)) return;
       const g = o.geometry as THREE.BufferGeometry;
+      if (!g.attributes.position) return; // 中身のない形（建物の見本を出す前など）は数えない
       for (const a of Object.values(g.attributes)) gpuBytes += (a as THREE.BufferAttribute).array.byteLength;
       if (g.index) gpuBytes += g.index.array.byteLength;
       if (o instanceof THREE.InstancedMesh) gpuBytes += o.instanceMatrix.array.byteLength;
