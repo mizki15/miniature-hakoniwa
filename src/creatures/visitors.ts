@@ -34,14 +34,19 @@ function buildVisitorModel(id: VisitorDef['id']): THREE.Group | null {
     case 'sparrow': return bird(0x8a5a36, 0x6b4428, 0x3a2a1a, 0.9);
     case 'frog': g.add(ball(0.13, 0x6aa84f, 0, 0.08, 0, 0.7), ball(0.04, 0xf4f4e8, 0.06, 0.17, 0.08), ball(0.04, 0xf4f4e8, -0.06, 0.17, 0.08), box(0.08, 0.04, 0.12, 0x5a9440, 0.1, 0.02, -0.04), box(0.08, 0.04, 0.12, 0x5a9440, -0.1, 0.02, -0.04)); break;
     case 'fish': {
-      const m = new THREE.Mesh(new THREE.CircleGeometry(0.35, 10), new THREE.MeshBasicMaterial({ color: 0x0b1a26, transparent: true, opacity: 0.5, depthWrite: false }));
-      m.rotation.x = -Math.PI / 2; m.scale.set(0.55, 1, 1);
-      const tail = new THREE.Mesh(new THREE.CircleGeometry(0.14, 3), m.material);
-      tail.rotation.x = -Math.PI / 2; tail.position.z = -0.38;
-      // 水面（renderOrder 1）の後で描く。水の下に置くと、深い水の色に隠れてほとんど見えない
-      m.renderOrder = tail.renderOrder = 2;
-      g.add(m, tail);
-      return g; // 半透明の影なのでまとめない
+      // 立体の魚（前は +z）：背は青灰色、腹は銀色。尾びれ・背びれ・胸びれ・目
+      const back = ball(0.16, 0x4f7487, 0, 0.02, 0);
+      back.scale.set(0.55, 0.5, 1.5);
+      const belly = ball(0.13, 0xc9d4d8, 0, -0.03, 0.02);
+      belly.scale.set(0.5, 0.4, 1.35);
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.18, 4), mat(0x3f6375));
+      tail.rotation.x = Math.PI / 2; tail.scale.set(0.25, 1, 1); tail.position.set(0, 0.02, -0.3);
+      const dorsal = box(0.015, 0.07, 0.12, 0x3f6375, 0, 0.1, -0.02);
+      const finL = box(0.08, 0.01, 0.05, 0x8fa8b4, 0.07, -0.03, 0.08, 0.5);
+      const finR = box(0.08, 0.01, 0.05, 0x8fa8b4, -0.07, -0.03, 0.08, -0.5);
+      const eyeL = ball(0.018, 0x111111, 0.055, 0.04, 0.17), eyeR = ball(0.018, 0x111111, -0.055, 0.04, 0.17);
+      g.add(back, belly, tail, dorsal, finL, finR, eyeL, eyeR);
+      break;
     }
     case 'dragonfly': g.add(box(0.03, 0.03, 0.34, 0x2f6fb0), ball(0.04, 0x2f6fb0, 0, 0, 0.17), box(0.36, 0.005, 0.05, 0xdfeeff, 0, 0.02, 0.07), box(0.32, 0.005, 0.05, 0xdfeeff, 0, 0.02, 0.0)); break;
     case 'woodpecker': g.add(...bird(0x2b2b2b, 0xc0392b, 0x555555, 1.1).children); break;
@@ -74,7 +79,7 @@ export class Visitor {
     if (second !== undefined) { this.tx = (second % N) + 0.5; this.tz = Math.floor(second / N) + 0.5; }
     this.tree = tree ?? { ground: this.ground, top: this.ground + 7, radius: 2.4, trunk: 0.65 };
     const model = buildVisitorModel(def.id);
-    if (model) this.object.add(def.id === 'fish' ? model : mergeModel(model));
+    if (model) this.object.add(mergeModel(model));
     this.object.scale.setScalar(def.motion === 'perch' || def.id === 'kingfisher' || def.id === 'sparrow' ? 1.6 : 1.4);
     this.object.userData.visitor = this;
     this.update(0);
@@ -153,7 +158,8 @@ export class Visitor {
         z = this.hz + Math.cos(t * 0.21) * 2.2;
         // 深い水からはみ出す時は戻る
         if (this.groundAt(x, z) > wl - 2) { x = this.px; z = this.pz; }
-        y = wl - 0.13; // 水面（水面の高さ − 0.15）のすぐ上に影を落とす
+        // 水面（水面の高さ − 0.15）の少し下を泳ぐ。浅いので、水を通して色が見える（深いと水の色に隠れる）
+        y = wl - 0.15 - 0.3 + Math.sin(t * 0.9) * 0.05;
         break;
       }
       case 'glow': return;

@@ -585,6 +585,7 @@ async function main() {
     menuEl.setAttribute('aria-hidden', open ? 'false' : 'true');
     if (open) {
       stroke = null;
+      game.endEdit();
       tooltipEl.style.display = 'none';
       game.cursor.visible = false;
       showSaveStatus();
@@ -626,6 +627,13 @@ async function main() {
     if (e.key === 'Escape') { setMenu(!menuOpen()); return; }
     if (menuOpen()) return; // メニューを開いている間は他のキーを受け付けない
     if ((e.target as HTMLElement).closest?.('input[type="text"], input[type="number"], textarea, select')) return;
+    // Ctrl+Z（Mac は ⌘Z）：エディタで、最後の編集を取り消す。押した位置（e.code）で見るので日本語入力中でも効く
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.code === 'KeyZ') {
+      e.preventDefault();
+      if (mode !== 'edit' || stroke) return;
+      toast(game.undoLast() ?? '取り消せる編集がありません');
+      return;
+    }
     if (MOVE_CODES.includes(e.code)) {
       moveKeys.add(e.code);
       // Space でボタンが押されたり、ページが動いたりしないように
@@ -701,6 +709,7 @@ async function main() {
         return;
       }
       stroke = { visited: new Set(), last: { x: e.clientX, y: e.clientY }, done: 0, msg: null };
+      game.beginEdit(TOOLS.find((x) => x.id === game.tool)!.name); // 1 回のなぞりを、取り消し（Ctrl+Z）の 1 つにする
       setMouse(e.clientX, e.clientY);
       applyStroke(game.use(pickAtMouse(), stroke.visited));
       try { renderer.domElement.setPointerCapture(e.pointerId); } catch { /* 合成イベントなどで失敗しても続ける */ }
@@ -718,6 +727,20 @@ async function main() {
       if (stroke.done > 1) toast(`${stroke.done} マスに「${TOOLS.find((x) => x.id === game.tool)!.name}」を使いました`);
       else if (stroke.msg) toast(stroke.msg);
       stroke = null;
+      game.endEdit();
+      return;
+    }
+    // エディタ：建物を右クリック（ドラッグで回した時は除く）すると、壊すかどうか聞く
+    if (mode === 'edit' && e.button === 2 && downAt && world && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) <= 5) {
+      setMouse(e.clientX, e.clientY);
+      raycaster.setFromCamera(mouse, camera);
+      const b = game.buildingAtRay(raycaster.ray.origin, raycaster.ray.direction);
+      if (b && confirm(`「${b.name}」を壊しますか？（Ctrl+Z で元に戻せます）`)) {
+        game.beginEdit('建物を壊す');
+        const msg = game.removeBuildingAt(b.index);
+        game.endEdit();
+        if (msg) toast(msg);
+      }
       return;
     }
     if (!downAt || !world || e.button !== 0 || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
@@ -1151,6 +1174,15 @@ async function main() {
   });
   $('ecoClear').addEventListener('click', () => { eco.clearVisitors(); toast('訪問者が帰りました'); });
   $<HTMLInputElement>('ecoHighlight').addEventListener('change', (e) => eco.setHighlight((e.target as HTMLInputElement).checked));
+  // 生き物の多さ（倍率）。上げたらすぐ 1 回判定して、増えた上限まで引っ越してくるようにする
+  $<HTMLInputElement>('ecoAbundance').addEventListener('change', (e) => {
+    const k = parseInt((e.target as HTMLInputElement).value, 10) || 1;
+    const up = k > eco.abundance;
+    eco.abundance = k;
+    $('ecoAbundanceLabel').textContent = `×${k}`;
+    if (up) eco.check(lastMoment, performance.now(), Math.random);
+  });
+  $<HTMLInputElement>('ecoAbundance').addEventListener('input', (e) => { $('ecoAbundanceLabel').textContent = `×${(e.target as HTMLInputElement).value}`; });
   $('openAll').addEventListener('click', async () => {
     if (!world || opening) return;
     // 残りの区画を 1 つずつ開く（権利が足りなければ足す）。途中で箱庭が作り直されたら止める
@@ -1452,6 +1484,7 @@ async function main() {
       }
     }
     updateHover();
+    game.syncGhost(); // 建物の見本は、カーソルの枠と一緒に出し入れする
     updateObserve(dt);
 
     // ときどき勝手に波紋

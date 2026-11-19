@@ -117,3 +117,24 @@ describe('dueChecks', () => {
     expect(dueChecks(nowSim, nowSim, 0, 10_000)).toBe(false);
   });
 });
+
+describe('abundance (debug: how many creatures)', () => {
+  const rich = env({ flowers: 100, trees: 100, waterside: 100, deepWater: 100, farmland: 10, crops: 10, grass: 3000 });
+  it('moreChanceWithAbundance', () => {
+    // 珍しくない訪問者（40%）は、2 倍なら 79% でも来る
+    expect(checkEcosystem(state({ abundance: 2 }), env({ flowers: 20 }), spring(), NOW, always(0.79)).arrive).toContain('butterfly');
+    expect(checkEcosystem(state(), env({ flowers: 20 }), spring(), NOW, always(0.79)).arrive).not.toContain('butterfly');
+  });
+  it('moreVisitorsAllowed', () => {
+    const visitors = VISITORS.slice(0, 8).map((v) => ({ id: v.id, leavesAt: NOW + 1e9 }));
+    const r = checkEcosystem(state({ visitors, abundance: 2 }), rich, spring({ hour: 7 }), NOW, always(0));
+    expect(r.arrive.length).toBeGreaterThan(0);
+  });
+  it('moreResidentsAndSeveralMoveInsPerCheck', () => {
+    // 1 区画の上限は 3 匹。3 倍なら 9 匹まで、1 回の判定で 3 匹まで引っ越してくる
+    const full = state({ residents: ['rabbit', 'rabbit', 'rabbit'], openPlots: 1 });
+    expect(checkEcosystem(full, rich, spring(), NOW, always(0)).moveIns).toEqual([]);
+    const r = checkEcosystem({ ...full, abundance: 3 }, rich, spring(), NOW, always(0));
+    expect(r.moveIns.length).toBe(3);
+  });
+});

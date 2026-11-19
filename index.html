@@ -142,6 +142,8 @@
             <button id="ecoCall" title="来るかどうかの判定を、確率 1 で 1 回行う（テスト用）">🐾 生き物を呼ぶ</button>
             <button id="ecoClear" title="訪問者をみんな帰す（テスト用）">訪問者を帰す</button>
             <label title="住人（黄色）と訪問者（水色）に、地形を透かして見える目印を付ける"><input type="checkbox" id="ecoHighlight" /> 生き物を透かして表示</label>
+            <label title="生き物の来る確率・住人と訪問者の上限・1 回に引っ越してくる数を、この倍にする（保存しない）">生き物の多さ <input type="range" id="ecoAbundance" min="1" max="5" step="1" value="1" /></label>
+            <span id="ecoAbundanceLabel">×1</span>
             <label>小物
               <select id="detail" title="木や花のボクセルの細かさ（地面に対する比）">
                 <option value="1">1/1</option>

@@ -79,6 +79,8 @@ export class EcoManager {
   private world: WorldData | null = null;
   private envCache: EnvCounts | null = null;
   private lastCheckSim = 0;
+  /** 生き物の多さの倍率（デバッグ。保存しない）。来る確率・上限・1 回に引っ越してくる数が増える */
+  abundance = 1;
   private lastCheckReal = -Infinity;
   private nextId = 0;
   /** デバッグ：全部の生き物に、透かして見える目印を付ける */
@@ -179,19 +181,25 @@ export class EcoManager {
     // 訪問者のいる場所が、まだ合っているか（埋めた水・耕した花など）。ホタルは場所を持たない
     const input = { world: this.world!, ...this.deps.envInput() };
     const visitors = this.visitors.map((v) => ({ id: v.def.id, leavesAt: v.leavesAt, homeOk: v.def.motion === 'glow' ? undefined : fitsHabitat(input, v.def.habitat, v.home) }));
-    const state: EcoState = { visitors, residents: this.animals.map((a) => a.species), openPlots: countOpen(this.world!.plots) };
+    const state: EcoState = { visitors, residents: this.animals.map((a) => a.species), openPlots: countOpen(this.world!.plots), abundance: this.abundance };
     const r = checkEcosystem(state, this.env(), moment, nowReal, rand);
     let arrived = 0, movedIn = false;
     for (const id of r.leave) this.removeVisitor(id);
     for (const id of r.arrive) if (this.addVisitor(id, nowReal + stayMs(Math.random))) arrived++;
-    if (r.moveIn) {
-      const first = !this.dex[r.moveIn];
-      const a = this.addResident(r.moveIn);
-      if (a) {
-        this.deps.toast(first ? '何かの気配がする…' : `${SPECIES[r.moveIn].name}の${a.name}が引っ越してきた`);
-        movedIn = true;
-      }
+    // 生き物の多さを上げていると、1 回に何匹も引っ越してくる。知らせは 1 回にまとめる
+    const came: string[] = [];
+    let firstSeen = false;
+    for (const sp of r.moveIns) {
+      const first = !this.dex[sp];
+      const a = this.addResident(sp);
+      if (!a) continue;
+      if (first) firstSeen = true;
+      else came.push(`${SPECIES[sp].name}の${a.name}`);
+      movedIn = true;
     }
+    if (firstSeen) this.deps.toast('何かの気配がする…');
+    else if (came.length === 1) this.deps.toast(`${came[0]}が引っ越してきた`);
+    else if (came.length > 1) this.deps.toast(`${came[0]}など ${came.length} 匹が引っ越してきた`);
     if (r.leave.length || arrived || movedIn) this.deps.onChanged();
     return { arrived, left: r.leave.length, movedIn };
   }
