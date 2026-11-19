@@ -6,38 +6,42 @@ describe('buildPrompt', () => {
   it('promptListsWholePalette', () => {
     const p = buildPrompt('');
     for (const c of PALETTE) {
-      expect(p).toContain(c.name);
-      expect(p).toContain('#' + c.hex.toString(16).toUpperCase().padStart(6, '0'));
+      expect(p).toContain(`   * ${c.name}: #${c.hex.toString(16).toUpperCase().padStart(6, '0')} (${c.en})`);
     }
   });
   it('promptStatesLimits', () => {
     const p = buildPrompt('');
     expect(p).toContain('512');
-    expect(p).toContain('192 単位（12 マス）');
-    expect(p).toContain('320 単位（20 マス）');
+    expect(p).toContain('192 units (12 blocks)');
+    expect(p).toContain('320 units (20 blocks)');
     expect(p).toContain('64 KB');
   });
   it('promptKeepsIdea', () => {
-    expect(buildPrompt('青い屋根の灯台')).toContain('青い屋根の灯台');
+    // 利用者が書く所は日本語のまま入る
+    expect(buildPrompt('青い屋根の灯台')).toContain('\n青い屋根の灯台\n');
   });
   it('emptyIdeaLeavesSectionBlank', () => {
-    // 作ってほしいものが空なら、見出しの下は空けておく（利用者が書き足す）
-    expect(buildPrompt('  ')).toContain('## 作ってほしいもの\n\n## 規格（必ず守る）');
+    expect(buildPrompt('  ')).toContain('(it may be written in Japanese)\n\n## Specification (must follow)');
+  });
+  it('restOfThePromptIsEnglish', () => {
+    // 利用者が書く所以外に、日本語（ひらがな・カタカナ・漢字）が入っていない
+    expect(buildPrompt('')).not.toMatch(/[぀-ヿ一-鿿]/);
   });
   it('followsTheTemplate', () => {
     const p = buildPrompt('灯台');
-    expect(p.startsWith('あなたは 3D モデルを作るアシスタントです。次の規格を厳密に守って、ローポリの建物を\nMinecraft Bedrock のジオメトリ JSON（Blockbench の「Bedrock Entity」形式の .geo.json）で作ってください。\n## 作ってほしいもの\n灯台\n')).toBe(true);
-    expect(p).toContain('   * wall：#A07A4E（木の壁）');
-    expect(p).toContain('* めり込んでいる場合はそれが適切かどうか確かめてから出力する。');
-    expect(p.trimEnd().endsWith('* Z-fightingを起こして変になっていないか確認する。')).toBe(true);
+    expect(p.startsWith('You are an assistant that creates 3D models. Strictly follow the specification below and create a low-poly building\nas Minecraft Bedrock geometry JSON (the Blockbench "Bedrock Entity" format, .geo.json).\n## What to build (it may be written in Japanese)\n灯台\n')).toBe(true);
+    expect(p).toContain('* If any parts intersect, check that the intersection is intended before you output.');
+    expect(p.trimEnd().endsWith('* Check that nothing looks broken because of z-fighting.')).toBe(true);
   });
 });
 
 describe('buildFixPrompt', () => {
   it('fixPromptListsIssues', () => {
     const p = buildFixPrompt([{ code: 'no_color', message: 'グループ「door」の色が決まりません。' }, { code: 'too_wide', message: '幅が広すぎます。' }]);
-    expect(p).toContain('グループ「door」の色が決まりません。');
-    expect(p).toContain('幅が広すぎます。');
-    expect(p).toContain('この点だけを直して、JSON 全体をもう一度出してください');
+    // 問題の文は日本語のまま、まわりは英語
+    expect(p).toContain('- グループ「door」の色が決まりません。');
+    expect(p).toContain('- 幅が広すぎます。');
+    expect(p).toContain('Fix only these points and output the whole JSON again.');
+    expect(p.replace(/^- .*$/gm, '')).not.toMatch(/[぀-ヿ一-鿿]/);
   });
 });

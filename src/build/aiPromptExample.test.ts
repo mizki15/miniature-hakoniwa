@@ -4,7 +4,7 @@ import { extractJson, parseBuilding } from './geoParse';
 
 const example = () => {
   const p = buildPrompt('');
-  return parseBuilding(extractJson(p.slice(p.indexOf('## 例'))));
+  return parseBuilding(extractJson(p.slice(p.indexOf('## Example'))));
 };
 
 describe('buildPrompt example', () => {

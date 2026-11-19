@@ -1,6 +1,9 @@
 /**
  * AI（ChatGPT・Claude など）に建物を作ってもらうための説明文と、直してもらうための文。
  * パレットと上限は、検査（geoParse.ts）と同じ定数から書き出す（説明文と検査がずれないように）
+ *
+ * 文面は利用者の決めたテンプレート（2026-11-20）を英語にしたもの。AI は英語の規格のほうが取り違えにくいため、
+ * 利用者が書く「作ってほしいもの」と、検査の問題の文（日本語）以外は英語にする
  */
 import { LIMITS, UNITS_PER_VOXEL } from './limits';
 import { PALETTE } from './palette';
@@ -11,7 +14,7 @@ const hex6 = (h: number) => '#' + h.toString(16).toUpperCase().padStart(6, '0');
 const EXAMPLE = `{
   "format_version": "1.12.0",
   "minecraft:geometry": [{
-    "description": { "identifier": "geometry.chiisana_koya" },
+    "description": { "identifier": "geometry.small_hut" },
     "bones": [
       { "name": "stone", "pivot": [0, 0, 0], "cubes": [ { "origin": [-24, 0, -24], "size": [48, 4, 48] } ] },
       { "name": "wall",  "pivot": [0, 0, 0], "cubes": [ { "origin": [-20, 4, -20], "size": [40, 28, 40] } ] },
@@ -30,38 +33,37 @@ const EXAMPLE = `{
 
 export function buildPrompt(idea: string): string {
   const U = UNITS_PER_VOXEL;
-  const palette = PALETTE.map((p) => `   * ${p.name}：${hex6(p.hex)}（${p.use}）`).join('\n');
-  // 文面は利用者の決めたテンプレート（2026-11-20）。数字とパレットは検査と同じ定数から入れる
-  return `あなたは 3D モデルを作るアシスタントです。次の規格を厳密に守って、ローポリの建物を
-Minecraft Bedrock のジオメトリ JSON（Blockbench の「Bedrock Entity」形式の .geo.json）で作ってください。
-## 作ってほしいもの
+  const palette = PALETTE.map((p) => `   * ${p.name}: ${hex6(p.hex)} (${p.en})`).join('\n');
+  return `You are an assistant that creates 3D models. Strictly follow the specification below and create a low-poly building
+as Minecraft Bedrock geometry JSON (the Blockbench "Bedrock Entity" format, .geo.json).
+## What to build (it may be written in Japanese)
 ${idea.trim()}
-## 規格（必ず守る）
+## Specification (must follow)
 
-* 形式："format_version": "1.12.0"、"minecraft:geometry" の中に 1 つだけ。部品は "bones"（グループ）の中の "cubes"（直方体）で作る
-* 直方体の書き方："origin"（一番小さい角の座標）、"size"（幅・高さ・奥行）、必要なら "pivot"（回転の中心）と "rotation"（度、[x, y, z]）
-* グループも "pivot" と "rotation" を持てる。入れ子にするときは子に "parent": "親の名前" を書く。pivot は親からの相対ではなく、建物全体の座標で書く
-* 形は直方体だけ。"poly_mesh" は使わない。"uv" やテクスチャは要らない（あっても無視される）
-* 単位：${U} 単位 = 1 マス（約 1 m）。Y が上。建物の底は y = 0、中心は x = 0, z = 0 のあたり
-* 向き：正面は −Z（北）。正面から建物を見たとき、右が +X
-* 大きさ：回転した分も含めて、幅・奥行は ${LIMITS.widthUnits} 単位（${LIMITS.widthUnits / U} マス）以内、高さは ${LIMITS.heightUnits} 単位（${LIMITS.heightUnits / U} マス）以内
-* 数：直方体は ${LIMITS.cubes} 個以内、グループは ${LIMITS.bones} 個以内、入れ子は ${LIMITS.depth} 段以内。JSON 全体で ${LIMITS.fileBytes / 1024} KB 以内
-* 色：グループの名前で決まる。名前を次のどれかにするか、「名前_何か」（例：roof_left、wall_front）にする。色のないグループは、親のグループの色になる
+* Format: "format_version": "1.12.0", with exactly one entry in "minecraft:geometry". Build the parts as "cubes" inside "bones" (groups)
+* Cubes: "origin" (the coordinates of the smallest corner), "size" (width, height, depth), and if needed "pivot" (the center of rotation) and "rotation" (degrees, [x, y, z])
+* Groups can also have "pivot" and "rotation". To nest a group, give the child "parent": "<parent name>". Write pivots in the coordinates of the whole building, not relative to the parent
+* Cubes only. Do not use "poly_mesh". "uv" and textures are not needed (they are ignored if present)
+* Units: ${U} units = 1 block (about 1 m). Y is up. The bottom of the building is at y = 0, centered around x = 0, z = 0
+* Orientation: the front faces -Z (north). Seen from the front, +X is on the right
+* Size: including any rotation, width and depth within ${LIMITS.widthUnits} units (${LIMITS.widthUnits / U} blocks), height within ${LIMITS.heightUnits} units (${LIMITS.heightUnits / U} blocks)
+* Counts: at most ${LIMITS.cubes} cubes, ${LIMITS.bones} groups, and ${LIMITS.depth} levels of nesting. The whole JSON must be within ${LIMITS.fileBytes / 1024} KB
+* Colors: decided by the group name. Name each group one of the following, or "<name>_<anything>" (e.g. roof_left, wall_front). A group without a color name uses its parent group's color
 ${palette}
 
-## 例（小さな小屋）
+## Example (small hut)
 ${EXAMPLE}
-## 出力
+## Output
 
-* JSON だけを 1 つのコードブロックで出す。省略しない、「…」を使わない、コメントを書かない。
-* めり込んでいる場合はそれが適切かどうか確かめてから出力する。
-* Z-fightingを起こして変になっていないか確認する。`;
+* Output only the JSON, in a single code block. Do not abbreviate, do not use "...", and do not write comments.
+* If any parts intersect, check that the intersection is intended before you output.
+* Check that nothing looks broken because of z-fighting.`;
 }
 
 export function buildFixPrompt(issues: ParseIssue[]): string {
-  return `さきほどの建物の JSON を箱庭に読み込んだところ、次の問題がありました。
+  return `When the building JSON above was loaded into the diorama, the following problems were found (the messages are in Japanese).
 
 ${issues.map((i) => `- ${i.message}`).join('\n')}
 
-この点だけを直して、JSON 全体をもう一度出してください。規格は最初に伝えたものと同じです。`;
+Fix only these points and output the whole JSON again. The specification is the same as before.`;
 }
