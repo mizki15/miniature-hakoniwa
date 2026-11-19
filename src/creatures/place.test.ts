@@ -34,3 +34,14 @@ describe('placeResident', () => {
     expect(Math.abs(p[0] - 100) + Math.abs(p[1] - 100)).toBeLessThanOrEqual(8);
   });
 });
+
+describe('leaving a building footprint', () => {
+  it('movesOutOfTwelveWideBuilding', () => {
+    // 12×12 の建物の足元（歩けない）のまん中にいても、半径 8 以内の外に出られる
+    const w = testWorld();
+    for (let z = 84; z < 96; z++) for (let x = 84; x < 96; x++) w.walkable[x + z * w.size] = 0;
+    const to = restorePlace(w, 90, 90)!;
+    expect(to).not.toBeNull();
+    expect(w.walkable[to[0] + to[1] * w.size]).toBe(1);
+  });
+});

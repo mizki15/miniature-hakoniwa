@@ -26,7 +26,7 @@ import { loadLocal, requestPersist, saveLocal } from './save/store';
 import { DRIVE_CLIENT_ID, download, remoteInfo, upload } from './save/drive';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
-import type { TerrainParams, WorldData } from './world/terrain';
+import { DEFAULT_PARAMS, type TerrainParams, type WorldData } from './world/terrain';
 import type { InitResult, PlotResult, RemeshResult } from './world/worker';
 import { FRAME, PLOT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect, rightsLeft } from './world/plots';
 import { buildBase, disposeBase } from './render/base';
@@ -157,12 +157,14 @@ async function main() {
 
   // 触れる・育つ要素（道具・畑・植林・地形の編集）
   const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat, buildingMat });
+  game.farm.speed = parseFloat($<HTMLSelectElement>('simSpeed').value); // 時間の流れの初期値（画面の選択）
   // 生き物（住人・訪問者・図鑑・来るかどうかの判定）
   const eco = new EcoManager({
     diorama, envInput: () => game.envInput(), toast: (m, ms) => toast(m, ms), fireflies, treeShape: (c) => game.treeShape(c),
     onChanged: () => { game.unsaved = true; refreshDex(); },
   });
   game.onEnvChanged = () => eco.envDirty();
+  game.onBuildingsPlaced = (cols) => eco.evictFrom(cols); // 建物の足元にいた住人は外へ
   let onGenerated: ((r: InitResult) => void) | null = null;
   const onPlot = (r: PlotResult) => {
     game.addPlot(r);
@@ -730,19 +732,6 @@ async function main() {
       game.endEdit();
       return;
     }
-    // エディタ：建物を右クリック（ドラッグで回した時は除く）すると、壊すかどうか聞く
-    if (mode === 'edit' && e.button === 2 && downAt && world && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) <= 5) {
-      setMouse(e.clientX, e.clientY);
-      raycaster.setFromCamera(mouse, camera);
-      const b = game.buildingAtRay(raycaster.ray.origin, raycaster.ray.direction);
-      if (b && confirm(`「${b.name}」を壊しますか？（Ctrl+Z で元に戻せます）`)) {
-        game.beginEdit('建物を壊す');
-        const msg = game.removeBuildingAt(b.index);
-        game.endEdit();
-        if (msg) toast(msg);
-      }
-      return;
-    }
     if (!downAt || !world || e.button !== 0 || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
     // 見る・ステータス：水面をクリックすると波紋
     setMouse(e.clientX, e.clientY);
@@ -964,7 +953,8 @@ async function main() {
   // スマホは閲覧限定：建物の棚と読み込みは出さない（置いた建物は表示する）
   if (isMobile) $('buildBox').hidden = true;
   let quality: Quality = 'high';
-  let qualityAuto = true;
+  // 画質の初期値は「高」（画面の選択に合わせる）。WebGL2・スマホは重くならないよう「自動」にする（起動の所で切り替える）
+  let qualityAuto = $<HTMLSelectElement>('quality').value === 'auto';
   const setChecked = (id: string, v: boolean) => { $<HTMLInputElement>(id).checked = v; };
   const applyQuality = (q: Quality, regenerateIfNeeded = true) => {
     quality = q;
@@ -996,7 +986,9 @@ async function main() {
   let lastEnv = { season: 0, raining: false };
   /** いまの暦・時刻・天気（生き物の判定に使う） */
   let lastMoment: Moment = { season: 0, seasonProgress: 0, hour: 12, raining: false };
-  $<HTMLSelectElement>('simSpeed').addEventListener('change', (e) => { game.farm.speed = parseFloat((e.target as HTMLSelectElement).value); });
+  /** 時間の流れ（画面の選択）。箱庭を作り直すと畑も作り直されるので、そのたびに合わせる */
+  const simSpeed = () => parseFloat($<HTMLSelectElement>('simSpeed').value);
+  $<HTMLSelectElement>('simSpeed').addEventListener('change', () => { game.farm.speed = simSpeed(); });
   $('skip1').addEventListener('click', () => { game.skip(1, lastEnv); toast('1 時間進めました'); });
   $('skip6').addEventListener('click', () => { game.skip(6, lastEnv); toast('6 時間進めました'); });
 
@@ -1047,7 +1039,7 @@ async function main() {
     (el.nextElementSibling as HTMLOutputElement).value = parseFloat(el.value).toFixed(1);
   };
   PARAM_KEYS.forEach((k) => { paramInput(k).addEventListener('input', () => showParam(k)); showParam(k); });
-  $('paramsReset').addEventListener('click', () => PARAM_KEYS.forEach((k) => { paramInput(k).value = '1'; showParam(k); }));
+  $('paramsReset').addEventListener('click', () => PARAM_KEYS.forEach((k) => { paramInput(k).value = String(DEFAULT_PARAMS[k]); showParam(k); }));
   const readParams = () => Object.fromEntries(PARAM_KEYS.map((k) => [k, parseFloat(paramInput(k).value)])) as unknown as TerrainParams;
   const fInput = $<HTMLInputElement>('fstop');
   const fNumber = () => F_STOPS[parseInt(fInput.value, 10)];
@@ -1113,6 +1105,7 @@ async function main() {
     await startWorld(s.seed, s.detail, s.params, s.flowerStyle, save.plots, save.edits);
     worldSettings = { ...s };
     game.restore(save);
+    game.farm.speed = simSpeed();
     renderShelf();
     // 住人は畑・苗木を戻した後に（苗木の列に住人を戻さないように）
     eco.restore(save.dex ?? {}, save.residents ?? []);
@@ -1331,8 +1324,14 @@ async function main() {
 
   setMode('view');
 
-  // 最初の画質：WebGL2 やスマホは「中」から。重ければ自動で下げる
-  applyQuality(forceWebGL || isMobile || !(renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'medium' : 'high', false);
+  // 最初の画質：初期値は「高」。WebGL2 やスマホは「自動」にして「中」から始め、重ければ自動で下げる
+  const weakDevice = forceWebGL || isMobile || !(renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend;
+  if (weakDevice) { qualityAuto = true; $<HTMLSelectElement>('quality').value = 'auto'; }
+  applyQuality(qualityAuto ? (weakDevice ? 'medium' : 'high') : ($<HTMLSelectElement>('quality').value as Quality), false);
+  // 画面の初期値を、描画と時間の流れ・生き物の多さに反映する（つまみを動かす前から効くように）
+  U.blend.value = parseFloat(blendInput.value);
+  uAO.value = parseFloat(aoInput.value);
+  eco.abundance = parseInt($<HTMLInputElement>('ecoAbundance').value, 10) || 1;
   // 起動：この端末に保存があれば読み込み（閉じていた間の時間も進める）、なければ新しく作る
   try {
     const stored = await loadLocal();

@@ -43,7 +43,8 @@ export interface TerrainParams {
   flowers: number; // 花の密度
 }
 
-export const DEFAULT_PARAMS: TerrainParams = { relief: 1, mountains: 1, water: 1, rocks: 1, forest: 1, flowers: 1 };
+/** 地形のパラメータの初期値（「標準に戻す」もこの値） */
+export const DEFAULT_PARAMS: TerrainParams = { relief: 0.4, mountains: 0.8, water: 1, rocks: 0.8, forest: 0.5, flowers: 1.6 };
 
 /** 枠のぶんの空の世界（まだどの区画も開いていない） */
 export function createWorld(height: number): World {

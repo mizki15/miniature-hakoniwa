@@ -192,6 +192,14 @@ export class Animal {
   /** いる列（保存用。枠の座標） */
   get colXZ(): [number, number] { return [Math.floor(this.pos.x), Math.floor(this.pos.y)]; }
 
+  /** 別の列へ移す（建物が足元に置かれた時など）。向かっていた先は考え直す */
+  moveTo(x: number, z: number) {
+    this.pos.set(x + 0.5, z + 0.5);
+    this.y = this.world.heights[x + z * this.world.size];
+    this.target = null;
+    this.sync();
+  }
+
   private cell(x: number, z: number) {
     const N = this.world.size;
     const ix = Math.floor(x), iz = Math.floor(z);

@@ -244,6 +244,18 @@ export class EcoManager {
     return ok;
   }
 
+  /** 建物の足元（歩けなくなった列）にいる住人を、近くの歩ける列へ移す。めり込んだままにしないため */
+  evictFrom(cols: ReadonlySet<number>) {
+    const w = this.world;
+    if (!w || !cols.size) return;
+    for (const a of this.animals) {
+      const [x, z] = a.colXZ;
+      if (!cols.has(x + z * w.size)) continue;
+      const to = restorePlace(w, x, z) ?? placeResident(w, a.species);
+      if (to) a.moveTo(to[0], to[1]);
+    }
+  }
+
   /** デバッグ：訪問者をみんな帰す */
   clearVisitors() {
     for (const v of [...this.visitors]) this.removeVisitor(v.def.id);

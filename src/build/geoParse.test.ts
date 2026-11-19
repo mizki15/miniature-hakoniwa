@@ -151,16 +151,16 @@ describe('parseBuilding: transforms', () => {
     });
   });
   it('tooWide', () => {
-    const r = parseBuilding(geo([{ name: 'wall', cubes: [cube([-64, 0, -8], [129, 16, 16])] }]));
+    const r = parseBuilding(geo([{ name: 'wall', cubes: [cube([-96, 0, -8], [193, 16, 16])] }]));
     expect(codes(r)).toEqual(['too_wide']);
-    expect(msgs(r)).toContain('8.1');
-    expect(msgs(r)).toContain('8 マス');
+    expect(msgs(r)).toContain('12.1');
+    expect(msgs(r)).toContain('12 マス');
   });
   it('tooTall', () => {
-    expect(codes(parseBuilding(geo([{ name: 'wall', cubes: [cube([-8, 0, -8], [16, 193, 16])] }])))).toEqual(['too_tall']);
+    expect(codes(parseBuilding(geo([{ name: 'wall', cubes: [cube([-8, 0, -8], [16, 321, 16])] }])))).toEqual(['too_tall']);
   });
   it('rotationCountsForBounds', () => {
-    const r = parseBuilding(geo([{ name: 'wall', cubes: [{ origin: [-60, 0, -60], size: [120, 2, 120], pivot: [0, 0, 0], rotation: [0, 45, 0] }] }]));
+    const r = parseBuilding(geo([{ name: 'wall', cubes: [{ origin: [-90, 0, -90], size: [180, 2, 180], pivot: [0, 0, 0], rotation: [0, 45, 0] }] }]));
     expect(codes(r)).toEqual(['too_wide']);
   });
   it('notGrounded', () => {
@@ -189,7 +189,7 @@ describe('parseBuilding: transforms', () => {
 describe('parseBuilding: collects issues across stages', () => {
   it('collectsColorAndSizeIssuesTogether', () => {
     // 色の問題があっても、外形の検査まで進めて両方を伝える
-    const r = parseBuilding(geo([{ name: 'wall', cubes: [cube()] }, { name: 'door', cubes: [cube()] }, { name: 'roof', cubes: [cube([-80, 16, -8], [160, 4, 16])] }]));
+    const r = parseBuilding(geo([{ name: 'wall', cubes: [cube()] }, { name: 'door', cubes: [cube()] }, { name: 'roof', cubes: [cube([-100, 16, -8], [200, 4, 16])] }]));
     expect(codes(r).sort()).toEqual(['no_color', 'too_wide']);
   });
 });

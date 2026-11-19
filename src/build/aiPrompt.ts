@@ -30,30 +30,32 @@ const EXAMPLE = `{
 
 export function buildPrompt(idea: string): string {
   const U = UNITS_PER_VOXEL;
-  const palette = PALETTE.map((p) => `  - ${p.name}：${hex6(p.hex)}（${p.use}）`).join('\n');
+  const palette = PALETTE.map((p) => `   * ${p.name}：${hex6(p.hex)}（${p.use}）`).join('\n');
+  // 文面は利用者の決めたテンプレート（2026-11-20）。数字とパレットは検査と同じ定数から入れる
   return `あなたは 3D モデルを作るアシスタントです。次の規格を厳密に守って、ローポリの建物を
 Minecraft Bedrock のジオメトリ JSON（Blockbench の「Bedrock Entity」形式の .geo.json）で作ってください。
-
 ## 作ってほしいもの
-${idea.trim() || '（ここに作ってほしいものを書いてください）'}
-
+${idea.trim()}
 ## 規格（必ず守る）
-- 形式："format_version": "1.12.0"、"minecraft:geometry" の中に 1 つだけ。部品は "bones"（グループ）の中の "cubes"（直方体）で作る
-- 直方体の書き方："origin"（一番小さい角の座標）、"size"（幅・高さ・奥行）、必要なら "pivot"（回転の中心）と "rotation"（度、[x, y, z]）
-- グループも "pivot" と "rotation" を持てる。入れ子にするときは子に "parent": "親の名前" を書く。pivot は親からの相対ではなく、建物全体の座標で書く
-- 形は直方体だけ。"poly_mesh" は使わない。"uv" やテクスチャは要らない（あっても無視される）
-- 単位：${U} 単位 = 1 マス（約 1 m）。Y が上。建物の底は y = 0、中心は x = 0, z = 0 のあたり
-- 向き：正面は −Z（北）。正面から建物を見たとき、右が +X
-- 大きさ：回転した分も含めて、幅・奥行は ${LIMITS.widthUnits} 単位（${LIMITS.widthUnits / U} マス）以内、高さは ${LIMITS.heightUnits} 単位（${LIMITS.heightUnits / U} マス）以内
-- 数：直方体は ${LIMITS.cubes} 個以内、グループは ${LIMITS.bones} 個以内、入れ子は ${LIMITS.depth} 段以内。JSON 全体で ${LIMITS.fileBytes / 1024} KB 以内
-- 色：グループの名前で決まる。名前を次のどれかにするか、「名前_何か」（例：roof_left、wall_front）にする。色のないグループは、親のグループの色になる
+
+* 形式："format_version": "1.12.0"、"minecraft:geometry" の中に 1 つだけ。部品は "bones"（グループ）の中の "cubes"（直方体）で作る
+* 直方体の書き方："origin"（一番小さい角の座標）、"size"（幅・高さ・奥行）、必要なら "pivot"（回転の中心）と "rotation"（度、[x, y, z]）
+* グループも "pivot" と "rotation" を持てる。入れ子にするときは子に "parent": "親の名前" を書く。pivot は親からの相対ではなく、建物全体の座標で書く
+* 形は直方体だけ。"poly_mesh" は使わない。"uv" やテクスチャは要らない（あっても無視される）
+* 単位：${U} 単位 = 1 マス（約 1 m）。Y が上。建物の底は y = 0、中心は x = 0, z = 0 のあたり
+* 向き：正面は −Z（北）。正面から建物を見たとき、右が +X
+* 大きさ：回転した分も含めて、幅・奥行は ${LIMITS.widthUnits} 単位（${LIMITS.widthUnits / U} マス）以内、高さは ${LIMITS.heightUnits} 単位（${LIMITS.heightUnits / U} マス）以内
+* 数：直方体は ${LIMITS.cubes} 個以内、グループは ${LIMITS.bones} 個以内、入れ子は ${LIMITS.depth} 段以内。JSON 全体で ${LIMITS.fileBytes / 1024} KB 以内
+* 色：グループの名前で決まる。名前を次のどれかにするか、「名前_何か」（例：roof_left、wall_front）にする。色のないグループは、親のグループの色になる
 ${palette}
 
 ## 例（小さな小屋）
 ${EXAMPLE}
-
 ## 出力
-- JSON だけを 1 つのコードブロックで出す。省略しない、「…」を使わない、コメントを書かない`;
+
+* JSON だけを 1 つのコードブロックで出す。省略しない、「…」を使わない、コメントを書かない。
+* めり込んでいる場合はそれが適切かどうか確かめてから出力する。
+* Z-fightingを起こして変になっていないか確認する。`;
 }
 
 export function buildFixPrompt(issues: ParseIssue[]): string {

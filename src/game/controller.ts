@@ -84,6 +84,8 @@ export class GameController {
   /** 次に置く建物の向き */
   buildRot: Rot = 0;
   private placed: PlacedBuilding[] = [];
+  /** 置いた建物の足元の列（歩けない） */
+  private buildingCols = new Set<number>();
   private buildingMeshes: THREE.InstancedMesh[] = [];
   private buildingGeos = new Map<string, THREE.BufferGeometry>();
   /** 最後に pick() に渡した光線（建物を片付ける時の当たりに使う） */
@@ -149,7 +151,10 @@ export class GameController {
     this.world = w;
     this.typeTex = typeTex;
     this.terrainMat = terrainMat;
+    // 時間の流れ（デバッグの早送り）は、作り直した箱庭にも引き継ぐ
+    const speed = this.farm.speed;
     this.farm = new Farm();
+    this.farm.speed = speed;
     this.dirty.clear();
     this.remeshInFlight = false;
     this.edits.clear();
@@ -167,6 +172,7 @@ export class GameController {
     // 置いた建物は箱庭ごと。棚（designs）は新しい箱庭にも持ち越す
     this.placed = [];
     this.buildingMeshes = [];
+    this.buildingCols = new Set();
     // 取り消しの記録は箱庭ごと
     this.undo.clear();
     this.recording = null;
@@ -243,6 +249,8 @@ export class GameController {
   onPlotsChanged: (() => void) | null = null;
   /** 環境（花・木・畑・作物・地形）が変わったかもしれない時に呼ぶ（main が環境の数を数え直す印を付ける） */
   onEnvChanged: (() => void) | null = null;
+  /** 建物の足元が新しく増えた時（main が、そこにいる住人を外へ移す） */
+  onBuildingsPlaced: ((cols: ReadonlySet<number>) => void) | null = null;
 
   /** 環境を数えるための材料（花の列・木の列・畑・作物の数） */
   envInput() {
@@ -373,7 +381,7 @@ export class GameController {
     const w = this.world!;
     const h = w.heights[col];
     const top = h > 0 ? w.voxels[col + (h - 1) * w.size * w.size] : AIR;
-    w.walkable[col] = (top === GRASS || top === SAND || top === DIRT || isFarm(top)) && !this.treeCols.has(col) && h >= w.waterLevel ? 1 : 0;
+    w.walkable[col] = (top === GRASS || top === SAND || top === DIRT || isFarm(top)) && !this.treeCols.has(col) && !this.buildingCols.has(col) && h >= w.waterLevel ? 1 : 0;
   }
 
   // ---------- 取り消し（Ctrl+Z） ----------
@@ -791,6 +799,13 @@ export class GameController {
     this.buildingMeshes = [];
     if (!w) return;
     const half = w.size / 2;
+    // 建物の足元は歩けない（住人・訪問者がめり込まないように）。外れた列は元に戻す
+    const before = this.buildingCols;
+    this.buildingCols = new Set(this.placedWithY().flatMap((p) => footprintCols(p.design, p.rot, p.x, p.z, w.size)));
+    for (const c of before) if (!this.buildingCols.has(c)) this.updateWalkable(c);
+    const added = new Set<number>();
+    for (const c of this.buildingCols) { this.updateWalkable(c); if (!before.has(c)) added.add(c); }
+    if (added.size) this.onBuildingsPlaced?.(added);
     const groups = new Map<string, ReturnType<GameController['placedWithY']>>();
     for (const p of this.placedWithY()) {
       if (!groups.has(p.id)) groups.set(p.id, []);
@@ -809,27 +824,6 @@ export class GameController {
       this.buildingMeshes.push(im);
       this.deps.diorama.add(im);
     }
-  }
-
-  /** 光線が当たる置いた建物（右クリックで壊す時に使う）。index は removeBuildingAt に渡す番号 */
-  buildingAtRay(origin: THREE.Vector3, dir: THREE.Vector3): { index: number; name: string } | null {
-    const w = this.world;
-    if (!w) return null;
-    const list = this.placedWithY();
-    const i = rayHitPlaced(list, [origin.x, origin.y, origin.z], [dir.x, dir.y, dir.z], w.size / 2);
-    return i < 0 ? null : { index: i, name: list[i].design.name };
-  }
-
-  /** 置いた建物を 1 棟取り除く（棚には残る）。知らせの文を返す */
-  removeBuildingAt(index: number): string | null {
-    if (this.locked) return null;
-    const p = this.placedWithY()[index];
-    if (!p) return null;
-    this.placed = this.placed.filter((q) => !(q.id === p.id && q.x === p.x && q.z === p.z && q.rot === p.rot));
-    this.unsaved = true;
-    if (this.recording) this.recording.changed = true;
-    this.rebuildBuildings();
-    return `「${p.design.name}」を壊しました`;
   }
 
   /** 建物の形（種類ごとに 1 度だけ作る。置いた建物と見本で同じものを使う） */

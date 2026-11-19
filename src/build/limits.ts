@@ -7,8 +7,8 @@ export const LIMITS = {
   cubes: 512,
   bones: 128,
   depth: 16,
-  widthUnits: 128,
-  heightUnits: 192,
+  widthUnits: 192,
+  heightUnits: 320,
   groundTolerance: 0.5,
 } as const;
 
