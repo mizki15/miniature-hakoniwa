@@ -11,6 +11,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FIREFLIES_ON, RIPPLES, RIPPLES_ON, U, createDetailMaterial, createTerrainMaterial, createWaterMaterial, fireflyData, rippleData } from './render/materials';
 import { SAMPLES as QUALITY_SAMPLES, nextQuality } from './render/autoQuality';
 import { createDaylight } from './render/daylight';
+import { createShadowSystem } from './render/shadows';
 import { SKY, createPrecipitation, createSkyNode } from './render/sky';
 import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
 import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, weatherAt, type WeatherKind } from './weather';
@@ -90,6 +91,8 @@ async function main() {
   controls.autoRotateSpeed = 0.6;
 
   const daylight = createDaylight(scene);
+  // 影の描き方（ふつう／カスケード影、毎フレーム／間引き）。デバッグで切り替える
+  const shadows = createShadowSystem(scene, daylight.sun);
 
   // ---------- ポストプロセス：AO（GTAO）→ 被写界深度（画面中央にピント） ----------
   const pipeline = new THREE.RenderPipeline(renderer);
@@ -965,8 +968,7 @@ async function main() {
     aoOn = p.ao; dofOn = p.dof; bloomOn = p.bloom;
     setChecked('ssao', aoOn); setChecked('dof', dofOn); setChecked('bloom', bloomOn);
     updatePost();
-    const sh = daylight.sun.shadow;
-    if (sh.mapSize.x !== p.shadow) { sh.mapSize.setScalar(p.shadow); sh.map?.dispose(); (sh as { map: unknown }).map = null; }
+    shadows.setMapSize(p.shadow);
     $('qualityLabel').textContent = qualityAuto ? `→ ${QUALITY_NAMES[q]}` : '';
     if (p.lite !== liteTerrain) { liteTerrain = p.lite; if (regenerateIfNeeded && world) doRegen(true); }
   };
@@ -1168,6 +1170,14 @@ async function main() {
   });
   $('ecoClear').addEventListener('click', () => { eco.clearVisitors(); toast('訪問者が帰りました'); });
   $<HTMLInputElement>('ecoHighlight').addEventListener('change', (e) => eco.setHighlight((e.target as HTMLInputElement).checked));
+  // 影の描き方
+  $<HTMLInputElement>('shadowCascade').addEventListener('change', (e) => { shadows.cascade = (e.target as HTMLInputElement).checked; });
+  const applyShadowEvery = () => {
+    const on = $<HTMLInputElement>('shadowThrottle').checked;
+    shadows.schedule.interval = on ? parseInt($<HTMLSelectElement>('shadowEvery').value, 10) : 1;
+  };
+  $<HTMLInputElement>('shadowThrottle').addEventListener('change', applyShadowEvery);
+  $<HTMLSelectElement>('shadowEvery').addEventListener('change', applyShadowEvery);
   // 生き物の多さ（倍率）。上げたらすぐ 1 回判定して、増えた上限まで引っ越してくるようにする
   $<HTMLInputElement>('ecoAbundance').addEventListener('change', (e) => {
     const k = parseInt((e.target as HTMLInputElement).value, 10) || 1;
@@ -1443,6 +1453,7 @@ async function main() {
     // 影の範囲は箱庭全体ではなく、注目点のまわり（カメラとの距離で決める）。広くなっても影が粗くならない
     const shadowR = Math.min(160, Math.max(48, camera.position.distanceTo(controls.target) * 0.9));
     daylight.apply(hour, focusPoint, shadowR, weatherNow);
+    shadows.update();
     // パネルの見た目を時間帯に合わせる（夜は暗いすりガラス）。明け方・夕方にちらつかないよう幅を持たせる
     const nightUI = document.body.classList.contains('night');
     if (!nightUI && SKY.night.value > 0.65) document.body.classList.add('night');
@@ -1568,7 +1579,7 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { shadows, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {
