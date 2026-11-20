@@ -107,7 +107,7 @@ async function main() {
   const uFocus = uniform(100);
   const uFocal = uniform(30);
   const uBokeh = uniform(1.8);
-  let aaMode: AAMode = 'msaa';
+  let aaMode: AAMode = 'fxaa';
   let renderScale = 1;
   interface ScenePost { scenePass: ReturnType<typeof pass>; aoPass: ReturnType<typeof ao>; color: N; withAO: N; viewZ: N; isSky: N; temporal: { dispose(): void } | null }
   let sp: ScenePost | null = null;
@@ -986,7 +986,7 @@ async function main() {
   const QUALITY: Record<Quality, { pixelRatio: number; ao: boolean; dof: boolean; bloom: boolean; shadow: number; lite: boolean }> = {
     high: { pixelRatio: Math.min(devicePixelRatio, 2), ao: true, dof: true, bloom: true, shadow: 4096, lite: false },
     medium: { pixelRatio: Math.min(devicePixelRatio, 1.25), ao: true, dof: true, bloom: true, shadow: 2048, lite: false },
-    low: { pixelRatio: Math.min(devicePixelRatio, 1) * 0.8, ao: false, dof: false, bloom: false, shadow: 1024, lite: true },
+    low: { pixelRatio: Math.min(devicePixelRatio, 1), ao: false, dof: false, bloom: false, shadow: 1024, lite: true },
   };
   const QUALITY_NAMES: Record<Quality, string> = { high: '高', medium: '中', low: '低' };
   const isMobile = navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) < 820;
@@ -1210,7 +1210,7 @@ async function main() {
   // アンチエイリアスの方法と描く解像度（デバッグ。保存しない）
   const applyAA = () => {
     const m = $<HTMLSelectElement>('aaMode').value;
-    setAntialias(isAAMode(m) ? m : 'msaa', parseFloat($<HTMLSelectElement>('renderScale').value) || 1);
+    setAntialias(isAAMode(m) ? m : 'fxaa', parseFloat($<HTMLSelectElement>('renderScale').value) || 1);
     $('aaBenchLabel').textContent = '';
   };
   $<HTMLSelectElement>('aaMode').addEventListener('change', applyAA);
