@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { WorldData as World } from '../world/terrain';
+import { approach, gaitPose, turnToward, wrapAngle, type Gait } from './motion';
 
 /**
  * 仮の住人（ローポリの動物）。CC0 素材に差し替える前提で、基本形状だけで組み立てている。
@@ -160,6 +161,12 @@ function buildModel(species: Species, color: number): THREE.Group {
 export type Activity = 'walk' | 'rest' | 'sleep';
 export const ACTIVITY_NAMES: Record<Activity, string> = { walk: '散歩中', rest: 'ひと休み', sleep: '眠っている' };
 
+/** 種ごとの歩き方 */
+const GAIT_OF: Record<Species, Gait> = { rabbit: 'hop', squirrel: 'hop', duck: 'waddle', tanuki: 'walk', fox: 'walk', deer: 'walk', hedgehog: 'walk' };
+
+/** 止まっている時のしぐさ。look：あたりを見回す、sniff：地面のにおいをかぐ、still：じっとする */
+type Idle = 'look' | 'sniff' | 'still';
+
 export class Animal {
   readonly object = new THREE.Group();
   readonly name: string;
@@ -173,6 +180,15 @@ export class Animal {
   private idle = 0;
   private phase = Math.random() * 10;
   private heading = Math.random() * Math.PI * 2;
+  /** いまの速さ（急に走り出したり止まったりしないよう、少しずつ変える） */
+  private vel = 0;
+  private gesture: Idle = 'still';
+  private gestureT = 0;
+  /** 見回す時の首の向き（体の向きからのずれ） */
+  private look = 0;
+  private lookTo = 0;
+  private sniff = 0;
+  private t = Math.random() * 100;
 
   constructor(readonly species: Species, color: number, private world: World, x: number, z: number, id: number, name?: string) {
     this.id = id;
@@ -180,11 +196,14 @@ export class Animal {
     this.favorite = FAVORITES[(id * 7 + species.length) % FAVORITES.length];
     this.model = mergeModel(buildModel(species, color));
     this.object.add(this.model);
+    // 傾きは体の向きを決めた後に、体から見て前後・左右に付ける
+    this.model.rotation.order = 'YXZ';
     // 見下ろし視点で見つけやすいよう、ボクセル 1 個分より少し大きめにする
     this.object.scale.setScalar(1.7);
     this.object.userData.animal = this;
     this.pos.set(x + 0.5, z + 0.5);
     this.y = world.heights[x + z * world.size];
+    this.object.rotation.y = this.heading;
     this.sync();
   }
 
@@ -197,6 +216,7 @@ export class Animal {
     this.pos.set(x + 0.5, z + 0.5);
     this.y = this.world.heights[x + z * this.world.size];
     this.target = null;
+    this.vel = 0;
     this.sync();
   }
 
@@ -207,14 +227,28 @@ export class Animal {
     return { walk: this.world.walkable[ix + iz * N] === 1, h: this.world.heights[ix + iz * N] };
   }
 
+  /** 次の行き先。たいていは今向いている方の前のほう（行ったり来たりしない） */
   private pickTarget() {
     for (let tries = 0; tries < 20; tries++) {
-      const a = Math.random() * Math.PI * 2;
+      const ahead = tries < 12 && Math.random() < 0.7;
+      const a = ahead ? this.heading + (Math.random() - 0.5) * 2.2 : Math.random() * Math.PI * 2;
       const r = 2 + Math.random() * 7;
-      const tx = this.pos.x + Math.cos(a) * r, tz = this.pos.y + Math.sin(a) * r;
-      const c = this.cell(tx, tz);
-      if (c?.walk) { this.target = new THREE.Vector2(tx, tz); return; }
+      // 向きは atan2(dx, dz)（前は +z）
+      const tx = this.pos.x + Math.sin(a) * r, tz = this.pos.y + Math.cos(a) * r;
+      if (this.clearPath(tx, tz)) { this.target = new THREE.Vector2(tx, tz); return; }
     }
+  }
+
+  /** まっすぐ歩いて行けるか（途中に水・木・高い段差がない）。崖の前で行ったり来たりしないように、道を先に確かめる */
+  private clearPath(tx: number, tz: number) {
+    const dx = tx - this.pos.x, dz = tz - this.pos.y, n = Math.ceil(Math.hypot(dx, dz) / 0.4);
+    let prev = this.cell(this.pos.x, this.pos.y);
+    for (let i = 1; i <= n; i++) {
+      const c = this.cell(this.pos.x + (dx * i) / n, this.pos.y + (dz * i) / n);
+      if (!c?.walk || (prev && Math.abs(c.h - prev.h) > 1)) return false;
+      prev = c;
+    }
+    return true;
   }
 
   private isAsleep(hour: number) {
@@ -222,10 +256,20 @@ export class Animal {
     return s > w ? hour >= s || hour < w : hour >= s && hour < w;
   }
 
+  /** 止まっている間のしぐさを時々替える */
+  private nextGesture() {
+    const r = Math.random();
+    this.gesture = r < 0.4 ? 'look' : r < 0.7 ? 'sniff' : 'still';
+    this.gestureT = 1.2 + Math.random() * 2.2;
+    this.lookTo = this.gesture === 'look' ? (Math.random() - 0.5) * 1.6 : 0;
+  }
+
   update(dt: number, hour: number) {
+    this.t += dt;
     const asleep = this.isAsleep(hour);
     const { speed, hop: hopH } = this.info;
-    let moving = false;
+    const gait = GAIT_OF[this.species];
+    let want = 0; // 出したい速さ
 
     if (!asleep && this.idle <= 0 && !this.target) this.pickTarget();
     if (this.idle > 0) this.idle -= dt;
@@ -237,29 +281,58 @@ export class Animal {
         this.target = null;
         this.idle = 1 + Math.random() * 4;
       } else {
-        const step = Math.min(dist, speed * dt);
-        const nx = this.pos.x + (d.x / dist) * step, nz = this.pos.y + (d.y / dist) * step;
-        const here = this.cell(this.pos.x, this.pos.y), next = this.cell(nx, nz);
-        if (!next || !next.walk || (here && Math.abs(next.h - here.h) > 1)) {
-          this.target = null; // 段差・水・木で止まって考え直す
-          this.idle = 0.5;
-        } else {
-          this.pos.set(nx, nz);
-          this.heading = Math.atan2(d.x, d.y);
-          moving = true;
-        }
+        // 行き先へ向きを変えてから歩き出す（大きく向きを変える時はその場で回る）
+        const face = Math.atan2(d.x, d.y);
+        this.heading = turnToward(this.heading, face, dt * (3 + speed));
+        const off = Math.abs(wrapAngle(face - this.heading));
+        // 着く少し前から速さを落とす
+        want = off > 0.9 ? 0 : speed * Math.min(1, dist / 0.8) * (1 - off / 0.9 * 0.6);
+      }
+    }
+    this.vel = approach(this.vel, want, dt * speed * (want > this.vel ? 3 : 5));
+    let moving = this.vel > 0.02;
+    if (moving) {
+      const step = this.vel * dt;
+      const nx = this.pos.x + Math.sin(this.heading) * step, nz = this.pos.y + Math.cos(this.heading) * step;
+      const here = this.cell(this.pos.x, this.pos.y), next = this.cell(nx, nz);
+      if (!next || !next.walk || (here && Math.abs(next.h - here.h) > 1)) {
+        this.target = null; // 段差・水・木で止まって考え直す
+        this.idle = 0.5;
+        this.vel = 0;
+        moving = false;
+      } else {
+        this.pos.set(nx, nz);
+        // 歩いた距離の分だけ足取りを進める（速いほど足取りも速い）
+        this.phase += step * (gait === 'hop' ? 4.2 : gait === 'waddle' ? 7 : 5.5);
       }
     }
     this.activity = asleep ? 'sleep' : moving ? 'walk' : 'rest';
 
+    // 止まっている時のしぐさ
+    if (!moving && !asleep) {
+      this.gestureT -= dt;
+      if (this.gestureT <= 0) this.nextGesture();
+    } else if (this.gesture !== 'still') {
+      this.gesture = 'still';
+      this.lookTo = 0;
+    }
+    this.look += (this.lookTo - this.look) * Math.min(1, dt * 3);
+    const sniffTo = this.gesture === 'sniff' ? 0.22 + Math.max(0, Math.sin(this.t * 9)) * 0.06 : 0;
+    this.sniff += (sniffTo - this.sniff) * Math.min(1, dt * 5);
+
     const c = this.cell(this.pos.x, this.pos.y);
     if (c) this.y += (c.h - this.y) * Math.min(1, dt * 10);
-    this.phase += dt * (moving ? 9 : 2);
-    this.model.position.y = moving ? Math.abs(Math.sin(this.phase)) * hopH : 0;
-    // 眠っている時は少し縮こまる
-    const s = asleep ? 0.85 : 1;
-    this.model.scale.set(1, s, 1);
-    this.object.rotation.y += ((this.heading - this.object.rotation.y + Math.PI * 3) % (Math.PI * 2) - Math.PI) * Math.min(1, dt * 8);
+    // 坂では体を前後に傾ける（登りは鼻先が上がる）
+    const ahead = this.cell(this.pos.x + Math.sin(this.heading) * 0.6, this.pos.y + Math.cos(this.heading) * 0.6);
+    const slope = c && ahead?.walk ? Math.max(-1, Math.min(1, ahead.h - c.h)) : 0;
+
+    const pose = gaitPose(gait, this.phase, hopH, Math.min(1, this.vel / speed));
+    // 眠っている時は少し縮こまり、ゆっくり息をする
+    const breathe = asleep ? 0.85 + Math.sin(this.t * 1.6) * 0.025 : 1;
+    this.model.position.y = pose.lift;
+    this.model.scale.set(1 + (1 - pose.squash) * 0.5, breathe * pose.squash, 1);
+    this.model.rotation.set(pose.pitch + this.sniff - slope * 0.25, asleep ? 0 : this.look, pose.roll);
+    this.object.rotation.y = this.heading;
     this.sync();
   }
 

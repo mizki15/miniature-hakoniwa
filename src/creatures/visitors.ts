@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import type { WorldData } from '../world/terrain';
 import type { VisitorDef } from '../eco/species';
 import { mergeModel } from './animals';
+import { hopArc, turnToward } from './motion';
 
 export interface TreeShape { ground: number; top: number; radius: number; trunk: number }
 
@@ -59,13 +60,30 @@ function buildVisitorModel(id: VisitorDef['id']): THREE.Group | null {
   return g;
 }
 
+const smooth = (u: number) => u * u * (3 - 2 * u);
+
 export class Visitor {
   readonly object = new THREE.Group();
+  /** 形（羽ばたき・つぶれは、この形の大きさを変えて見せる） */
+  private model: THREE.Object3D | null = null;
   private hx: number; private hz: number; private ground: number;
   private t = Math.random() * 100;
   private px: number; private pz: number; private tx: number; private tz: number;
+  /** 跳ねる・はう生き物の、次に動き出すまでの時間（ミツバチは花の上で止まっている時間） */
   private hopT = 0;
+  /** 1 回の跳ねの進み（0..1）と、その跳ねの出発点・着く点 */
+  private hopU = 1;
+  private hop0 = { x: 0, z: 0 }; private hop1 = { x: 0, z: 0 };
   private heading = 0;
+  /** チョウ：飛ぶ／花にとまる。トンボ：すっと移る／止まって浮かぶ */
+  private mode: 'fly' | 'rest' = 'fly';
+  private modeT = 2 + Math.random() * 4;
+  /** チョウ・トンボの、いまの位置（fx, fz, 地面からの高さ fy）と次の場所（gx, gz） */
+  private fx: number; private fz: number; private fy = 1; private gx: number; private gz: number;
+  /** ミツバチの行き来の進み（0..1）と向き */
+  private beeU = 0; private beeDir = 1;
+  /** カワセミの飛び込みの残り（1 → 0） */
+  private dive = 0;
 
   /** とまる木の形（キツツキ・シマエナガ・フクロウ） */
   private tree: TreeShape;
@@ -76,11 +94,14 @@ export class Visitor {
     this.hx = (home % N) + 0.5; this.hz = Math.floor(home / N) + 0.5;
     this.ground = world.heights[home];
     this.px = this.tx = this.hx; this.pz = this.tz = this.hz;
+    this.fx = this.gx = this.hx; this.fz = this.gz = this.hz;
     if (second !== undefined) { this.tx = (second % N) + 0.5; this.tz = Math.floor(second / N) + 0.5; }
     this.tree = tree ?? { ground: this.ground, top: this.ground + 7, radius: 2.4, trunk: 0.65 };
     const model = buildVisitorModel(def.id);
-    if (model) this.object.add(mergeModel(model));
+    if (model) { this.model = mergeModel(model); this.object.add(this.model); }
     this.object.scale.setScalar(def.motion === 'perch' || def.id === 'kingfisher' || def.id === 'sparrow' ? 1.6 : 1.4);
+    // 向きを決めた後に、体から見て前後へ傾ける（つつく・跳ぶ）
+    this.object.rotation.order = 'YXZ';
     this.object.userData.visitor = this;
     this.update(0);
   }
@@ -94,53 +115,162 @@ export class Visitor {
     return this.world.heights[ix + iz * N] || this.ground;
   }
 
+  private walkable(x: number, z: number) {
+    const N = this.world.size, ix = Math.floor(x), iz = Math.floor(z);
+    return ix >= 0 && iz >= 0 && ix < N && iz < N && this.world.walkable[ix + iz * N] === 1;
+  }
+
   /** 近くの歩ける列（跳ねる・はう生き物の次の行き先） */
   private nextWalk(r: number) {
-    const N = this.world.size;
     for (let i = 0; i < 10; i++) {
       const x = this.hx + (Math.random() - 0.5) * 2 * r, z = this.hz + (Math.random() - 0.5) * 2 * r;
-      const ix = Math.floor(x), iz = Math.floor(z);
-      if (ix >= 0 && iz >= 0 && ix < N && iz < N && this.world.walkable[ix + iz * N]) { this.tx = x; this.tz = z; return; }
+      if (this.walkable(x, z)) { this.tx = x; this.tz = z; return; }
     }
+  }
+
+  /** 家のまわりの、飛んで行く次の場所 */
+  private nextSpot(r: number) {
+    const a = Math.random() * Math.PI * 2, d = r * (0.3 + Math.random() * 0.7);
+    this.gx = this.hx + Math.cos(a) * d; this.gz = this.hz + Math.sin(a) * d;
   }
 
   update(dt: number) {
     this.t += dt;
     const t = this.t, half = this.world.size / 2, wl = this.world.waterLevel;
     let x = this.px, z = this.pz, y = this.ground;
+    let pitch = 0, flap = 1;
+    let face: number | null = null; // 決まった向き（null なら進む方を向く）
     switch (this.def.motion) {
       case 'fly': {
-        if (this.def.id === 'bee') {
-          // 花と作物の間を行き来する
-          const k = (Math.sin(t * 0.35) + 1) / 2;
-          x = this.hx + (this.tx - this.hx) * k + Math.sin(t * 7) * 0.25;
-          z = this.hz + (this.tz - this.hz) * k + Math.cos(t * 6) * 0.25;
-          y = this.groundAt(x, z) + 0.9 + Math.sin(t * 9) * 0.1;
+        const id = this.def.id;
+        if (id === 'bee') {
+          // 花と作物の間を行き来し、着くたびに少し止まって蜜を集める
+          if (this.hopT > 0) this.hopT -= dt;
+          else {
+            this.beeU += this.beeDir * dt * 0.45;
+            if (this.beeU >= 1 || this.beeU <= 0) { this.beeU = Math.min(1, Math.max(0, this.beeU)); this.beeDir *= -1; this.hopT = 1.2 + Math.random() * 1.5; }
+          }
+          const k = smooth(this.beeU);
+          const busy = this.hopT > 0; // 花の上で止まっている
+          x = this.hx + (this.tx - this.hx) * k + Math.sin(t * 7) * (busy ? 0.08 : 0.2);
+          z = this.hz + (this.tz - this.hz) * k + Math.cos(t * 6) * (busy ? 0.08 : 0.2);
+          y = this.groundAt(x, z) + (busy ? 0.55 : 0.9) + Math.sin(t * 13) * 0.05;
+          flap = 0.6 + Math.abs(Math.sin(t * 40)) * 0.4;
+        } else if (id === 'butterfly') {
+          // ひらひら飛び、時々花にとまって羽をゆっくり開け閉めする
+          this.modeT -= dt;
+          if (this.modeT <= 0) {
+            this.mode = this.mode === 'fly' ? 'rest' : 'fly';
+            this.modeT = this.mode === 'fly' ? 4 + Math.random() * 5 : 2 + Math.random() * 3;
+            if (this.mode === 'fly') this.nextSpot(2.5);
+          }
+          if (this.mode === 'fly') {
+            if (Math.hypot(this.gx - this.fx, this.gz - this.fz) < 0.3) this.nextSpot(2.5);
+            const dx = this.gx - this.fx, dz = this.gz - this.fz, d = Math.hypot(dx, dz) || 1;
+            // まっすぐ行かず、ふらふらと寄り道しながら向かう
+            const wob = Math.sin(t * 2.3) * 0.9 + Math.sin(t * 5.1) * 0.4;
+            this.fx += (dx / d - (dz / d) * wob) * dt * 0.9;
+            this.fz += (dz / d + (dx / d) * wob) * dt * 0.9;
+            const beat = Math.abs(Math.sin(t * 11));
+            this.fy += (1.1 + beat * 0.3 - this.fy) * Math.min(1, dt * 4); // 羽ばたくたびに少し浮く
+            flap = 0.2 + beat * 0.8;
+          } else {
+            this.fy += (0.15 - this.fy) * Math.min(1, dt * 3);
+            flap = 0.35 + Math.abs(Math.sin(t * 1.5)) * 0.65;
+            face = this.heading;
+          }
+          x = this.fx; z = this.fz;
+          y = Math.max(this.groundAt(x, z), wl) + this.fy;
+        } else if (id === 'dragonfly') {
+          // すっと移って、止まって浮かぶ、をくり返す
+          this.modeT -= dt;
+          if (this.modeT <= 0) {
+            this.mode = this.mode === 'fly' ? 'rest' : 'fly';
+            this.modeT = this.mode === 'fly' ? 0.5 : 1 + Math.random() * 2;
+            if (this.mode === 'fly') this.nextSpot(4);
+          }
+          const k = Math.min(1, dt * (this.mode === 'fly' ? 7 : 1.5));
+          this.fx += (this.gx - this.fx) * k; this.fz += (this.gz - this.fz) * k;
+          x = this.fx; z = this.fz;
+          y = Math.max(this.groundAt(x, z), wl) + 1.2 + Math.sin(t * 2) * 0.12;
+          if (this.mode === 'rest') face = this.heading; // 浮かんでいる間は向きを変えない
+          flap = 0.75 + Math.abs(Math.sin(t * 45)) * 0.25;
         } else {
-          const r = this.def.id === 'dragonfly' ? 4 : this.def.id === 'kingfisher' ? 2.5 : 2.5;
-          const sp = this.def.id === 'dragonfly' ? 0.9 : this.def.id === 'kingfisher' ? 0.5 : 0.45;
-          x = this.hx + Math.sin(t * sp) * r;
-          z = this.hz + Math.sin(t * sp * 2) * r * 0.5;
+          // カワセミ：水辺をまわり、時々水へ飛び込む
+          x = this.hx + Math.sin(t * 0.5) * 2.5;
+          z = this.hz + Math.sin(t * 1) * 1.25;
+          this.modeT -= dt;
+          if (this.modeT <= 0 && this.dive <= 0) { this.dive = 1; this.modeT = 7 + Math.random() * 6; }
+          let drop = 0;
+          if (this.dive > 0) {
+            this.dive = Math.max(0, this.dive - dt * 0.9);
+            const u = 1 - this.dive;
+            drop = u < 0.35 ? smooth(u / 0.35) : 1 - smooth((u - 0.35) / 0.65); // すっと落ちて、ゆっくり上がる
+            pitch = u < 0.35 ? 0.9 : -0.4; // 落ちる時は頭から、上がる時は上を向く
+          }
           const base = Math.max(this.groundAt(x, z), wl);
-          y = base + (this.def.id === 'kingfisher' ? 2 : 1.2) + (this.def.id === 'butterfly' ? Math.abs(Math.sin(t * 6)) * 0.35 : Math.sin(t * 2) * 0.15);
+          y = base + 2 - drop * 2 + Math.sin(t * 2) * 0.15 * (1 - drop);
         }
         break;
       }
-      case 'hop': case 'crawl': {
-        const speed = this.def.motion === 'crawl' ? 0.08 : 1.6;
+      case 'crawl': {
+        // カタツムリ：伸び縮みしながら、ゆっくりはう
         const dx = this.tx - this.px, dz = this.tz - this.pz, d = Math.hypot(dx, dz);
-        if (d < 0.05) { this.hopT -= dt; if (this.hopT <= 0) { this.nextWalk(this.def.id === 'frog' ? 2 : 3); this.hopT = 1 + Math.random() * 3; } }
+        let stretch = 1;
+        if (d < 0.05) { this.hopT -= dt; if (this.hopT <= 0) { this.nextWalk(3); this.hopT = 1 + Math.random() * 3; } }
         else {
-          const s = Math.min(d, speed * dt);
+          const pulse = 0.5 + Math.sin(t * 3) * 0.5;
+          const s = Math.min(d, 0.16 * pulse * dt);
           const nx = this.px + (dx / d) * s, nz = this.pz + (dz / d) * s;
-          const N = this.world.size, ix = Math.floor(nx), iz = Math.floor(nz);
-          // 水・木・段差の列には入らない（止まって次の行き先を考える）
-          if (ix >= 0 && iz >= 0 && ix < N && iz < N && this.world.walkable[ix + iz * N]) { this.px = nx; this.pz = nz; }
-          else { this.tx = this.px; this.tz = this.pz; }
+          if (this.walkable(nx, nz)) { this.px = nx; this.pz = nz; } else { this.tx = this.px; this.tz = this.pz; }
+          stretch = 0.9 + pulse * 0.2;
         }
+        if (this.model) this.model.scale.set(1, 1, stretch);
         x = this.px; z = this.pz;
-        const moving = d >= 0.05;
-        y = this.groundAt(x, z) + (moving && this.def.motion === 'hop' ? Math.abs(Math.sin(t * 10)) * 0.25 : 0);
+        y = this.groundAt(x, z);
+        break;
+      }
+      case 'hop': {
+        // スズメ：小さく何度か跳ねて、止まって地面をつつく。カエル：大きく 1 回跳んで、しばらくじっとする
+        const frog = this.def.id === 'frog';
+        const hopLen = frog ? 1.3 : 0.45, hopDur = frog ? 0.45 : 0.18, hopH = frog ? 0.55 : 0.18;
+        let squash = 1;
+        if (this.hopU < 1) {
+          this.hopU = Math.min(1, this.hopU + dt / hopDur);
+          x = this.hop0.x + (this.hop1.x - this.hop0.x) * this.hopU;
+          z = this.hop0.z + (this.hop1.z - this.hop0.z) * this.hopU;
+          y = this.groundAt(x, z) + hopArc(this.hopU) * hopH;
+          pitch = (this.hopU - 0.5) * (frog ? 0.7 : 0.4); // 跳ぶ時は上を向き、着地で前へ
+          if (frog) squash = 1 + hopArc(this.hopU) * 0.25; // 跳んでいる間は体が伸びる
+          if (this.hopU >= 1) {
+            // スズメは続けて跳ねることが多い。時々止まってつつく
+            this.hopT = frog ? 0.8 + Math.random() * 2.5 : Math.random() < 0.35 ? 0.6 + Math.random() * 1.2 : 0.06;
+          }
+          face = this.heading;
+        } else {
+          this.hopT -= dt;
+          x = this.px; z = this.pz;
+          y = this.groundAt(x, z);
+          // 止まっている間：スズメは地面をつつく、カエルはのどをふくらませる
+          if (!frog && this.hopT > 0.1) pitch = Math.max(0, Math.sin(t * 14)) * 0.6;
+          if (frog) squash = 0.94 + Math.sin(t * 5) * 0.03;
+          if (this.hopT <= 0) {
+            if (Math.hypot(this.tx - this.px, this.tz - this.pz) < 0.1) this.nextWalk(frog ? 2 : 3);
+            const dx = this.tx - this.px, dz = this.tz - this.pz, d = Math.hypot(dx, dz);
+            if (d >= 0.1) {
+              const s = Math.min(d, hopLen);
+              const nx = this.px + (dx / d) * s, nz = this.pz + (dz / d) * s;
+              // 水・木・段差の列には入らない（止まって次の行き先を考える）
+              if (this.walkable(nx, nz)) {
+                this.hop0 = { x: this.px, z: this.pz }; this.hop1 = { x: nx, z: nz }; this.hopU = 0;
+                this.heading = Math.atan2(dx, dz);
+              } else { this.tx = this.px; this.tz = this.pz; }
+            }
+            this.hopT = 0.3 + Math.random();
+          }
+          face = this.heading;
+        }
+        if (this.model && frog) { const w = 1 / Math.sqrt(squash); this.model.scale.set(w, squash, w); }
         break;
       }
       case 'perch': {
@@ -150,7 +280,13 @@ export class Visitor {
         const up = this.def.id === 'woodpecker' ? h * 0.18 + Math.floor(t / 4) % 2 * 0.25 : this.def.id === 'longtailedTit' ? h * 0.45 : h + 0.05;
         x = this.hx + off; z = this.hz;
         y = tr.ground + up;
-        if (this.def.id === 'woodpecker') x -= Math.max(0, Math.sin(t * 18)) * 0.04; // こつこつ
+        if (this.def.id === 'woodpecker') {
+          // こつこつ：何回か続けてつつき、少し休む
+          const peck = (t % 1.6) < 0.7 ? Math.max(0, Math.sin(t * 22)) : 0;
+          x -= peck * 0.05; pitch = peck * 0.35;
+        } else if (this.def.id === 'longtailedTit') {
+          pitch = Math.max(0, Math.sin(t * 3)) ** 4 * 0.3; // 時々首をかしげる
+        }
         break;
       }
       case 'swim': {
@@ -165,10 +301,20 @@ export class Visitor {
       case 'glow': return;
     }
     const mx = x - this.px, mz = z - this.pz;
-    if (Math.abs(mx) + Math.abs(mz) > 1e-4) this.heading = Math.atan2(mx, mz);
+    if (face === null && Math.abs(mx) + Math.abs(mz) > 1e-4) {
+      // 向きはなめらかに変える（トンボはすばやく、魚はゆっくり）
+      const rate = this.def.id === 'dragonfly' ? 20 : this.def.motion === 'swim' ? 3 : 8;
+      this.heading = dt > 0 ? turnToward(this.heading, Math.atan2(mx, mz), dt * rate) : Math.atan2(mx, mz);
+    }
+    // 跳ねている間は、着いた点ではなく今の点を覚える（次の跳ねの出発点は着いた点）
     this.px = x; this.pz = z;
     this.object.position.set(x - half, y, z - half);
     this.object.rotation.y = this.def.motion === 'perch' ? (this.def.id === 'woodpecker' ? -Math.PI / 2 : Math.floor(t / 6) * 1.3) : this.heading;
+    this.object.rotation.x = pitch;
+    // 羽ばたき：チョウ・ミツバチ・トンボは横幅を縮めて、羽を閉じたように見せる
+    if (this.model && (this.def.id === 'butterfly' || this.def.id === 'bee' || this.def.id === 'dragonfly')) this.model.scale.set(flap, 1, 1);
+    // 魚は体を左右にくねらせる
+    if (this.def.motion === 'swim') this.object.rotation.z = Math.sin(t * 6) * 0.08;
   }
 
   dispose() {
