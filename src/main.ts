@@ -1,5 +1,10 @@
 import * as THREE from 'three/webgpu';
-import { float, fog, packNormalToRGB, rangeFogFactor, unpackRGBToNormal, mix, mrt, normalView, output, pass, sample, uniform, vec4 } from 'three/tsl';
+import { float, fog, packNormalToRGB, rangeFogFactor, unpackRGBToNormal, mix, mrt, normalView, output, pass, sample, uniform, vec4, velocity } from 'three/tsl';
+import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
+import { smaa } from 'three/addons/tsl/display/SMAANode.js';
+import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { taau } from 'three/addons/tsl/display/TAAUNode.js';
+import { AA_NAMES, aaSpec, isAAMode, type AAMode } from './render/antialias';
 import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { Fireflies } from './creatures/fireflies';
@@ -54,7 +59,8 @@ async function main() {
   const forceWebGL = new URLSearchParams(location.search).has('webgl');
   // ?gputime を付けると GPU の処理時間を計測する（計測自体が重くなる環境があるので既定は OFF）
   const trackTimestamp = new URLSearchParams(location.search).has('gputime');
-  const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL, trackTimestamp });
+  // 画面そのものには MSAA をかけない（場面はポストプロセスの中で描くので、アンチエイリアスはそこで選ぶ。render/antialias.ts）
+  const renderer = new THREE.WebGPURenderer({ antialias: false, forceWebGL, trackTimestamp });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   // 表示上の大きさは CSS（100%）に任せる。第 3 引数を false にしないと、最初の大きさが
   // canvas の style に px で固定され、全画面などで大きくなった時に余白（背景色）が出る
@@ -94,40 +100,70 @@ async function main() {
   // 影の描き方（ふつう／カスケード影、毎フレーム／間引き）。デバッグで切り替える
   const shadows = createShadowSystem(scene, daylight.sun);
 
-  // ---------- ポストプロセス：AO（GTAO）→ 被写界深度（画面中央にピント） ----------
+  // ---------- ポストプロセス：（時間方向のアンチエイリアス）→ AO（GTAO）→ 被写界深度（画面中央にピント）→ ブルーム →（FXAA・SMAA） ----------
+  // アンチエイリアスの方法と、場面を描く解像度はデバッグで切り替える。切り替えると場面の描き方ごと作り直す
   const pipeline = new THREE.RenderPipeline(renderer);
-  const scenePass = pass(scene, camera);
-  scenePass.setMRT(mrt({ output, normal: packNormalToRGB(normalView) }));
-  const color = scenePass.getTextureNode('output');
-  const normalTex = scenePass.getTextureNode('normal');
-  const depthTex = scenePass.getTextureNode('depth');
-  const viewZ = scenePass.getViewZNode();
-
-  const sceneNormal = sample((uv: N) => unpackRGBToNormal((normalTex as N).sample(uv)));
-  const aoPass = ao(depthTex, sceneNormal, camera);
-  aoPass.resolutionScale = 0.5;
-  aoPass.radius.value = 1.6; // ボクセル 1〜2 個分くらいの範囲の隅を暗く
-  aoPass.thickness.value = 2;
-  aoPass.scale.value = 1.6;
-  aoPass.distanceFallOff.value = 1;
   const uAO = uniform(1);
-  // GTAO はサンプルのノイズが粒状に見えるので、深度と法線を見ながらぼかして消す
-  const aoValue = (denoise(aoPass.getTextureNode(), depthTex, sceneNormal, camera) as N).r;
-  const withAO = vec4((color as N).rgb.mul(mix(float(1), aoValue, uAO)), 1);
-
   const uFocus = uniform(100);
   const uFocal = uniform(30);
   const uBokeh = uniform(1.8);
-  const isSky = (depthTex as N).r.greaterThanEqual(0.99999);
+  let aaMode: AAMode = 'msaa';
+  let renderScale = 1;
+  interface ScenePost { scenePass: ReturnType<typeof pass>; aoPass: ReturnType<typeof ao>; color: N; withAO: N; viewZ: N; isSky: N; temporal: { dispose(): void } | null }
+  let sp: ScenePost | null = null;
+  const buildScenePost = (): ScenePost => {
+    const spec = aaSpec(aaMode);
+    const scenePass = pass(scene, camera, { samples: spec.samples });
+    scenePass.setMRT(mrt(spec.velocity ? { output, normal: packNormalToRGB(normalView), velocity } : { output, normal: packNormalToRGB(normalView) }));
+    scenePass.setResolutionScale(renderScale);
+    const raw = scenePass.getTextureNode('output');
+    const normalTex = scenePass.getTextureNode('normal');
+    const depthTex = scenePass.getTextureNode('depth');
+    const viewZ = scenePass.getViewZNode();
+    // 時間方向の方法は、場面の色そのものにかける（AO などはその後）
+    let temporal: (N & { dispose(): void }) | null = null;
+    if (spec.temporal !== 'none') {
+      const vel = scenePass.getTextureNode('velocity');
+      temporal = (spec.temporal === 'traa' ? traa : taau)(raw, depthTex, vel, camera) as N;
+    }
+    const color: N = temporal ?? raw;
+
+    const sceneNormal = sample((uv: N) => unpackRGBToNormal((normalTex as N).sample(uv)));
+    const aoPass = ao(depthTex, sceneNormal, camera);
+    aoPass.resolutionScale = 0.5;
+    aoPass.radius.value = 1.6; // ボクセル 1〜2 個分くらいの範囲の隅を暗く
+    aoPass.thickness.value = 2;
+    aoPass.scale.value = 1.6;
+    aoPass.distanceFallOff.value = 1;
+    // GTAO はサンプルのノイズが粒状に見えるので、深度と法線を見ながらぼかして消す
+    const aoValue = (denoise(aoPass.getTextureNode(), depthTex, sceneNormal, camera) as N).r;
+    const withAO = vec4(color.rgb.mul(mix(float(1), aoValue, uAO)), 1);
+    const isSky = (depthTex as N).r.greaterThanEqual(0.99999);
+    return { scenePass, aoPass, color, withAO, viewZ, isSky, temporal };
+  };
   let dofOn = true, aoOn = true, bloomOn = true;
-  const updatePost = () => {
+  const updatePost = (rebuildScene = false) => {
+    if (rebuildScene || !sp) {
+      if (sp) { sp.scenePass.dispose(); sp.aoPass.dispose(); sp.temporal?.dispose(); }
+      sp = buildScenePost();
+    }
+    const { color, withAO, viewZ, isSky } = sp;
     const src: N = aoOn ? withAO : color;
     // 空（背景）はぼかさない：星や雲がくっきり見えるように
     let out: N = dofOn ? isSky.select(src, dof(src, viewZ, uFocus, uFocal, uBokeh)) : src;
     // ブルーム：明るい所（ホタル・太陽の照り返し）がにじんで光る
     if (bloomOn) out = out.add(bloom(out, 0.45, 0.4, 0.9));
+    // 描き終わった絵にかける方法は最後に
+    const post = aaSpec(aaMode).post;
+    if (post === 'fxaa') out = fxaa(out);
+    else if (post === 'smaa') out = smaa(out);
     pipeline.outputNode = out;
     pipeline.needsUpdate = true;
+  };
+  const setAntialias = (mode: AAMode, scale = renderScale) => {
+    if (mode === aaMode && scale === renderScale && sp) return;
+    aaMode = mode; renderScale = scale;
+    updatePost(true);
   };
   updatePost();
 
@@ -1171,6 +1207,19 @@ async function main() {
   $('ecoClear').addEventListener('click', () => { eco.clearVisitors(); toast('訪問者が帰りました'); });
   $<HTMLInputElement>('ecoHighlight').addEventListener('change', (e) => eco.setHighlight((e.target as HTMLInputElement).checked));
   // 影の描き方
+  // アンチエイリアスの方法と描く解像度（デバッグ。保存しない）
+  const applyAA = () => {
+    const m = $<HTMLSelectElement>('aaMode').value;
+    setAntialias(isAAMode(m) ? m : 'msaa', parseFloat($<HTMLSelectElement>('renderScale').value) || 1);
+    $('aaBenchLabel').textContent = '';
+  };
+  $<HTMLSelectElement>('aaMode').addEventListener('change', applyAA);
+  $<HTMLSelectElement>('renderScale').addEventListener('change', applyAA);
+  $('aaBench').addEventListener('click', async () => {
+    $('aaBenchLabel').textContent = '測っています…';
+    const r = await bench(60);
+    $('aaBenchLabel').textContent = `${AA_NAMES[aaMode]}・${Math.round(renderScale * 100)}%：${r.msPerFrame} ms（${r.fps} fps）`;
+  });
   $<HTMLInputElement>('shadowCascade').addEventListener('change', (e) => { shadows.cascade = (e.target as HTMLInputElement).checked; });
   const applyShadowEvery = () => {
     const on = $<HTMLInputElement>('shadowThrottle').checked;
@@ -1579,7 +1628,7 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { shadows, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { shadows, setAntialias, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {

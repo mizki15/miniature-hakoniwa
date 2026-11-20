@@ -144,6 +144,27 @@
             <label title="住人（黄色）と訪問者（水色）に、地形を透かして見える目印を付ける"><input type="checkbox" id="ecoHighlight" /> 生き物を透かして表示</label>
           </div>
           <div class="row">
+            <label title="ギザギザを消す方法。なし・FXAA・SMAA は軽く、MSAA は場面を描く重さが増える。TRAA・TAAU は前のフレームと混ぜる（動く物に少し残像）">アンチエイリアス
+              <select id="aaMode">
+                <option value="off">なし</option>
+                <option value="msaa" selected>MSAA 4x</option>
+                <option value="fxaa">FXAA</option>
+                <option value="smaa">SMAA</option>
+                <option value="traa">TRAA（時間方向）</option>
+                <option value="taau">TAAU（低い解像度から広げる）</option>
+              </select>
+            </label>
+            <label title="場面を描く解像度（画面の画素に対する割合）。下げるほど軽い。TAAU と組み合わせると、下げてもくっきり見えやすい">描く解像度
+              <select id="renderScale">
+                <option value="1" selected>100%</option>
+                <option value="0.75">75%</option>
+                <option value="0.5">50%</option>
+              </select>
+            </label>
+            <button id="aaBench" title="今の設定で 60 フレーム描いて、1 フレームの時間を測る">測る</button>
+            <span id="aaBenchLabel"></span>
+          </div>
+          <div class="row">
             <label title="カメラに近い所ほど細かい影の地図を使う（3 段）。切り替えた直後は少し止まることがある"><input type="checkbox" id="shadowCascade" /> カスケード影</label>
             <label title="影の地図を毎フレームではなく、数フレームに 1 回だけ描き直す。動く物の影が少し遅れる"><input type="checkbox" id="shadowThrottle" /> 影を間引く</label>
             <select id="shadowEvery" title="何フレームに 1 回、影を描き直すか">
