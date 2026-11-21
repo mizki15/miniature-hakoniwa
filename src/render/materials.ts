@@ -98,21 +98,10 @@ function faceFrame(pL: N, nL: N) {
 function terrainBump(p: N, t: N, kind: N): N {
   const isT = (id: number) => near(t, id);
   const side = kind.greaterThan(1.5);
-  // 種類ごとのノイズの細かさ：草 9、土 6、岩 3（割れ目のゆらぎ）、砂 14、道・畑 10、丸太 7、葉 5
-  const freq = isT(1).select(9, isT(2).select(6, isT(3).select(3, isT(4).select(14, isT(6).select(7, isT(7).or(isT(8)).select(5, float(10)))))));
+  // 種類ごとのノイズの細かさ：草 9、土 6、岩 5、砂 14、道・畑 10、丸太 7、葉 5
+  const freq = isT(1).select(9, isT(2).select(6, isT(3).select(5, isT(4).select(14, isT(6).select(7, isT(7).or(isT(8)).select(5, float(10)))))));
   const n: N = mx_noise_vec3(vec3(p.mul(freq), t.mul(3.7)));
   const grain = n.xy; // -1..1 くらい
-
-  // 岩：ゆらいだセルごとに面を傾け、セルの縁（割れ目）は溝へ落ちる
-  const q = p.mul(2.2).add(n.xy.mul(0.25));
-  const cf: N = fract(q), cell: N = floor(q);
-  const cellTilt = vec2(hash3(vec3(cell, 1)), hash3(vec3(cell, 2))).sub(0.5).mul(0.7);
-  const g = float(0.1);
-  const crack = vec2(
-    smoothstep(float(1).sub(g), 1, cf.x).sub(float(1).sub(smoothstep(0, g, cf.x))),
-    smoothstep(float(1).sub(g), 1, cf.y).sub(float(1).sub(smoothstep(0, g, cf.y))),
-  ).mul(0.9);
-  const stone = cellTilt.add(crack).add(grain.mul(0.15));
 
   // 石畳：ブロックの半分の石を段ごとに半分ずらす。目地へ向かって落ち、石ごとに少し傾く
   const row = floor(p.y.mul(2));
@@ -143,7 +132,7 @@ function terrainBump(p: N, t: N, kind: N): N {
 
   return isT(1).select(grain.mul(0.38), // 草：細かい毛羽立ち
     isT(2).select(grain.mul(0.42), // 土：粒とくぼみ
-    isT(3).select(stone,
+    isT(3).select(grain.mul(0.48), // 岩：土のようなザラザラ（少し粗く強め）
     isT(4).select(sand,
     isT(16).select(cobble,
     isT(6).select(log,

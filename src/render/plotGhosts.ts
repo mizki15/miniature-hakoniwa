@@ -31,7 +31,8 @@ export class PlotGhosts {
       const r = plotRect(plot);
       const face = new THREE.Mesh(this.faceGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.08, depthWrite: false }));
       const line = new THREE.LineSegments(this.edgeGeo, new THREE.LineBasicMaterial({ color: this.canAfford ? 0xffffff : 0x9a9a9a, transparent: true, opacity: 0.85 }));
-      const y = heightAt(plot) + GHOST_H / 2 - 4;
+      // 枠の高さ 1 つ分、地面より下げて置く（2026-11-22〜。上端が地面の 4 下）
+      const y = heightAt(plot) - GHOST_H / 2 - 4;
       for (const o of [face, line]) { o.position.set(r.x0 + PLOT / 2 - half, y, r.z0 + PLOT / 2 - half); o.userData.sharedGeometry = true; }
       face.userData.ghostPlot = plot;
       face.renderOrder = 3;
