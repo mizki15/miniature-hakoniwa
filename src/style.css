@@ -188,7 +188,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .dex-card { cursor: pointer; }
 .dex-card.sel { outline: 2px solid rgba(47,125,225,0.7); }
 #dexDetail { margin-top: 10px; font-size: 12px; line-height: 1.6; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.3); min-height: 3em; }
-@media (max-width: 760px) { #modes, #toast, #tooltip, #editor { display: none !important; } }
+@media (max-width: 760px) {
+  #tooltip, #editor { display: none !important; }
+  /* スマホ：見る・エディタは出さず、メニュー（保存・Google 同期）のボタンだけ出す */
+  #modes button[data-mode] { display: none; }
+  #modes { bottom: calc(var(--gap) + env(safe-area-inset-bottom, 0px)); }
+}
 
 /* ---------- Esc メニュー ----------
    背景の時間帯（昼の明るい空・夜の暗い空）に関係なく読めるよう、
