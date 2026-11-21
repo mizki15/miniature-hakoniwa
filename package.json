@@ -9,8 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "dev:lan": "vite --mode lan",
-    "build:portfolio": "tsc --noEmit && vite build --base=/hakoniwa/ --outDir dist-portfolio --emptyOutDir"
+    "dev:lan": "vite --mode lan"
   },
   "dependencies": {
     "three": "^0.187.0"
