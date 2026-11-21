@@ -37,7 +37,7 @@
 
 | 項目 | 決定 | 理由 |
 |---|---|---|
-| 公開先 | **Cloudflare Pages**（プロジェクト名 `miniature-hakoniwa`、URL `https://miniature-hakoniwa.pages.dev`）。browser_miniature を GitHub の `mizki15/miniature-hakoniwa`（公開）に上げ、Pages の GitHub 連携で push ごとに自動公開 | ②のサーバーを同じ場所（Workers）に置ける。手でのコピーが要らなくなる |
+| 公開先 | **Cloudflare Pages**（プロジェクト名 `miniature-hakoniwa`、URL `https://miniature-hakoniwa.pages.dev`）。browser_miniature を GitHub の `mizki15/miniature-hakoniwa`（非公開）に上げ、Pages の GitHub 連携で push ごとに自動公開 | ②のサーバーを同じ場所（Workers）に置ける。手でのコピーが要らなくなる |
 | 今の公開先（Render） | legendary-pancake の `/hakoniwa/` は Cloudflare 版へ**転送**し、`apps/hakoniwa/dist/` は消す。ポートフォリオのカードのリンクも差し替える（Claude の判断） | 古いリンクを切らないため。Google ログインは 1 か所（Pages の URL）でだけ使う |
 | 保存先 | Drive の `appDataFolder`（スコープ `drive.appdata`）に `hakoniwa-save.bin` の 1 ファイル。今の `src/save/drive.ts` を使う | 既にある。ユーザーの他のファイルに触れず、審査も軽い |
 | 一次保存 | 今までどおり端末内（IndexedDB）。Drive はバックアップ兼端末間の同期 | 企画書 4.4 の方針 |
@@ -120,7 +120,7 @@
 
 ### 3.1 Cloudflare Pages
 
-- browser_miniature を GitHub の `mizki15/miniature-hakoniwa`（新規・公開。ご本人が決定）に上げる
+- browser_miniature を GitHub の `mizki15/miniature-hakoniwa`（新規・非公開。ご本人が決定。Pages は非公開のリポジトリでも使える）に上げる
 - Pages のビルド設定：コマンド `npm run build`、出力 `dist`、`base` は `/`（`build:portfolio` の `/hakoniwa/` は不要になる）
 - `VITE_GOOGLE_CLIENT_ID` は Pages の環境変数に入れる（ビルドの時に埋め込まれる）
 - 開発者ツール用の `window.__hakoniwa` は仕様書で「公開前に外す」となっている。今回、本番ビルドでは出さないようにするかはビルダーが判断する（デバッグパネルも同様）
