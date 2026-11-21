@@ -227,7 +227,8 @@ export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean } = 
   const veg = attribute('veg', 'float');
   const base = attribute('color', 'vec3');
   const conifer = mix(base, vec3(0.92, 0.95, 0.97), U.snow);
-  const col = near(veg, 2).select(U.leafColor, near(veg, 3).select(conifer, base));
+  // veg 1：地面の草の房（頂点カラーは明るさだけ。季節の草の色を掛ける）
+  const col = near(veg, 2).select(U.leafColor, near(veg, 3).select(conifer, near(veg, 1).select((U.grassColor as N).mul(base).mul(1.25), base)));
   const micro = floor(pG.mul(U.detail).sub(nG.mul(0.5)));
   const jitter = hash3(micro).mul(0.12).add(0.94);
   const aoF = mix(float(0.5), float(1), attribute('ao', 'float'));

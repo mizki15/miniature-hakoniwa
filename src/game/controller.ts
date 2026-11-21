@@ -9,6 +9,7 @@ import { CROPS, Farm, type Crop, type CropKind, type Sapling } from './farm';
 import { UndoStack } from './undoStack';
 import { buildCropGeometry, buildSaplingGeometry } from './cropModels';
 import { raycastVoxels, type VoxelHit } from './picking';
+import { GRASS_VARIANTS, PEBBLE_VARIANTS, buildGrassTuft, buildPebble, placeGround } from '../creatures/groundDecor';
 import type { SaveData } from '../save/format';
 import type { BuildingDesign } from '../build/geoParse';
 import { buildBuildingMesh } from '../build/geoMesh';
@@ -242,6 +243,8 @@ export class GameController {
     this.flowerGeos = [];
     this.delta = [];
     this.rising = [];
+    this.groundMeshes = []; // 箱庭を作り直す時に main が片付けている
+    this.groundDirty = true;
     // 置いた建物は箱庭ごと。棚（designs）は新しい箱庭にも持ち越す
     this.placed = [];
     this.buildingMeshes = [];
@@ -315,7 +318,7 @@ export class GameController {
     for (const o of risers) o.position.y = -RISE_DEPTH;
     this.addTreeCols(r.placements);
     // 木と花は、地面がせり上がりきってから置く（全部の区画で 1 つの InstancedMesh なので一緒には動かせない）
-    this.rising.push({ objs: risers, t: 0, done: () => { this.addDecor(r.placements); this.onEnvChanged?.(); this.onPlotRisen?.(); } });
+    this.rising.push({ objs: risers, t: 0, done: () => { this.addDecor(r.placements); this.env(); this.onPlotRisen?.(); } });
     this.onPlotsChanged?.();
   }
 
@@ -323,6 +326,58 @@ export class GameController {
   onPlotsChanged: (() => void) | null = null;
   /** 環境（花・木・畑・作物・地形）が変わったかもしれない時に呼ぶ（main が環境の数を数え直す印を付ける） */
   onEnvChanged: (() => void) | null = null;
+  /** 環境が変わった：地面の小物（小石・草）も置き直す */
+  private env() { this.groundDirty = true; this.onEnvChanged?.(); }
+
+  // ---------- 地面の小物（ローポリの小石と草。見た目だけ） ----------
+  /** 出る多さ（デバッグ「石と草の多さ」。0 = なし） */
+  private groundDensity = 1;
+  private groundDirty = false;
+  private groundTimer = 0;
+  private groundMeshes: THREE.InstancedMesh[] = [];
+  private readonly pebbleGeos = Array.from({ length: PEBBLE_VARIANTS }, (_, v) => buildPebble(v));
+  private readonly grassGeos = Array.from({ length: GRASS_VARIANTS }, (_, v) => buildGrassTuft(v));
+
+  setGroundDensity(d: number) { this.groundDensity = d; this.groundDirty = true; }
+  /** 小石と草の数（デバッグの表示用） */
+  groundCount() { return this.groundMeshes.reduce((n, m) => n + m.count, 0); }
+
+  /** 小石と草を置き直す。木・建物・花のある列には置かない */
+  private rebuildGround() {
+    const w = this.world!;
+    this.groundDirty = false;
+    for (const m of this.groundMeshes) { this.deps.diorama.remove(m); m.dispose(); }
+    this.groundMeshes = [];
+    const flowerCols = new Set<number>();
+    for (const d of this.decor) {
+      if (d.kind !== 'flower') continue;
+      for (let i = 0; i < d.placements.length; i += 5) flowerCols.add(Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * w.size);
+    }
+    const pl = placeGround(w.voxels, w.heights, w.size, w.height, this.groundDensity,
+      (col) => this.treeCols.has(col) || this.buildingCols.has(col) || flowerCols.has(col));
+    const half = w.size / 2;
+    const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+    const make = (geo: THREE.BufferGeometry, mat: THREE.Material, list: number[]) => {
+      const count = list.length / 5;
+      if (!count) return;
+      const im = new THREE.InstancedMesh(geo, mat, count);
+      for (let i = 0; i < count; i++) {
+        ps.set(list[i * 5] - half, list[i * 5 + 1], list[i * 5 + 2] - half);
+        q.setFromAxisAngle(up, list[i * 5 + 3]);
+        sc.setScalar(list[i * 5 + 4]);
+        im.setMatrixAt(i, mtx.compose(ps, q, sc));
+      }
+      im.castShadow = false; // 小さいので影は落とさない（軽さのため）
+      im.receiveShadow = true;
+      im.userData.kind = 'ground';
+      im.userData.sharedGeometry = true;
+      im.computeBoundingSphere();
+      this.groundMeshes.push(im);
+      this.deps.diorama.add(im);
+    };
+    pl.pebbles.forEach((list, v) => make(this.pebbleGeos[v], this.deps.buildingMat, list));
+    pl.grass.forEach((list, v) => make(this.grassGeos[v], this.deps.flowerMat, list));
+  }
   /** 建物の足元が新しく増えた時（main が、そこにいる住人を外へ移す） */
   onBuildingsPlaced: ((cols: ReadonlySet<number>) => void) | null = null;
 
@@ -561,6 +616,7 @@ export class GameController {
     this.recording = null;
     this.levelTarget = null;
     if (r && (r.changed || r.voxels.size)) this.undo.push(r);
+    this.groundDirty = true; // 花・苗木・建物など、ボクセル以外の変化でも置き直す
   }
 
   /** 最後の編集を取り消す。取り消したら知らせの文、何もなければ null */
@@ -568,6 +624,7 @@ export class GameController {
     if (this.locked || !this.world || this.recording) return null;
     const r = this.undo.pop();
     if (!r) return null;
+    this.groundDirty = true;
     const w = this.world;
     const N = w.size;
     const cols = new Set<number>();
@@ -610,7 +667,7 @@ export class GameController {
     this.rebuildCrops();
     this.rebuildGrowing();
     this.rebuildBuildings();
-    this.onEnvChanged?.();
+    this.env();
     this.unsaved = true; this.onPlayerChange?.();
     return `「${r.label}」を取り消しました`;
   }
@@ -619,7 +676,7 @@ export class GameController {
     const w = this.world!;
     // 開いていない区画は変えない。作り直している間も変えない
     if (this.locked || !canSetCol(w.plots, x, z)) return;
-    this.onEnvChanged?.();
+    this.env();
     const i = this.idx(x, y, z);
     if (w.voxels[i] === t) return;
     // 取り消しの記録：このなぞりで初めて変える所だけ、元の種類を覚える
@@ -972,7 +1029,7 @@ export class GameController {
         }
         this.farm.inventory.wood = (this.farm.inventory.wood ?? 0) + WOOD_PER_TREE;
         this.rebuildGrowing();
-        this.onEnvChanged?.();
+        this.env();
         return `木を切りました（木材 +${WOOD_PER_TREE}、全部で ${this.farm.inventory.wood}）`;
       }
       case 'dig': {
@@ -1063,6 +1120,7 @@ export class GameController {
     const half = w.size / 2;
     // 建物の足元は歩けない（住人・訪問者がめり込まないように）。外れた列は元に戻す
     const before = this.buildingCols;
+    this.groundDirty = true;
     this.buildingCols = new Set(this.placedWithY().flatMap((p) => footprintCols(p.design, p.rot, p.x, p.z, w.size)));
     for (const c of before) if (!this.buildingCols.has(c)) this.updateWalkable(c);
     const added = new Set<number>();
@@ -1178,7 +1236,7 @@ export class GameController {
       p.progress = advanceProgress(p.progress, dtMs, d);
       if (p.progress >= 1) { finished = true; this.onBuildingDone?.(d.name); }
     }
-    if (finished) { this.rebuildBuildings(); this.onEnvChanged?.(); }
+    if (finished) { this.rebuildBuildings(); this.env(); }
     else for (const st of this.sites) this.updateSite(st);
   }
 
@@ -1281,7 +1339,7 @@ export class GameController {
   }
 
   private rebuildCrops() {
-    this.onEnvChanged?.();
+    this.env();
     const w = this.world!;
     const half = w.size / 2;
     for (const m of this.cropMeshes) { this.deps.diorama.remove(m); m.dispose(); }
@@ -1311,7 +1369,7 @@ export class GameController {
 
   /** 植えた木：苗木 → 小さな木 → 大きな木 */
   private rebuildGrowing() {
-    this.onEnvChanged?.();
+    this.env();
     const w = this.world!;
     const half = w.size / 2;
     for (const m of this.growingMeshes) { this.deps.diorama.remove(m); m.dispose(); }
@@ -1369,6 +1427,9 @@ export class GameController {
         if (isFarm(this.get(x, y, z)) && this.get(x, y, z) !== want) this.setVoxel(x, y, z, want);
       }
     }
+    // 地面の小物：変わってから少し待って置き直す（なぞっている間に毎フレーム作り直さない）。せり上がり中は待つ
+    this.groundTimer -= dtReal;
+    if (this.groundDirty && this.groundTimer <= 0 && !this.isRising()) { this.rebuildGround(); this.groundTimer = 0.3; }
     this.flushRemesh();
   }
 

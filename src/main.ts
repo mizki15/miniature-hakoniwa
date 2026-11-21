@@ -1144,6 +1144,21 @@ async function main() {
   $('moveSpeed').addEventListener('input', syncDebugLabels);
   $('tipDelay').addEventListener('input', syncDebugLabels);
   syncDebugLabels();
+  // 地面の小石と草の多さ（この端末に覚える）
+  const GROUND_KEY = 'hakoniwa.groundDensity';
+  const groundInput = $<HTMLInputElement>('groundDensity');
+  const storedGround = parseFloat(localStorage.getItem(GROUND_KEY) ?? '');
+  if (storedGround >= 0 && storedGround <= 4) groundInput.value = String(storedGround);
+  const applyGround = () => {
+    const d = parseFloat(groundInput.value) || 0;
+    game.setGroundDensity(d);
+    $('groundDensityLabel').textContent = d > 0 ? `×${d.toFixed(1)}` : 'なし';
+  };
+  groundInput.addEventListener('input', () => {
+    applyGround();
+    try { localStorage.setItem(GROUND_KEY, groundInput.value); } catch { /* 保存できなくても変える */ }
+  });
+  applyGround();
   $<HTMLSelectElement>('simSpeed').addEventListener('change', () => { game.farm.speed = simSpeed(); });
   $('skip1').addEventListener('click', () => { game.skip(1, lastEnv); toast('1 時間進めました'); });
   $('skip6').addEventListener('click', () => { game.skip(6, lastEnv); toast('6 時間進めました'); });
