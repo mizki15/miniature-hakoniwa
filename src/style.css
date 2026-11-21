@@ -212,6 +212,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .save-buttons button small { font-size: 11px; color: #4a5560; }
 .save-buttons button:hover { background: #eaf2fc; border-color: #9cc1ec; }
 .save-buttons button:disabled { opacity: 0.55; cursor: wait; }
+.cloud-box { margin-top: 12px; padding-top: 10px; border-top: 1px solid #e1e6eb; }
+.cloud-status { font-size: 13px; line-height: 1.6; margin-bottom: 8px; color: #1f2933; overflow-wrap: anywhere; }
+.cloud-status small { display: block; color: #4a5560; font-size: 12px; }
+.save-buttons button[hidden] { display: none; }
+/* ログイン中のスマホは見るだけ：エディタに入るボタンを出さない */
+.view-only #modes button[data-mode="edit"] { display: none; }
 .menu-keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
 .menu-keys dt { font-weight: 600; color: #1f2933; white-space: nowrap; }
 .menu-keys dd { margin: 0; color: #4a5560; }

@@ -305,9 +305,16 @@
               <button id="saveNow" title="この端末（ブラウザ）に保存。ふだんは自動で保存されます"><b>今すぐ保存</b><small>この端末に保存（ふだんは自動）</small></button>
               <button id="exportSave" title="ファイルとして書き出す（控え・別の端末へ）"><b>ファイルに書き出す</b><small>控え・別の端末への引っ越しに</small></button>
               <button id="importSave" title="書き出したファイルを読み込む"><b>ファイルから読み込む</b><small>.hakoniwa ファイル</small></button>
-              <button id="driveSync" title="Google Drive のアプリ専用フォルダと同期"><b>Google Drive と同期</b><small>アプリ専用フォルダに保存</small></button>
             </div>
             <input type="file" id="importFile" accept=".hakoniwa" hidden />
+            <div id="cloudBox" class="cloud-box">
+              <div id="cloudStatus" class="cloud-status">—</div>
+              <div class="save-buttons">
+                <button id="cloudSignIn" title="Google Drive のアプリ専用フォルダを使います。ほかのファイルには触れません"><b>Google でログイン</b><small>PC とスマホで同期・バックアップ</small></button>
+                <button id="cloudSyncNow" hidden><b>今すぐ同期</b><small>ふだんは自動</small></button>
+                <button id="cloudSignOut" hidden><b>ログアウト</b><small>この端末の箱庭はそのまま</small></button>
+              </div>
+            </div>
           </section>
           <section class="menu-card">
             <h2>⚙ 設定</h2>

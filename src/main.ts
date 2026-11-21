@@ -30,7 +30,8 @@ import { renderDex } from './creatures/dex';
 import { OldSaveError, SAVE_VERSION, decodeSave, encodeSave, type SaveData } from './save/format';
 import { loadLocal, requestPersist, saveLocal } from './save/store';
 import { createSyncState } from './save/syncState';
-import { DRIVE_CLIENT_ID, download, remoteInfo, upload } from './save/drive';
+import { DRIVE_CLIENT_ID, accountInfo, download, hasToken, remoteInfo, signIn, signOut, upload } from './save/drive';
+import { CloudSync, type CloudStatus } from './save/cloudSync';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
 import { DEFAULT_PARAMS, type TerrainParams, type WorldData } from './world/terrain';
@@ -425,6 +426,8 @@ async function main() {
   // ---------- モードと道具 ----------
   type Mode = 'view' | 'edit';
   let mode: Mode = 'view';
+  /** ログイン中のスマホは見るだけ（エディタに入れない） */
+  let viewOnly = false;
   const toolsEl = $('tools'), seedsEl = $('seeds'), hintEl = $('toolHint'), toastEl = $('toast'), tooltipEl = $('tooltip');
   let toastTimer = 0;
   const toast = (msg: string, ms = 1600) => {
@@ -458,7 +461,7 @@ async function main() {
   };
   renderSeeds();
   const selectTool = (t: Tool) => {
-    if (t === 'look') { setMode('view'); return; }
+    if (t === 'look' || viewOnly) { setMode('view'); return; }
     editTool = t;
     if (mode !== 'edit') setMode('edit');
     game.tool = t;
@@ -602,7 +605,14 @@ async function main() {
 
   const layoutEl = $('layout');
   const modeButtons = document.querySelectorAll<HTMLButtonElement>('#modes button[data-mode]');
+  const setViewOnly = (on: boolean) => {
+    if (viewOnly === on) return;
+    viewOnly = on;
+    layoutEl.classList.toggle('view-only', on);
+    if (on && mode === 'edit') setMode('view');
+  };
   const setMode = (m: Mode) => {
+    if (viewOnly && m === 'edit') m = 'view';
     mode = m;
     layoutEl.classList.remove('mode-view', 'mode-edit');
     layoutEl.classList.add(`mode-${m}`);
@@ -1257,6 +1267,7 @@ async function main() {
   // この端末（IndexedDB）に保存
   let persisted = false;
   let lastSavedAt = 0;
+  let cloud: CloudSync | null = null; // Google 同期（下で作る）
   let saving = false;
   const saveStatusEl = $('saveStatus');
   const showSaveStatus = (extra = '') => {
@@ -1275,6 +1286,7 @@ async function main() {
       game.unsaved = false;
       if (!persisted) persisted = await requestPersist();
       showSaveStatus(`${(data.byteLength / 1024).toFixed(1)} KB`);
+      cloud?.afterLocalSave();
     } catch (err) {
       console.error(err);
       toast('保存できませんでした');
@@ -1319,36 +1331,70 @@ async function main() {
     }
   });
 
-  // Google Drive と同期（アプリ専用フォルダ）
-  const driveBtn = $<HTMLButtonElement>('driveSync');
-  if (!DRIVE_CLIENT_ID) driveBtn.title = 'Google Drive の設定（Client ID）が必要です。docs/保存とクラウド同期.md を参照';
-  driveBtn.addEventListener('click', async () => {
-    if (!DRIVE_CLIENT_ID) { toast('Google Drive を使うには設定が必要です（docs/保存とクラウド同期.md）', 4000); return; }
-    if (!world) return;
-    driveBtn.disabled = true;
-    try {
-      const remote = await remoteInfo();
-      if (remote && remote.savedAt > lastSavedAt + 5000) {
-        const when = new Date(remote.savedAt).toLocaleString();
-        if (confirm(`Google Drive に、この端末より新しい箱庭があります（${when}）。\nOK：Drive の箱庭を読み込む\nキャンセル：この端末の箱庭で Drive を上書きする`)) {
-          const save = await decodeSave(await download(remote.id));
-          await loadFrom(save, true);
-          await saveNow();
-          toast('Google Drive から読み込みました');
-          return;
+  // Google アカウントで Drive と同期（アプリ専用フォルダ）。PC は自動で送り、スマホは見るだけ
+  const cloudStatusEl = $('cloudStatus');
+  const cloudSignInBtn = $<HTMLButtonElement>('cloudSignIn');
+  const cloudSyncBtn = $<HTMLButtonElement>('cloudSyncNow');
+  const cloudSignOutBtn = $<HTMLButtonElement>('cloudSignOut');
+  const hhmm = (t: number) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  const whenText = (t: number) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${hhmm(t)}`; };
+  let cloudKind: CloudStatus['kind'] = 'signedOut';
+  const renderCloud = (s: CloudStatus) => {
+    cloudKind = s.kind;
+    const who = s.kind === 'signedOut' ? '' : `☁ ${s.email}　`;
+    const line =
+      s.kind === 'signedOut' ? 'Google でログインすると、PC とスマホで同じ箱庭を使え、バックアップにもなります'
+      : s.kind === 'needsLogin' ? `${who}⚠ 同期が止まっています（ログインの期限切れ）`
+      : s.kind === 'busy' ? `${who}同期中…`
+      : s.kind === 'error' ? `${who}⚠ ${s.message}`
+      : `${who}同期 ${s.lastSyncAt ? hhmm(s.lastSyncAt) : '—'} ✓`;
+    cloudStatusEl.textContent = line;
+    if (isMobile && s.kind !== 'signedOut') cloudStatusEl.append(Object.assign(document.createElement('small'), { textContent: 'スマホは見るだけです（変えたところは PC には届きません）' }));
+    cloudSignInBtn.hidden = !(s.kind === 'signedOut' || s.kind === 'needsLogin');
+    cloudSignInBtn.querySelector('b')!.textContent = s.kind === 'needsLogin' ? 'タップして同期を続ける' : 'Google でログイン';
+    cloudSyncBtn.hidden = !(s.kind === 'ok' || s.kind === 'error' || s.kind === 'busy');
+    cloudSignOutBtn.hidden = s.kind === 'signedOut';
+    cloudSyncBtn.disabled = cloudSignInBtn.disabled = s.kind === 'busy';
+    setViewOnly(isMobile && s.kind !== 'signedOut');
+  };
+  if (isMobile) cloudSyncBtn.querySelector('b')!.textContent = 'Drive から読み込む';
+  if (!DRIVE_CLIENT_ID) {
+    cloudStatusEl.textContent = 'この版では Google 同期は使えません';
+    cloudSignInBtn.hidden = cloudSyncBtn.hidden = cloudSignOutBtn.hidden = true;
+  } else {
+    cloud = new CloudSync({
+      drive: { hasToken, signIn, signOut, accountInfo, remoteInfo, upload, download },
+      state: syncState,
+      viewer: isMobile,
+      now: () => Date.now(),
+      localHasProgress: hasProgress,
+      localSavedAt: () => lastSavedAt,
+      buildEncoded: async () => { const s = buildSave(); return { data: await encodeSave(s), savedAt: s.savedAt }; },
+      applyRemote: async (data) => {
+        let save: SaveData;
+        try { save = await decodeSave(data); } catch (err) {
+          throw new Error(err instanceof OldSaveError ? 'Drive の保存データは古い形式なので読み込めません' : 'Drive の保存データを読めませんでした');
         }
-      }
-      await saveNow();
-      const save = buildSave();
-      await upload(await encodeSave(save), save.savedAt, remote?.id);
-      showSaveStatus(`Google Drive に同期：${new Date().toLocaleTimeString().slice(0, 5)}`);
-      toast('Google Drive に保存しました');
-    } catch (err) {
-      toast(err instanceof OldSaveError ? 'Google Drive の保存データは古い形式（v1）なので読み込めません。今の箱庭はそのままです' : err instanceof Error ? err.message : '同期できませんでした', 4000);
-    } finally {
-      driveBtn.disabled = false;
-    }
-  });
+        await loadFrom(save, true);
+        await saveNow();
+        toast('Google Drive の箱庭を読み込みました');
+      },
+      askConflict: async (remoteAt, localAt) => {
+        for (;;) {
+          if (confirm(`この端末と Google Drive の両方で箱庭が変わっています。\nDrive：${whenText(remoteAt)} ／ この端末：${whenText(localAt)}\n\nOK：Drive の箱庭を読み込む\nキャンセル：この端末の箱庭を残す`)) return 'remote';
+          if (confirm('Drive の箱庭を、この端末の箱庭で上書きします。よろしいですか？')) return 'local';
+        }
+      },
+      askReplace: async () => confirm('Drive の箱庭に入れ替えますか？（今の箱庭は書き出しで控えを取れます）'),
+      onStatus: renderCloud,
+    });
+    const c = cloud;
+    cloudSignInBtn.addEventListener('click', () => { c.signIn().catch((err) => toast(err instanceof Error ? err.message : 'ログインできませんでした', 4000)); });
+    cloudSyncBtn.addEventListener('click', () => { void c.syncNow(); });
+    cloudSignOutBtn.addEventListener('click', () => { void c.signOut().then(() => toast('ログアウトしました（この端末の箱庭はそのままです）')); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') c.onHidden(); else c.onVisible(); });
+    window.addEventListener('pagehide', () => c.onHidden());
+  }
 
   // デバッグウィンドウの開閉（スマホでは最初はたたんでおく）
   const uiEl = $('ui');
@@ -1397,6 +1443,8 @@ async function main() {
   U.blend.value = parseFloat(blendInput.value);
   uAO.value = parseFloat(aoInput.value);
   eco.abundance = parseInt($<HTMLInputElement>('ecoAbundance').value, 10) || 1;
+  /** この端末に箱庭がなく、新しく作った時：同期は「初めての端末」として扱う（作っただけの箱庭で Drive を上書きしないように） */
+  const freshStart = () => { syncState.setMarker(null); syncState.clearChanged(); };
   // 起動：この端末に保存があれば読み込み（閉じていた間の時間も進める）、なければ新しく作る
   try {
     const stored = await loadLocal();
@@ -1407,13 +1455,20 @@ async function main() {
       showSaveStatus();
     } else {
       await doRegen(false);
+      freshStart();
       await saveNow();
     }
   } catch (err) {
     console.error(err);
     toast(err instanceof OldSaveError ? `保存データは${err.message}` : '保存データを読めなかったので、新しい箱庭を作りました', 4000);
     await doRegen(false);
+    freshStart();
     if (err instanceof OldSaveError) await saveNow();
+  }
+  // 端末内の箱庭を出してから、Google 同期を始める（待たない）
+  if (cloud) {
+    const c = cloud;
+    void c.start().then(() => { if (cloudKind === 'needsLogin') toast('Google 同期を続けるには、メニューの「タップして同期を続ける」を押してください', 4000); });
   }
 
   // ---------- ループ ----------
