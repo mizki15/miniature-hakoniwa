@@ -1,10 +1,15 @@
 /**
- * Google Drive との同期（サーバーを使わず、ブラウザから直接 Drive API を呼ぶ）。
+ * Google Drive との通信（サーバーを使わず、ブラウザから直接 Drive API を呼ぶ）。
  * - スコープは drive.appdata：アプリ専用の隠しフォルダだけを使い、ユーザーの他のファイルは見えない
- * - 認証は Google Identity Services（GIS）のトークンモデル。アクセストークンは約 1 時間で切れるので、
- *   同期の操作のたびに取り直す（多くの場合は確認なしで取れる）
+ * - 認証は Google Identity Services（GIS）のトークンモデル。アクセストークンは約 1 時間で切れる
+ * - トークンは sessionStorage にだけ置く（タブを閉じれば消える）。ポップアップを出すのは signIn() だけで、
+ *   ほかの関数はトークンがなければ NeedsLoginError を投げる
  * - Client ID は環境変数 VITE_GOOGLE_CLIENT_ID で渡す（docs/保存とクラウド同期.md を参照）
  */
+import { NeedsLoginError } from './driveErrors';
+import { createTokenStore, type Account } from './syncState';
+import type { RemoteInfo } from './cloudSync';
+
 const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const FILE_NAME = 'hakoniwa-save.bin';
 export const DRIVE_CLIENT_ID: string | undefined = import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -12,63 +17,86 @@ export const DRIVE_CLIENT_ID: string | undefined = import.meta.env.VITE_GOOGLE_C
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare const google: any;
 
+const tokens = createTokenStore(sessionStorage);
+
 let gisLoaded: Promise<void> | null = null;
 function loadGis() {
-  gisLoaded ??= new Promise((resolve, reject) => {
+  gisLoaded ??= new Promise<void>((resolve, reject) => {
     const s = document.createElement('script');
     s.src = 'https://accounts.google.com/gsi/client';
     s.async = true;
     s.onload = () => resolve();
-    s.onerror = () => reject(new Error('Google のログイン部品を読み込めませんでした'));
+    s.onerror = () => { gisLoaded = null; reject(new Error('Google のログイン部品を読み込めませんでした')); };
     document.head.appendChild(s);
   });
   return gisLoaded;
 }
 
-let token: { value: string; expires: number } | null = null;
+/** 有効なトークンがあるか（ポップアップなしで通信できるか） */
+export const hasToken = () => tokens.get() !== null;
 
-/** アクセストークンを取る（必要ならポップアップで同意を求める）。ユーザーの操作から呼ぶこと */
-async function getToken(): Promise<string> {
-  if (!DRIVE_CLIENT_ID) throw new Error('Google Drive の設定（Client ID）がありません');
-  if (token && token.expires > Date.now() + 60_000) return token.value;
+/** ログイン（トークンを取る）。ボタンのクリックの中から呼ぶこと。hint は前に使ったメールアドレス */
+export async function signIn(hint?: string): Promise<void> {
+  if (!DRIVE_CLIENT_ID) throw new Error('Google 同期の設定（Client ID）がありません');
   await loadGis();
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const client = google.accounts.oauth2.initTokenClient({
       client_id: DRIVE_CLIENT_ID,
       scope: SCOPE,
+      login_hint: hint,
       callback: (res: any) => {
         if (res.error) { reject(new Error(res.error_description || res.error)); return; }
-        token = { value: res.access_token, expires: Date.now() + (res.expires_in ?? 3600) * 1000 };
-        resolve(token.value);
+        tokens.set({ value: res.access_token, expires: Date.now() + (Number(res.expires_in) || 3600) * 1000 });
+        resolve();
       },
-      error_callback: (err: any) => reject(new Error(err?.message || 'ログインが中断されました')),
+      error_callback: (err: any) => reject(new Error(err?.type === 'popup_closed' ? 'ログインが中断されました' : err?.message || 'ログインできませんでした')),
     });
-    client.requestAccessToken({ prompt: token ? '' : undefined });
+    // 前にログインしていれば同意画面を省く（多くは一瞬で閉じる）。初めてなら同意を求める
+    client.requestAccessToken({ prompt: hint ? '' : 'consent' });
   });
 }
 
+/** ログアウト：トークンを取り消して消す */
+export async function signOut(): Promise<void> {
+  const t = tokens.get();
+  tokens.set(null);
+  if (!t) return;
+  try {
+    await loadGis();
+    await new Promise<void>((resolve) => google.accounts.oauth2.revoke(t.value, () => resolve()));
+  } catch { /* 取り消せなくても、手元からは消えている */ }
+}
+
 async function api(path: string, init: RequestInit = {}) {
-  const t = await getToken();
-  const res = await fetch(path, { ...init, headers: { ...(init.headers ?? {}), Authorization: `Bearer ${t}` } });
-  if (res.status === 401) { token = null; throw new Error('ログインの期限が切れました。もう一度お試しください'); }
+  const t = tokens.get();
+  if (!t) throw new NeedsLoginError();
+  const res = await fetch(path, { ...init, headers: { ...(init.headers ?? {}), Authorization: `Bearer ${t.value}` } });
+  if (res.status === 401) { tokens.set(null); throw new NeedsLoginError('ログインの期限が切れました'); }
   if (!res.ok) throw new Error(`Google Drive エラー（${res.status}）`);
   return res;
 }
 
-export interface RemoteInfo { id: string; savedAt: number; }
+/** ログイン中のアカウント（追加のスコープなしで Drive の about から取る） */
+export async function accountInfo(): Promise<Account> {
+  const res = await api('https://www.googleapis.com/drive/v3/about?fields=user(emailAddress,displayName)');
+  const json = await res.json();
+  const email = json.user?.emailAddress;
+  if (typeof email !== 'string') throw new Error('アカウントの情報を取れませんでした');
+  return { email, name: typeof json.user?.displayName === 'string' ? json.user.displayName : undefined };
+}
 
 /** Drive 上のセーブデータの情報（なければ null） */
 export async function remoteInfo(): Promise<RemoteInfo | null> {
   const q = encodeURIComponent(`name='${FILE_NAME}'`);
-  const res = await api(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=files(id,appProperties,modifiedTime)`);
+  const res = await api(`https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${q}&fields=files(id,version,appProperties,modifiedTime)&orderBy=modifiedTime desc`);
   const json = await res.json();
   const f = json.files?.[0];
   if (!f) return null;
-  return { id: f.id, savedAt: Number(f.appProperties?.savedAt ?? Date.parse(f.modifiedTime)) };
+  return { id: f.id, version: String(f.version), savedAt: Number(f.appProperties?.savedAt ?? Date.parse(f.modifiedTime)) };
 }
 
-/** アップロード（あれば上書き） */
-export async function upload(data: Uint8Array, savedAt: number, existingId?: string) {
+/** アップロード（あれば上書き）。新しい版を返す */
+export async function upload(data: Uint8Array, savedAt: number, existingId?: string): Promise<{ id: string; version: string }> {
   const meta = existingId
     ? { appProperties: { savedAt: String(savedAt) } }
     : { name: FILE_NAME, parents: ['appDataFolder'], appProperties: { savedAt: String(savedAt) } };
@@ -76,9 +104,11 @@ export async function upload(data: Uint8Array, savedAt: number, existingId?: str
   body.append('metadata', new Blob([JSON.stringify(meta)], { type: 'application/json' }));
   body.append('file', new Blob([data as BlobPart], { type: 'application/octet-stream' }));
   const url = existingId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart`
-    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-  await api(url, { method: existingId ? 'PATCH' : 'POST', body });
+    ? `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart&fields=id,version`
+    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,version';
+  const res = await api(url, { method: existingId ? 'PATCH' : 'POST', body });
+  const json = await res.json();
+  return { id: json.id, version: String(json.version) };
 }
 
 export async function download(id: string): Promise<Uint8Array> {
