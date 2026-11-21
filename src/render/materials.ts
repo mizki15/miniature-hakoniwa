@@ -5,7 +5,7 @@ import {
   positionGeometry, positionLocal, positionView, positionWorld, pow, screenUV, sin, cos, smoothstep as smoothstepT, step, texture3DLoad, time,
   transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture, Fn, If, Loop,
 } from 'three/tsl';
-import { paletteFlat, WATER } from '../world/blocks';
+import { COBBLE, FARMLAND, LOG, PATH, WATER, WET_FARMLAND, paletteFlat } from '../world/blocks';
 import { cloudShadowAt } from './sky';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -111,6 +111,8 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
     return inb.select(t, float(0));
   };
   const isOpaque = (t: N): N => t.greaterThan(0.5).and(near(t, WATER).not());
+  // 人工物（石畳・丸太・道・畑）：となりと色を混ぜない（境目をくっきり）
+  const isArtificial = (t: N): N => near(t, COBBLE).or(near(t, LOG)).or(near(t, PATH)).or(near(t, FARMLAND)).or(near(t, WET_FARMLAND));
 
   const kind = nL.y.greaterThan(0.5).select(float(0), nL.y.lessThan(-0.5).select(float(1), float(2)));
   const surfaceColor = (t: N): N => {
@@ -130,13 +132,16 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   const base: N = floor(g);
   const b = max(U.blend, 0.02).mul(0.5);
   const f = smoothstep(float(0.5).sub(b), float(0.5).add(b), fract(g));
-  const ownColor = surfaceColor(typeAt(voxel));
+  const ownT0 = typeAt(voxel);
+  const ownColor = surfaceColor(ownT0);
+  const ownArt = isArtificial(ownT0);
   let colSum: N = ownColor.mul(0.001);
   let wSum: N = float(0.001);
   for (const [i, j] of lite ? [] : [[0, 0], [1, 0], [0, 1], [1, 1]]) {
     const cell = cellAt(base.x.add(i), base.y.add(j));
     const t = typeAt(cell);
-    const valid = isOpaque(t).and(isOpaque(typeAt(cell.add(nL))).not());
+    // 人工物は混ぜない：自分が人工物ならとなりの色を取らず、となりの人工物の色も取らない
+    const valid = isOpaque(t).and(isOpaque(typeAt(cell.add(nL))).not()).and(ownArt.not()).and(isArtificial(t).not());
     const w = (i ? f.x : float(1).sub(f.x)).mul(j ? f.y : float(1).sub(f.y)).mul(valid.select(float(1), float(0)));
     colSum = colSum.add(surfaceColor(t).mul(w));
     wSum = wSum.add(w);
