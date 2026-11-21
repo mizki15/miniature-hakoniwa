@@ -72,6 +72,11 @@ export function canPlace(d: BuildingDesign, rot: Rot, x: number, z: number, size
  * 当たりは回転した外形の箱で見る。half は箱庭の中心のずれ（world.size / 2）
  */
 export function rayHitPlaced(placed: { design: BuildingDesign; x: number; z: number; y: number; rot: Rot }[], origin: V, dir: V, half: number): number {
+  return rayHitPlacedT(placed, origin, dir, half).index;
+}
+
+/** rayHitPlaced と同じ。当たった所までの光線の長さ t も返す（当たらなければ index −1、t は Infinity） */
+export function rayHitPlacedT(placed: { design: BuildingDesign; x: number; z: number; y: number; rot: Rot }[], origin: V, dir: V, half: number): { index: number; t: number } {
   let best = -1, bestT = Infinity;
   placed.forEach((p, i) => {
     const b = rotatedBounds(p.design, p.rot);
@@ -90,5 +95,5 @@ export function rayHitPlaced(placed: { design: BuildingDesign; x: number; z: num
     }
     if (t0 < bestT) { bestT = t0; best = i; }
   });
-  return best;
+  return { index: best, t: bestT };
 }

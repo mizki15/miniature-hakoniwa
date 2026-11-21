@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { AIR, DIRT, FARMLAND, GRASS, SAND, WATER, WET_FARMLAND, isOpaque } from '../world/blocks';
+import { AIR, CONIFER, DIRT, FARMLAND, GRASS, LEAVES, LOG, SAND, STONE, WATER, WET_FARMLAND, isOpaque } from '../world/blocks';
 import { CHUNK, type MeshData } from '../world/mesher';
 import type { WorldData } from '../world/terrain';
 import type { ChunkMesh, DetailModel, PlotPlacements, PlotResult } from '../world/worker';
@@ -12,12 +12,40 @@ import { raycastVoxels, type VoxelHit } from './picking';
 import type { SaveData } from '../save/format';
 import type { BuildingDesign } from '../build/geoParse';
 import { buildBuildingMesh } from '../build/geoMesh';
-import { canPlace, footprintCols, rayHitPlaced, rotatedBounds, type Rot } from '../build/placement';
+import { canPlace, footprintCols, rayHitPlaced, rayHitPlacedT, rotatedBounds, type Rot } from '../build/placement';
+import { advanceProgress, buildOrder, builtCount, cubeBox, minutesLeft } from '../build/construction';
 
-export type Tool = 'look' | 'till' | 'seed' | 'water' | 'harvest' | 'plant' | 'dig' | 'raise' | 'build' | 'unbuild';
+export type Tool = 'look' | 'till' | 'seed' | 'water' | 'harvest' | 'plant' | 'dig' | 'raise' | 'level' | 'build' | 'unbuild';
 
-/** 置いた建物 1 棟 */
-interface PlacedBuilding { id: string; x: number; z: number; rot: Rot }
+/** 置いた建物 1 棟。progress：建設の進み具合（0〜1、1 で完成） */
+interface PlacedBuilding { id: string; x: number; z: number; rot: Rot; progress: number }
+
+/** 建設中の建物 1 棟の見た目（組み上がった分・足場・次のパーツ・土ぼこり） */
+interface Site {
+  p: PlacedBuilding;
+  group: THREE.Group;
+  /** 組み上がった直方体の数（見た目を作った時の） */
+  shown: number;
+  built: THREE.Mesh | null;
+  next: THREE.Mesh | null;
+  scaffold: THREE.LineSegments | null;
+  dust: THREE.InstancedMesh;
+  /** 土ぼこりの粒：位置（建物の中の座標）と年齢（秒、負ならまだ出ていない） */
+  puffs: { x: number; y: number; z: number; vx: number; vz: number; age: number }[];
+  /** 次のパーツの上端の中心（土ぼこりが出る所） */
+  workAt: [number, number, number];
+}
+
+/** 置けるブロック（「ブロックを置く」で選ぶ） */
+export const PLACE_BLOCKS: { id: number; name: string; icon: string }[] = [
+  { id: DIRT, name: '土', icon: '🟫' },
+  { id: GRASS, name: '草地', icon: '🟩' },
+  { id: STONE, name: '石', icon: '🪨' },
+  { id: SAND, name: '砂', icon: '🟨' },
+  { id: LOG, name: '丸太', icon: '🪵' },
+  { id: LEAVES, name: '葉', icon: '🍃' },
+  { id: CONIFER, name: '針葉', icon: '🌲' },
+];
 
 /** 取り消しの記録 1 つ（1 回のなぞり）。voxels：変えたボクセルの番号 → 元の種類 */
 interface UndoEntry {
@@ -33,18 +61,22 @@ interface UndoEntry {
   treeCols: Set<number>;
 }
 
-export const TOOLS: { id: Tool; name: string; icon: string; key: string; help: string }[] = [
-  { id: 'look', name: '見る', icon: '👁', key: '1', help: '眺めるだけ。水面をクリックすると波紋' },
-  { id: 'till', name: '耕す', icon: '⛏', key: '2', help: '草地や土を耕して畑にする' },
-  { id: 'seed', name: '種まき', icon: '🌱', key: '3', help: '畑に種をまく（種は下で選ぶ）' },
-  { id: 'water', name: '水やり', icon: '💧', key: '4', help: '畑に水をやる（6 時間、倍の速さで育つ）' },
-  { id: 'harvest', name: '収穫', icon: '🧺', key: '5', help: '育ちきった作物を収穫する' },
-  { id: 'plant', name: '植林', icon: '🌳', key: '6', help: '苗木を植える（約 1 日で木になる）' },
-  { id: 'dig', name: '掘る', icon: '🕳', key: '7', help: 'ブロックを掘る。水のそばを掘ると水が流れ込む' },
-  { id: 'raise', name: '土を盛る', icon: '⬆', key: '8', help: '土のブロックを置く' },
-  { id: 'build', name: '建物を置く', icon: '🏠', key: '9', help: '棚で選んだ建物を地面に置く（R で向きを変える）' },
-  { id: 'unbuild', name: '片付ける', icon: '🧹', key: '0', help: '置いた建物を取り除く（棚には残る）' },
+export const TOOLS: { id: Tool; name: string; icon: string; help: string }[] = [
+  { id: 'look', name: '見る', icon: '👁', help: '眺めるだけ。水面をクリックすると波紋' },
+  { id: 'till', name: '耕す', icon: '⛏', help: '草地や土を耕して畑にする' },
+  { id: 'seed', name: '種まき', icon: '🌱', help: '畑に種をまく' },
+  { id: 'water', name: '水やり', icon: '💧', help: '畑に水をやる（6 時間、倍の速さで育つ）' },
+  { id: 'harvest', name: '収穫', icon: '🧺', help: '育ちきった作物を収穫する' },
+  { id: 'plant', name: '植林', icon: '🌳', help: '苗木を植える（約 1 日で木になる）' },
+  { id: 'dig', name: '掘る', icon: '🕳', help: 'ブロックを掘る。水のそばを掘ると水が流れ込む' },
+  { id: 'raise', name: 'ブロックを置く', icon: '🧱', help: '選んだブロックを置く' },
+  { id: 'level', name: '整地', icon: '📏', help: '最初に押したマスの高さに、なぞった所を削る・盛る' },
+  { id: 'build', name: '建物を置く', icon: '🏠', help: '選んだ建物を地面に置く。下から少しずつ建っていく' },
+  { id: 'unbuild', name: '片付ける', icon: '🧹', help: '置いた建物を取り除く（棚には残る）' },
 ];
+
+/** 整地で、1 列あたり削る・盛る高さの上限 */
+const LEVEL_MAX = 8;
 
 export function toGeometry(m: MeshData) {
   const g = new THREE.BufferGeometry();
@@ -93,6 +125,20 @@ export class GameController {
   farm = new Farm();
   tool: Tool = 'look';
   seed: CropKind = 'turnip';
+  /** 「ブロックを置く」で置くブロック */
+  block: number = DIRT;
+  /** 整地：このなぞりでそろえる高さ（最初に押した列の地面の高さ）。なぞりごとに決め直す */
+  private levelTarget: number | null = null;
+  /** 建設中の建物の見た目 */
+  private sites: Site[] = [];
+  private siteGhostMat = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, opacity: 0.14, depthWrite: false, roughness: 0.85, metalness: 0 });
+  private siteNextMat = new THREE.MeshBasicMaterial({ color: 0xfff1b8, transparent: true, opacity: 0.5, depthWrite: false });
+  private scaffoldMat = new THREE.LineBasicMaterial({ color: 0x8a6436, transparent: true, opacity: 0.9 });
+  private dustMat = new THREE.MeshBasicMaterial({ color: 0xe9dcc0, transparent: true, opacity: 0.7, depthWrite: false });
+  private dustGeo = new THREE.BoxGeometry(0.09, 0.09, 0.09);
+  private siteTime = 0;
+  /** 建物が建ち終わった時（main が知らせを出す） */
+  onBuildingDone: ((name: string) => void) | null = null;
   world: WorldData | null = null;
   /** 生成した状態からの変更（保存は「シード＋この差分」で行う） */
   edits = new Map<number, number>();
@@ -175,6 +221,7 @@ export class GameController {
     this.placed = [];
     this.buildingMeshes = [];
     this.buildingCols = new Set();
+    this.sites = [];
     // 取り消しの記録は箱庭ごと
     this.undo.clear();
     this.recording = null;
@@ -397,6 +444,7 @@ export class GameController {
   beginEdit(label: string) {
     // 前のなぞりの終わりを取りこぼしていたら（指を離す前にメニューを開いた等）、そこで区切る
     if (this.recording) this.endEdit();
+    this.levelTarget = null;
     if (!this.world) return;
     const f = this.farm;
     this.recording = {
@@ -417,6 +465,7 @@ export class GameController {
   endEdit() {
     const r = this.recording;
     this.recording = null;
+    this.levelTarget = null;
     if (r && (r.changed || r.voxels.size)) this.undo.push(r);
   }
 
@@ -452,7 +501,10 @@ export class GameController {
       const d = this.decor[k];
       if (d && d.placements !== p) { d.placements = p; this.buildDecor(d); }
     });
-    this.placed = r.placed.filter((p) => this.designs.has(p.id));
+    // 置いた建物：両方にある建物は、今の建設の進み具合を残す（取り消しで時間は戻さない）
+    const nowKey = (p: PlacedBuilding) => `${p.id}:${p.x}:${p.z}:${p.rot}`;
+    const nowPlaced = new Map(this.placed.map((p) => [nowKey(p), p]));
+    this.placed = r.placed.filter((p) => this.designs.has(p.id)).map((p) => ({ ...p, progress: nowPlaced.get(nowKey(p))?.progress ?? p.progress }));
     for (const col of cols) {
       this.updateWalkable(col);
       const h = w.heights[col];
@@ -546,6 +598,7 @@ export class GameController {
         const nx = x + dx, ny = y + dy, nz = z + dz;
         if (nx < 0 || nz < 0 || ny < 0 || nx >= w.size || nz >= w.size) continue;
         if (!floodAllowed(w.plots, nx, nz)) continue;
+        if (this.buildingCols.has(nx + nz * w.size)) continue;
         if (Math.abs(nx - sx) > 16 || Math.abs(nz - sz) > 16) continue;
         queue.push([nx, ny, nz]);
       }
@@ -639,6 +692,12 @@ export class GameController {
     const topFace = hit.ny === 1;
     const isTop = y === w.heights[col] - 1;
     const res = (ok: boolean, msg: string, tx = x, ty = y, tz = z) => ({ ok, x: tx, y: ty, z: tz, msg });
+    // 建物（建設中も）の中や足元には使えない。光線が地形より先に建物に当たる時も（建物の向こう側に使わないように）
+    if (this.lastRay && this.placed.length) {
+      const bh = rayHitPlacedT(this.placedWithY(), this.lastRay.origin, this.lastRay.dir, w.size / 2);
+      if (bh.index >= 0 && bh.t < hit.t) return res(false, '建物があります');
+    }
+    if (this.tool !== 'raise' && this.buildingCols.has(col)) return res(false, '建物があります');
     switch (this.tool) {
       case 'till':
         if (!topFace || !isTop) return res(false, '地面の上面を選んでください');
@@ -676,9 +735,20 @@ export class GameController {
         const tx = x + hit.nx, ty = y + hit.ny, tz = z + hit.nz;
         if (tx < 0 || tz < 0 || tx >= w.size || tz >= w.size || ty >= w.height - 2 || !canSetCol(w.plots, tx, tz)) return res(false, 'ここには置けません', tx, ty, tz);
         if (this.treeCols.has(tx + tz * w.size)) return res(false, '木があります', tx, ty, tz);
+        if (this.buildingCols.has(tx + tz * w.size)) return res(false, '建物があります', tx, ty, tz);
         const there = this.get(tx, ty, tz);
         if (there !== AIR && there !== WATER) return res(false, 'ふさがっています', tx, ty, tz);
-        return res(true, '土を盛る', tx, ty, tz);
+        return res(true, `${this.blockName()}を置く`, tx, ty, tz);
+      }
+      case 'level': {
+        // 整地は列で見る（坂をなぞると側面に当たることが多いので、面の向きは問わない）
+        if (this.treeCols.has(col)) return res(false, '木があります');
+        if (this.farm.crops.has(col)) return res(false, '作物があります');
+        const h = w.heights[col];
+        const target = this.levelTarget ?? h;
+        if (Math.abs(h - target) > LEVEL_MAX) return res(false, `高さが違いすぎます（${LEVEL_MAX} 段まで）`, x, h - 1, z);
+        if (target < 1 || target >= w.height - 2) return res(false, 'ここはそろえられません', x, h - 1, z);
+        return res(true, h > target ? `削って高さ ${target} にそろえる` : h < target ? `盛って高さ ${target} にそろえる` : `高さ ${target} にそろえる`, x, h - 1, z);
       }
     }
     return null;
@@ -708,9 +778,9 @@ export class GameController {
       case 'build': {
         const d = this.designs.get(this.selectedDesign!)!;
         for (const fc of footprintCols(d, this.buildRot, x, z, w.size)) this.removeFlowersAt(fc % w.size, Math.floor(fc / w.size));
-        this.placed.push({ id: d.id, x, z, rot: this.buildRot });
+        this.placed.push({ id: d.id, x, z, rot: this.buildRot, progress: 0 });
         this.rebuildBuildings();
-        return `「${d.name}」を置きました`;
+        return `「${d.name}」の建設を始めました（完成まで約 ${minutesLeft(0, d)} 分）`;
       }
       case 'unbuild': {
         const p = this.placedWithY()[c.index!];
@@ -763,12 +833,35 @@ export class GameController {
           if (this.farm.crops.delete(col)) this.rebuildCrops();
           if (this.farmland.delete(col)) this.setVoxel(x, prevTop, z, DIRT);
         }
-        this.setVoxel(x, y, z, DIRT);
-        return '土を盛りました';
+        this.setVoxel(x, y, z, this.block);
+        return `${this.blockName()}を置きました`;
+      }
+      case 'level': {
+        const h = w.heights[col];
+        if (this.levelTarget === null) this.levelTarget = h;
+        const target = this.levelTarget;
+        if (h === target) return '高さをそろえます';
+        const top = this.get(x, h - 1, z);
+        // 表面の草地・砂は、そろえた後の表面にも残す（畑は土に戻す）
+        const surface = top === GRASS || top === SAND ? top : DIRT;
+        this.removeFlowersAt(x, z);
+        this.farmland.delete(col);
+        if (h > target) {
+          for (let yy = h - 1; yy >= target; yy--) this.setVoxel(x, yy, z, AIR);
+          this.setVoxel(x, target - 1, z, surface);
+          this.flood(x, target, z);
+        } else {
+          if (top === GRASS || isFarm(top)) this.setVoxel(x, h - 1, z, DIRT);
+          for (let yy = h; yy < target; yy++) this.setVoxel(x, yy, z, yy === target - 1 ? surface : DIRT);
+        }
+        return '整地しました';
       }
     }
     return null;
   }
+
+  /** 「ブロックを置く」で選んでいるブロックの名前 */
+  blockName() { return PLACE_BLOCKS.find((b) => b.id === this.block)?.name ?? 'ブロック'; }
 
   // ---------- 建物の棚 ----------
 
@@ -808,8 +901,12 @@ export class GameController {
     const added = new Set<number>();
     for (const c of this.buildingCols) { this.updateWalkable(c); if (!before.has(c)) added.add(c); }
     if (added.size) this.onBuildingsPlaced?.(added);
+    // 建設中の建物は 1 棟ずつ（組み上がった分・足場・次のパーツ）
+    for (const st of this.sites) this.disposeSite(st);
+    this.sites = [];
     const groups = new Map<string, ReturnType<GameController['placedWithY']>>();
     for (const p of this.placedWithY()) {
+      if (p.progress < 1) { this.makeSite(p, half); continue; }
       if (!groups.has(p.id)) groups.set(p.id, []);
       groups.get(p.id)!.push(p);
     }
@@ -826,6 +923,150 @@ export class GameController {
       this.buildingMeshes.push(im);
       this.deps.diorama.add(im);
     }
+  }
+
+  // ---------- 建設 ----------
+  // 置いた建物は、直方体（パーツ）を下から順に 1 つずつ組み上げる。組み上がった分は不透明、
+  // 全体の形はうっすら透かして見せ、次のパーツは明るく点滅させる。周りに足場、作業中のパーツから土ぼこり
+
+  /** 建設中の建物の見た目を作る（pw は placedWithY の要素。進み具合は this.placed の物を見る） */
+  private makeSite(pw: ReturnType<GameController['placedWithY']>[number], half: number) {
+    const p = this.placed.find((q) => q.id === pw.id && q.x === pw.x && q.z === pw.z && q.rot === pw.rot);
+    if (!p) return;
+    const group = new THREE.Group();
+    group.position.set(p.x + 0.5 - half, pw.y, p.z + 0.5 - half);
+    group.rotation.y = (p.rot * Math.PI) / 2;
+    const ghost = new THREE.Mesh(this.designGeo(p.id), this.siteGhostMat);
+    ghost.renderOrder = 2;
+    group.add(ghost);
+    const dust = new THREE.InstancedMesh(this.dustGeo, this.dustMat, 10);
+    dust.userData.sharedGeometry = true;
+    dust.frustumCulled = false;
+    group.add(dust);
+    const st: Site = { p, group, shown: -1, built: null, next: null, scaffold: null, dust, puffs: Array.from({ length: 10 }, (_, i) => ({ x: 0, y: 0, z: 0, vx: 0, vz: 0, age: -i * 0.11 })), workAt: [0, 0, 0] };
+    this.sites.push(st);
+    this.updateSite(st);
+    this.deps.diorama.add(group);
+  }
+
+  private disposeSite(st: Site) {
+    this.deps.diorama.remove(st.group);
+    st.built?.geometry.dispose();
+    st.next?.geometry.dispose();
+    st.scaffold?.geometry.dispose();
+    st.dust.dispose();
+  }
+
+  /** 組み上がった数が変わったら、組み上がった分・次のパーツ・足場を作り直す */
+  private updateSite(st: Site) {
+    const d = this.designs.get(st.p.id);
+    if (!d) return;
+    const order = buildOrder(d);
+    const k = builtCount(st.p.progress, order.length);
+    if (k === st.shown) return;
+    st.shown = k;
+    for (const m of [st.built, st.next, st.scaffold]) if (m) { st.group.remove(m); m.geometry.dispose(); }
+    st.built = st.next = null;
+    st.scaffold = null;
+    if (k > 0) {
+      st.built = new THREE.Mesh(toGeometry(buildBuildingMesh({ ...d, cubes: order.slice(0, k) })), this.deps.buildingMat);
+      st.built.castShadow = st.built.receiveShadow = true;
+      st.group.add(st.built);
+    }
+    // 作業中の高さ：次のパーツの上端（なければ全体の上端）
+    let workTop = d.bounds.max[1];
+    if (k < order.length) {
+      st.next = new THREE.Mesh(toGeometry(buildBuildingMesh({ ...d, cubes: [order[k]] })), this.siteNextMat);
+      st.next.renderOrder = 3;
+      st.group.add(st.next);
+      const b = cubeBox(order[k]);
+      workTop = b.max[1];
+      st.workAt = [(b.min[0] + b.max[0]) / 2, b.max[1], (b.min[2] + b.max[2]) / 2];
+    }
+    // 足場：四隅の柱と、作業中の高さまで 1 段ごとの横木、下の段に筋交い
+    const { min, max } = d.bounds;
+    const m = 0.2;
+    const x0 = min[0] - m, x1 = max[0] + m, z0 = min[2] - m, z1 = max[2] + m;
+    const top = Math.min(max[1], workTop) + 0.6;
+    const pts: number[] = [];
+    for (const [cx, cz] of [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) pts.push(cx, 0, cz, cx, top, cz);
+    for (let y = 1; y <= top; y++) {
+      pts.push(x0, y, z0, x1, y, z0, x1, y, z0, x1, y, z1, x1, y, z1, x0, y, z1, x0, y, z1, x0, y, z0);
+    }
+    const by = Math.min(1, top);
+    pts.push(x0, 0, z0, x1, by, z0, x1, 0, z1, x0, by, z1, x0, 0, z1, x0, by, z0, x1, 0, z0, x1, by, z1);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    st.scaffold = new THREE.LineSegments(g, this.scaffoldMat);
+    st.group.add(st.scaffold);
+  }
+
+  /** 建設を dtMs（箱庭の時間）ぶん進める。建ち終わった建物があれば、まとめて描き直す */
+  private advanceBuildings(dtMs: number) {
+    let finished = false;
+    for (const p of this.placed) {
+      if (p.progress >= 1) continue;
+      const d = this.designs.get(p.id);
+      if (!d) continue;
+      p.progress = advanceProgress(p.progress, dtMs, d);
+      if (p.progress >= 1) { finished = true; this.onBuildingDone?.(d.name); }
+    }
+    if (finished) { this.rebuildBuildings(); this.onEnvChanged?.(); }
+    else for (const st of this.sites) this.updateSite(st);
+  }
+
+  /** 建設中の動き（毎フレーム、現実の秒で）：次のパーツの点滅と土ぼこり */
+  private animateSites(dtReal: number) {
+    if (!this.sites.length) return;
+    this.siteTime += dtReal;
+    this.siteNextMat.opacity = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(this.siteTime * 4));
+    const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), ps = new THREE.Vector3(), sc = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+    const LIFE = 1.1;
+    for (const st of this.sites) {
+      st.puffs.forEach((f, i) => {
+        f.age += dtReal;
+        if (f.age >= LIFE) {
+          // 作業中のパーツの上から、また出す
+          f.age = 0;
+          f.x = st.workAt[0] + (Math.random() - 0.5) * 0.6;
+          f.y = st.workAt[1];
+          f.z = st.workAt[2] + (Math.random() - 0.5) * 0.6;
+          f.vx = (Math.random() - 0.5) * 0.5;
+          f.vz = (Math.random() - 0.5) * 0.5;
+        }
+        const a = Math.max(0, f.age);
+        const s = f.age < 0 ? 0 : (1 - a / LIFE) * 1.4 + 0.3;
+        ps.set(f.x + f.vx * a, f.y + 0.15 + a * 0.55, f.z + f.vz * a);
+        q.setFromAxisAngle(up, a * 3 + i);
+        sc.setScalar(s);
+        st.dust.setMatrixAt(i, mtx.compose(ps, q, sc));
+      });
+      st.dust.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  /** 建設中の建物の様子（見るモードのホバー用）。光線の先（地形より手前）に建設中の建物がなければ null */
+  siteAt(origin: THREE.Vector3, dir: THREE.Vector3, voxelT: number): { key: string; name: string; progress: number; minutes: number; top: THREE.Vector3 } | null {
+    const w = this.world;
+    if (!w) return null;
+    const list = this.placedWithY().filter((p) => p.progress < 1);
+    if (!list.length) return null;
+    const h = rayHitPlacedT(list, [origin.x, origin.y, origin.z], [dir.x, dir.y, dir.z], w.size / 2);
+    if (h.index < 0 || h.t > voxelT + 0.5) return null;
+    const p = list[h.index];
+    const half = w.size / 2;
+    return { key: `${p.id}:${p.x}:${p.z}`, name: p.design.name, progress: p.progress, minutes: minutesLeft(p.progress, p.design), top: new THREE.Vector3(p.x + 0.5 - half, p.y + p.design.bounds.max[1] + 0.3, p.z + 0.5 - half) };
+  }
+
+  /** 建設中の建物の様子（key は siteAt の物）。建ち終わった・片付けた建物なら null */
+  siteInfo(key: string): { name: string; progress: number; minutes: number; built: number; total: number; top: THREE.Vector3 } | null {
+    const w = this.world;
+    if (!w) return null;
+    const p = this.placedWithY().find((q) => `${q.id}:${q.x}:${q.z}` === key && q.progress < 1);
+    if (!p) return null;
+    const half = w.size / 2;
+    const total = p.design.cubes.length;
+    return { name: p.design.name, progress: p.progress, minutes: minutesLeft(p.progress, p.design), built: builtCount(p.progress, total), total, top: new THREE.Vector3(p.x + 0.5 - half, p.y + p.design.bounds.max[1] + 0.3, p.z + 0.5 - half) };
   }
 
   /** 建物の形（種類ごとに 1 度だけ作る。置いた建物と見本で同じものを使う） */
@@ -948,6 +1189,8 @@ export class GameController {
     this.rising = this.rising.filter((r) => r.t < 1);
     const changed = this.farm.advance(dtReal * 1000 * this.farm.speed, { ...env, isWet: (col) => this.isWet(col) });
     if (changed) { this.rebuildCrops(); this.rebuildGrowing(); }
+    this.advanceBuildings(dtReal * 1000 * this.farm.speed);
+    this.animateSites(dtReal);
     // 畑の湿り具合を見た目（ブロックの種類）に反映（1 秒ごと）
     this.wetCheck -= dtReal;
     if (this.wetCheck <= 0) {
@@ -966,6 +1209,7 @@ export class GameController {
   skip(hours: number, env: { season: number; raining: boolean }) {
     const steps = Math.ceil(hours * 4); // 15 分ずつ
     for (let i = 0; i < steps; i++) this.farm.advance((hours * HOUR) / steps, { ...env, isWet: (col) => this.isWet(col) });
+    this.advanceBuildings(hours * HOUR);
     this.rebuildCrops();
     this.rebuildGrowing();
     this.wetCheck = 0;
@@ -1025,7 +1269,7 @@ export class GameController {
       },
       buildings: {
         designs: [...this.designs.values()],
-        placed: this.placed.map((p) => [p.id, p.x, p.z, p.rot]),
+        placed: this.placed.map((p): [string, number, number, Rot, number?] => (p.progress >= 1 ? [p.id, p.x, p.z, p.rot] : [p.id, p.x, p.z, p.rot, +p.progress.toFixed(5)])),
       },
     };
   }
@@ -1053,7 +1297,8 @@ export class GameController {
     for (const g of this.buildingGeos.values()) g.dispose();
     this.buildingGeos.clear();
     this.designs = new Map(save.buildings.designs.map((d) => [d.id, d]));
-    this.placed = save.buildings.placed.filter(([id]) => this.designs.has(id)).map(([id, x, z, rot]) => ({ id, x, z, rot }));
+    // 進み具合のない古い記録は、建ち終わった建物として読む
+    this.placed = save.buildings.placed.filter(([id]) => this.designs.has(id)).map(([id, x, z, rot, progress]) => ({ id, x, z, rot, progress: progress ?? 1 }));
     if (this.selectedDesign && !this.designs.has(this.selectedDesign)) this.selectedDesign = null;
     this.rebuildCrops();
     this.rebuildGrowing();
@@ -1071,14 +1316,21 @@ export class GameController {
     const f = this.farm;
     const from = f.simMs;
     const target = Math.min(toMs, from + maxHours * HOUR);
-    if (target <= from) return { hours: 0, ripened: 0, grown: 0 };
+    if (target <= from) return { hours: 0, ripened: 0, grown: 0, built: 0 };
     const ripeBefore = [...f.crops.values()].filter((c) => c.progress >= 1).length;
+    const builtBefore = this.placed.filter((p) => p.progress >= 1).length;
     const grownBefore = f.saplings.filter((s) => s.progress >= 1).length;
     const STEP = 15 * 60 * 1000;
     while (f.simMs < target) {
       const dt = Math.min(STEP, target - f.simMs);
       f.advance(dt, { ...envAt(f.simMs), isWet: (col) => this.isWet(col) });
     }
+    // 閉じていた間の建設は、建ち終わりの知らせを 1 棟ずつ出さず、数だけ返す
+    const done = this.onBuildingDone;
+    this.onBuildingDone = null;
+    this.advanceBuildings(target - from);
+    this.onBuildingDone = done;
+    this.rebuildBuildings();
     this.rebuildCrops();
     this.rebuildGrowing();
     this.wetCheck = 0;
@@ -1086,6 +1338,7 @@ export class GameController {
       hours: (target - from) / HOUR,
       ripened: [...f.crops.values()].filter((c) => c.progress >= 1).length - ripeBefore,
       grown: f.saplings.filter((s) => s.progress >= 1).length - grownBefore,
+      built: this.placed.filter((p) => p.progress >= 1).length - builtBefore,
     };
   }
 
@@ -1098,6 +1351,7 @@ export class GameController {
       growing: crops.filter((c) => c.progress < 1).length,
       ripe: crops.filter((c) => c.progress >= 1).length,
       saplings: this.farm.saplings.filter((s) => s.progress < 1).length,
+      building: this.placed.filter((p) => p.progress < 1).length,
       edits: this.edits.size,
     };
   }

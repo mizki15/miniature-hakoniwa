@@ -21,9 +21,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .glass { transition: background-color 0.6s ease, color 0.6s ease; color: var(--ink); background: var(--glass-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border: 1px solid var(--glass-border); box-shadow: 0 8px 32px rgba(20, 40, 60, 0.18), inset 0 1px 0 rgba(255,255,255,0.6); }
 
 .side { position: absolute; top: var(--gap); bottom: var(--gap); width: var(--side-w); border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; z-index: 2; transition: transform 0.3s ease, opacity 0.3s ease; }
-#left { left: var(--gap); }
-#right { right: var(--gap); }
-#layout.left-closed #left { transform: translateX(calc(-100% - var(--gap) * 2)); opacity: 0; pointer-events: none; }
+/* 右のパネル（ようす・図鑑）は、右上のメニューのボタンの下から */
+#right { right: var(--gap); top: calc(var(--gap) * 2 + 44px); }
 #layout.right-closed #right { transform: translateX(calc(100% + var(--gap) * 2)); opacity: 0; pointer-events: none; }
 .side header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; font-weight: 700; font-size: 14px; border-bottom: 1px solid var(--line); white-space: nowrap; text-shadow: 0 1px 0 rgba(255,255,255,0.5); }
 .side-body { padding: 12px 14px; overflow-y: auto; flex: 1; }
@@ -49,13 +48,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 /* 中央 */
 #app, #app canvas { width: 100%; height: 100%; display: block; touch-action: none; }
 .reopen { position: absolute; top: 50%; transform: translateY(-50%); display: none; width: 24px; height: 60px; cursor: pointer; color: var(--muted); font-size: 16px; padding: 0; z-index: 2; }
-#reopen-left { left: 0; border-radius: 0 10px 10px 0; }
 #reopen-right { right: 0; border-radius: 10px 0 0 10px; }
-#layout.left-closed #reopen-left, #layout.right-closed #reopen-right { display: block; }
+#layout.right-closed #reopen-right { display: block; }
 
-/* デバッグウィンドウ（図鑑パネルの右隣に浮かぶ） */
-#ui { position: absolute; top: var(--gap); left: calc(var(--side-w) + var(--gap) * 2); padding: 10px 12px; border-radius: 14px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; max-width: 360px; user-select: none; z-index: 2; transition: left 0.3s ease; }
-#layout.left-closed #ui { left: 36px; }
+/* デバッグウィンドウ（左上に浮かぶ） */
+#ui { position: absolute; top: var(--gap); left: var(--gap); padding: 10px 12px; border-radius: 14px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; max-width: 360px; user-select: none; z-index: 2; transition: left 0.3s ease; }
 #ui .title { font-weight: 700; font-size: 15px; }
 #ui .title small { font-weight: 400; color: var(--muted); margin-left: 4px; }
 #ui .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -100,49 +97,67 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 #modes button .k { font-size: 9px; color: var(--muted); }
 #modes button.on { background: rgba(47, 125, 225, 0.85); color: #fff; border-color: rgba(47,125,225,0.9); }
 #modes button.on .k { color: rgba(255,255,255,0.8); }
-#toast { position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 3; background: rgba(30, 40, 50, 0.72); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+#toast { position: absolute; left: 50%; bottom: 76px; transform: translateX(-50%); z-index: 3; background: rgba(30, 40, 50, 0.72); color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
 #toast.show { opacity: 1; }
 
-/* パネルの表示：見る＝なし、エディタ＝エディタのみ、ステータス＝図鑑とステータス */
-#editor { left: var(--gap); }
-#layout:not(.mode-edit) #editor { transform: translateX(calc(-100% - var(--gap) * 2)); opacity: 0; pointer-events: none; }
-#layout.mode-edit #left { transform: translateX(calc(-100% - var(--gap) * 2)); opacity: 0; pointer-events: none; }
+/* パネルの表示：見る＝ようす・図鑑、エディタ＝なし（道具は画面下と道具の輪） */
 #layout.mode-edit #right { transform: translateX(calc(100% + var(--gap) * 2)); opacity: 0; pointer-events: none; }
 #layout.mode-edit .reopen { display: none !important; }
-#layout.mode-edit #ui { left: calc(var(--side-w) + var(--gap) * 2); }
 /* 右クリックで固定した情報 */
 #tooltip.pinned { border-color: rgba(47,125,225,0.6); box-shadow: 0 6px 22px rgba(20,40,60,0.25); }
 #tooltip .pin { float: right; font-size: 11px; color: var(--muted); margin-left: 8px; }
 
-/* エディタの道具一覧 */
-.tool-list { display: flex; flex-direction: column; gap: 6px; }
-.tool-list button { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 2px 8px; text-align: left; border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.3); border-radius: 12px; padding: 6px 10px; cursor: pointer; color: var(--ink); font-size: 13px; }
-.tool-list button .ic { font-size: 18px; grid-row: span 2; }
-.tool-list button .k { font-size: 10px; color: var(--muted); border: 1px solid rgba(0,0,0,0.12); border-radius: 4px; padding: 0 4px; }
-.tool-list button .d { grid-column: 2 / span 2; font-size: 10.5px; color: var(--muted); }
-.tool-list button.on { background: rgba(91, 143, 58, 0.85); color: #fff; border-color: rgba(91,143,58,0.9); }
-.tool-list button.on .d, .tool-list button.on .k { color: rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.4); }
-#seedBox { margin-top: 12px; }
-#seedBox h3 { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
-.seed-list { display: flex; gap: 6px; flex-wrap: wrap; }
-.seed-list button { border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.3); border-radius: 10px; padding: 4px 8px; cursor: pointer; font-size: 12px; color: var(--ink); }
-.seed-list button .k { font-size: 10px; color: var(--muted); margin-left: 4px; }
-.seed-list button.on { background: rgba(91, 143, 58, 0.85); color: #fff; }
-/* 建物の棚と読み込み */
-#buildBox { margin-top: 12px; }
-#buildBox h3 { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
-#shelf:empty::before { content: 'まだ建物がありません'; font-size: 11px; color: var(--muted); }
-#shelf .shelf-item { display: inline-flex; align-items: center; gap: 2px; }
-#shelf .shelf-item .del { padding: 4px 6px; }
-#buildImport { margin-top: 8px; font-size: 12px; }
-#buildImport summary { cursor: pointer; color: var(--ink); }
-#buildImport textarea { width: 100%; box-sizing: border-box; margin: 6px 0 4px; font: inherit; font-size: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.55); color: #1f2933; padding: 6px 8px; resize: vertical; }
-#buildImport button, .build-file { border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.3); border-radius: 10px; padding: 4px 8px; cursor: pointer; font-size: 12px; color: var(--ink); }
-.build-label { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+/* エディタ：いま持っている道具（画面下中央。押すと道具の輪） */
+#toolChip { position: absolute; left: 50%; bottom: var(--gap); transform: translateX(-50%); z-index: 3; display: none; align-items: center; gap: 8px; max-width: min(640px, 80vw); padding: 7px 14px 7px 10px; border-radius: 14px; cursor: pointer; font: inherit; font-size: 13px; text-align: left; }
+#layout.mode-edit #toolChip { display: flex; }
+#toolChip .ic { font-size: 20px; line-height: 1; }
+#toolChip b { white-space: nowrap; }
+#toolChip .tool-hint { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#toolChip:hover { border-color: rgba(91, 143, 58, 0.8); }
+
+/* 道具の輪（ラジアルメニュー） */
+#radial { position: fixed; inset: 0; z-index: 40; display: none; user-select: none; }
+#radial.open { display: block; }
+.radial-ring { position: absolute; width: 236px; height: 236px; margin: -118px 0 0 -118px; border-radius: 50%; background: rgba(255, 255, 255, 0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 10px 40px rgba(20, 40, 60, 0.25); }
+.radial-center { position: absolute; transform: translate(-50%, -50%); width: 76px; text-align: center; font-size: 12px; font-weight: 700; color: #1f2933; text-shadow: 0 1px 0 rgba(255, 255, 255, 0.8); pointer-events: none; }
+.radial-item { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 50%; background: rgba(255, 255, 255, 0.88); border: 2px solid rgba(255, 255, 255, 0.95); box-shadow: 0 4px 14px rgba(20, 40, 60, 0.22); color: #1f2933; cursor: pointer; transition: transform 0.08s ease, background 0.08s; }
+.radial-group { width: 66px; height: 66px; }
+.radial-child { width: 58px; height: 58px; animation: ri-pop 0.12s ease; }
+.radial-item .ri-ic { font-size: 22px; line-height: 1.1; }
+.radial-child .ri-ic { font-size: 19px; }
+.radial-item .ri-lb { font-size: 10px; max-width: 54px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.radial-item.current { border-color: rgba(91, 143, 58, 0.9); }
+.radial-item.last:not(.hl) { background: rgba(240, 248, 234, 0.92); }
+.radial-item.hl { background: rgba(91, 143, 58, 0.95); color: #fff; border-color: #fff; transform: translate(-50%, -50%) scale(1.12); }
+@keyframes ri-pop { from { opacity: 0; transform: translate(-50%, -50%) scale(0.6); } }
+
+/* メニュー（PC：右上のボタン。スマホは画面下中央のまま） */
+.menu-fab { position: absolute; top: var(--gap); right: var(--gap); z-index: 3; width: 44px; height: 44px; border-radius: 14px; font-size: 20px; cursor: pointer; padding: 0; }
+@media (min-width: 761px) { #modes { display: none !important; } }
+@media (max-width: 760px) { .menu-fab, #toolChip { display: none !important; } }
+
+/* 切り替えボタン（右のパネルの「ようす｜図鑑」、建物の窓の「読み込む｜棚」） */
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: rgba(255, 255, 255, 0.3); }
+.seg button { border: none; background: transparent; border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.seg button.on { background: rgba(91, 143, 58, 0.88); color: #fff; }
+.viewer-head .seg { background: #eef1f4; }
+.viewer-head .seg button { color: #4a5560; font-size: 13px; padding: 5px 14px; }
+.viewer-head .seg button.on { color: #fff; }
+
+/* 建物の窓：読み込みの欄 */
+.viewer-side { width: 280px; display: flex; flex-direction: column; border-right: 1px solid #eef1f4; min-height: 0; }
+.v-import { padding: 10px 12px; overflow-y: auto; font-size: 12px; }
+.v-import[hidden] { display: none; }
+.v-import textarea { width: 100%; box-sizing: border-box; margin: 4px 0 6px; font: inherit; font-size: 12px; border-radius: 8px; border: 1px solid #d5dbe1; background: #fff; color: #1f2933; padding: 6px 8px; resize: vertical; }
+.v-import button, .build-file { border: 1px solid #d5dbe1; background: #f7f9fb; border-radius: 10px; padding: 5px 10px; cursor: pointer; font-size: 12px; color: #1f2933; display: inline-block; }
+.v-import button:hover, .build-file:hover { background: #eaf2fc; }
+.build-label { display: block; margin-top: 6px; color: #4a5560; font-size: 11.5px; font-weight: 600; }
 .build-row { display: flex; gap: 6px; flex-wrap: wrap; }
-#buildIssues { margin-top: 8px; padding: 6px 8px; border-radius: 8px; background: rgba(224, 80, 74, 0.15); }
+#buildIssues { margin-top: 8px; padding: 6px 8px; border-radius: 8px; background: rgba(224, 80, 74, 0.12); color: #1f2933; }
+#buildIssues[hidden] { display: none; }
 #buildIssues ul { margin: 0 0 6px; padding-left: 16px; line-height: 1.5; }
-.open-viewer { margin-top: 6px; border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.3); border-radius: 10px; padding: 4px 8px; cursor: pointer; font-size: 12px; color: var(--ink); }
+.viewer-list[hidden] { display: none; }
+.viewer-actions button[hidden] { display: none; }
 
 /* 建物の棚のビューワー（メニューと同じく、画面全体をすりガラスにして表示） */
 #viewer { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; background: rgba(232, 237, 243, 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
@@ -151,7 +166,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .viewer-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; font-weight: 700; border-bottom: 1px solid #eef1f4; }
 .viewer-head button { border: none; background: none; font-size: 20px; cursor: pointer; color: #4a5560; }
 .viewer-body { flex: 1; display: flex; min-height: 0; }
-.viewer-list { width: 220px; margin: 0; padding: 8px; list-style: none; overflow-y: auto; border-right: 1px solid #eef1f4; }
+.viewer-list { flex: 1; margin: 0; padding: 8px; list-style: none; overflow-y: auto; }
 .viewer-list li button { width: 100%; text-align: left; border: none; background: none; padding: 8px 10px; border-radius: 10px; cursor: pointer; font-size: 13px; color: #1f2933; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewer-list li button:hover { background: #f1f4f7; }
 .viewer-list li button.on { background: rgba(91, 143, 58, 0.18); font-weight: 700; }
@@ -168,10 +183,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .viewer-actions button { border: 1px solid #d5dbe1; background: #fff; border-radius: 10px; padding: 6px 12px; cursor: pointer; font-size: 13px; color: #1f2933; }
 .viewer-actions button.primary { background: rgba(91, 143, 58, 0.9); border-color: transparent; color: #fff; }
 .viewer-actions button:disabled { opacity: 0.5; cursor: default; }
-@media (max-width: 640px) { .viewer-body { flex-direction: column; } .viewer-list { width: auto; max-height: 30%; border-right: none; border-bottom: 1px solid #eef1f4; } }
-#layout.drop-target #editor { outline: 2px dashed rgba(91, 143, 58, 0.9); }
-.tool-hint { margin-top: 12px; font-size: 12px; color: var(--ink); min-height: 2.4em; padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,0.25); }
-.howto { margin-top: 12px; font-size: 11px; color: var(--muted); line-height: 1.7; }
+@media (max-width: 640px) { .viewer-body { flex-direction: column; } .viewer-side { width: auto; max-height: 40%; border-right: none; border-bottom: 1px solid #eef1f4; } }
+#layout.drop-target #toolChip { outline: 2px dashed rgba(91, 143, 58, 0.9); }
 
 /* ステータスモードのツールチップ */
 #tooltip { position: absolute; z-index: 4; pointer-events: none; padding: 8px 12px; border-radius: 12px; font-size: 12px; min-width: 140px; max-width: 240px; display: none; background: rgba(255,255,255,0.55); }
@@ -189,9 +202,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .dex-card.sel { outline: 2px solid rgba(47,125,225,0.7); }
 #dexDetail { margin-top: 10px; font-size: 12px; line-height: 1.6; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.3); min-height: 3em; }
 @media (max-width: 760px) {
-  #tooltip, #editor { display: none !important; }
-  /* スマホ：見る・エディタは出さず、メニュー（保存・Google 同期）のボタンだけ出す */
-  #modes button[data-mode] { display: none; }
+  #tooltip { display: none !important; }
+  /* スマホ：メニュー（保存・Google 同期）のボタンだけ出す */
   #modes { bottom: calc(var(--gap) + env(safe-area-inset-bottom, 0px)); }
 }
 
@@ -221,13 +233,19 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .cloud-status { font-size: 13px; line-height: 1.6; margin-bottom: 8px; color: #1f2933; overflow-wrap: anywhere; }
 .cloud-status small { display: block; color: #4a5560; font-size: 12px; }
 .save-buttons button[hidden] { display: none; }
-/* ログイン中のスマホは見るだけ：エディタに入るボタンを出さない */
-.view-only #modes button[data-mode="edit"] { display: none; }
+/* 操作方法（ふだんはたたんでおく） */
+.menu-howto summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+.menu-howto summary::-webkit-details-marker { display: none; }
+.menu-howto summary::after { content: '\25B8'; color: #4a5560; transition: transform 0.15s; }
+.menu-howto[open] summary::after { transform: rotate(90deg); }
+.menu-howto summary h2 { margin: 0; }
+.menu-howto[open] summary { margin-bottom: 10px; }
 .menu-keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
 .menu-keys dt { font-weight: 600; color: #1f2933; white-space: nowrap; }
 .menu-keys dd { margin: 0; color: #4a5560; }
 @media (max-width: 760px) { .save-buttons { grid-template-columns: 1fr; } }
 #modes .menu-btn { min-width: 76px; }
+.menu-fab, #toolChip { color: var(--ink); }
 
 /* ---------- 夜のパネル ----------
    夜は背景（空・地形）が暗いので、明るいすりガラスだと文字が沈む。
@@ -241,14 +259,14 @@ body.night {
 }
 body.night .glass { box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08); }
 body.night .side header { text-shadow: none; }
+body.night .side .seg { background: rgba(255, 255, 255, 0.1); }
 body.night .tab:not(.on), body.night .dex-card, body.night .skeleton-line, body.night #dexDetail, body.night .tool-hint { background: rgba(255, 255, 255, 0.08); }
 body.night .dex-card { border-color: rgba(255, 255, 255, 0.14); }
 body.night .dex-icon { background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.45); }
 body.night .dex-card.observed .dex-icon, body.night .dex-card.seen .dex-icon { background: rgba(255, 255, 255, 0.85); }
-body.night #ui button:not(.on), body.night .tool-list button:not(.on), body.night .seed-list button:not(.on), body.night #modes button:not(.on), body.night .reopen {
+body.night #ui button:not(.on), body.night #modes button:not(.on), body.night .reopen, body.night .menu-fab, body.night #toolChip {
   background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2); color: var(--ink);
 }
-body.night .tool-list button .k { border-color: rgba(255, 255, 255, 0.25); }
 body.night #tooltip { background: rgba(16, 22, 34, 0.78); }
 body.night #tooltip .bar { background: rgba(255, 255, 255, 0.15); }
 

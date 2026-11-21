@@ -39,8 +39,10 @@ import type { InitResult, PlotResult, RemeshResult } from './world/worker';
 import { FRAME, PLOT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect, rightsLeft } from './world/plots';
 import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
-import { GameController, TOOLS, type Tool } from './game/controller';
-import { parseBuilding, type ParseIssue } from './build/geoParse';
+import { GameController, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
+import { Radial, type RadialItem } from './ui/radial';
+import { buildMinutes } from './build/construction';
+import { parseBuilding, type BuildingDesign, type ParseIssue } from './build/geoParse';
 import { buildFixPrompt, buildPrompt } from './build/aiPrompt';
 import { LIMITS } from './build/limits';
 import { BuildingViewer } from './build/viewer';
@@ -198,12 +200,16 @@ async function main() {
 
   // 触れる・育つ要素（道具・畑・植林・地形の編集）
   const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat, buildingMat });
+  /** 知らせを出す（toast を作るまでは何もしない） */
+  let notify: (msg: string) => void = () => {};
   // Drive との同期：プレイヤーが手を加えたら印を立てる（生き物の発見や時間の経過では立てない）
   const syncState = createSyncState(localStorage);
   let cloud: CloudSync | null = null; // Google 同期（保存の所で作る）
   /** プレイヤーが手を加えた：印を立て、少したったら Drive に送る */
   const playerChanged = () => { syncState.markChanged(); cloud?.onEdit(); };
   game.onPlayerChange = playerChanged;
+  // 建物が建ち終わった（時間の経過で）。toast は後で作るので、呼ばれた時に探す
+  game.onBuildingDone = (name) => notify(`🏠「${name}」が完成しました`);
   game.farm.speed = parseFloat($<HTMLSelectElement>('simSpeed').value); // 時間の流れの初期値（画面の選択）
   // 生き物（住人・訪問者・図鑑・来るかどうかの判定）
   const eco = new EcoManager({
@@ -431,102 +437,185 @@ async function main() {
   let mode: Mode = 'view';
   /** ログイン中のスマホは見るだけ（エディタに入れない） */
   let viewOnly = false;
-  const toolsEl = $('tools'), seedsEl = $('seeds'), hintEl = $('toolHint'), toastEl = $('toast'), tooltipEl = $('tooltip');
+  const hintEl = $('toolHint'), toastEl = $('toast'), tooltipEl = $('tooltip');
   let toastTimer = 0;
+  notify = (msg: string) => toast(msg, 3000);
   const toast = (msg: string, ms = 1600) => {
     toastEl.textContent = msg;
     toastEl.classList.add('show');
     clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => toastEl.classList.remove('show'), ms);
   };
+  /** 読み込んだ建物の名前など、外から来た文字を HTML に入れる時に使う */
+  const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-  // エディタの道具一覧（「見る」はモードで切り替えるので除く）
-  const EDIT_TOOLS = TOOLS.filter((t) => t.id !== 'look');
-  let editTool: Tool = 'till';
-  const toolButtons = new Map<Tool, HTMLButtonElement>();
-  for (const t of EDIT_TOOLS) {
-    const b = document.createElement('button');
-    b.innerHTML = `<span class="ic">${t.icon}</span><span>${t.name}</span><span class="k">${t.key}</span><span class="d">${t.help}</span>`;
-    b.addEventListener('click', () => selectTool(t.id));
-    toolsEl.appendChild(b);
-    toolButtons.set(t.id, b);
-  }
   const CROP_ICONS: Record<CropKind, string> = { turnip: '🥬', wheat: '🌾', pumpkin: '🎃' };
-  const renderSeeds = () => {
-    seedsEl.innerHTML = '';
-    for (const k of CROP_KINDS) {
-      const b = document.createElement('button');
-      b.innerHTML = `${CROP_ICONS[k]} ${CROPS[k].name}<span class="k">${CROPS[k].hours}時間</span>`;
-      b.classList.toggle('on', game.seed === k);
-      b.addEventListener('click', () => { game.seed = k; renderSeeds(); if (mode === 'edit') selectTool('seed'); });
-      seedsEl.appendChild(b);
-    }
+  let editTool: Tool = 'till';
+
+  // 道具の輪（Q を押している間、または画面下の道具を押すと出る）。似た作業はグループにまとめる
+  const radial = new Radial($('radial'));
+  /** グループの並び（1〜5 のキーもこの順） */
+  const GROUP_IDS = ['g:farm', 'g:plant', 'g:land', 'g:block', 'g:build'];
+  const radialItems = (): RadialItem[] => [
+    { id: 'g:farm', icon: '🌾', label: '畑', children: [
+      { id: 'till', icon: '⛏', label: '耕す' }, { id: 'water', icon: '💧', label: '水やり' }, { id: 'harvest', icon: '🧺', label: '収穫' },
+    ] },
+    { id: 'g:plant', icon: '🌱', label: '植える', children: [
+      ...CROP_KINDS.map((k) => ({ id: `seed:${k}`, icon: CROP_ICONS[k], label: CROPS[k].name })), { id: 'plant', icon: '🌳', label: '苗木' },
+    ] },
+    { id: 'g:land', icon: '⛰', label: '地形', children: [{ id: 'dig', icon: '🕳', label: '掘る' }, { id: 'level', icon: '📏', label: '整地' }] },
+    { id: 'g:block', icon: '🧱', label: 'ブロック', children: PLACE_BLOCKS.map((b) => ({ id: `block:${b.id}`, icon: b.icon, label: b.name })) },
+    { id: 'g:build', icon: '🏠', label: '建物', children: [
+      ...[...game.designs.values()].slice(-8).map((d) => ({ id: `build:${d.id}`, icon: '🏠', label: d.name })),
+      { id: 'unbuild', icon: '🧹', label: '片付ける' },
+      { id: 'shelf', icon: '📦', label: '読み込み・棚', noRemember: true },
+    ] },
+  ];
+  /** 道具の輪で選んだ物を持つ（'till'・'seed:wheat'・'block:3'・'build:<建物>'・'shelf' など） */
+  const pickTool = (id: string | null) => {
+    if (!id || viewOnly) return;
+    if (id === 'shelf') { void setViewer(true, game.designs.size ? 'shelf' : 'import'); return; }
+    let t: Tool;
+    if (id.startsWith('seed:')) { game.seed = id.slice(5) as CropKind; t = 'seed'; }
+    else if (id.startsWith('block:')) { game.block = parseInt(id.slice(6), 10); t = 'raise'; }
+    else if (id.startsWith('build:')) {
+      const did = id.slice(6);
+      if (!game.designs.has(did)) return;
+      game.selectedDesign = did;
+      t = 'build';
+    } else t = id as Tool;
+    radial.setItems(radialItems());
+    radial.setCurrent(id);
+    selectTool(t);
   };
-  renderSeeds();
+  radial.onPick = pickTool;
+  const openRadial = (x: number, y: number, sticky: boolean) => {
+    if (viewOnly) return;
+    if (mode !== 'edit') setMode('edit');
+    stroke = null;
+    game.endEdit();
+    game.cursor.visible = false;
+    radial.setItems(radialItems());
+    radial.open(x, y, sticky);
+  };
+
+  /** 画面下の「いま持っている道具」 */
+  const renderChip = () => {
+    const t = TOOLS.find((x) => x.id === game.tool) ?? TOOLS[1];
+    let icon = t.icon, name = t.name;
+    if (game.tool === 'seed') { icon = CROP_ICONS[game.seed]; name = `${CROPS[game.seed].name}の種`; }
+    else if (game.tool === 'raise') { icon = PLACE_BLOCKS.find((b) => b.id === game.block)?.icon ?? icon; name = `${game.blockName()}を置く`; }
+    else if (game.tool === 'build') { const d = game.selectedDesign ? game.designs.get(game.selectedDesign) : undefined; if (d) name = d.name; }
+    $('toolChipIcon').textContent = icon;
+    $('toolChipName').textContent = name; // 建物の名前は読み込んだ物なので textContent で
+    hintEl.textContent = t.help;
+  };
+  $('toolChip').addEventListener('click', () => {
+    const r = $('toolChip').getBoundingClientRect();
+    openRadial(r.left + r.width / 2, r.top - 190, true);
+  });
   const selectTool = (t: Tool) => {
     if (t === 'look' || viewOnly) { setMode('view'); return; }
     editTool = t;
     if (mode !== 'edit') setMode('edit');
     game.tool = t;
-    for (const [id, b] of toolButtons) b.classList.toggle('on', id === t);
-    hintEl.textContent = TOOLS.find((x) => x.id === t)!.help;
-    renderShelf();
+    renderChip();
   };
 
-  // ---------- 建物の棚と読み込み ----------
+  // ---------- 建物の窓（読み込み・見本・棚） ----------
   // 読み込んだ建物の名前や問題の文は、すべて textContent で出す（HTML として読ませない）
-  const shelfEl = $('shelf');
   const issuesBox = $('buildIssues'), issueList = $('buildIssueList');
   let lastIssues: ParseIssue[] = [];
   const copyText = async (text: string) => {
     try { await navigator.clipboard.writeText(text); toast('コピーしました'); } catch { toast('コピーできませんでした'); }
   };
-  function renderShelf() {
-    shelfEl.replaceChildren();
-    for (const d of game.designs.values()) {
-      const item = document.createElement('span');
-      item.className = 'shelf-item';
-      const b = document.createElement('button');
-      b.textContent = `🏠 ${d.name}`;
-      b.classList.toggle('on', game.selectedDesign === d.id && game.tool === 'build');
-      b.addEventListener('click', () => { game.selectedDesign = d.id; selectTool('build'); });
-      const del = document.createElement('button');
-      del.className = 'del';
-      del.textContent = '×';
-      del.title = '棚から消す（置いた分も消えます）';
-      del.addEventListener('click', () => {
-        if (!confirm(`「${d.name}」を棚から消しますか？ 箱庭に置いた分も消えます。`)) return;
-        game.removeDesign(d.id);
-        renderShelf();
-      });
-      item.append(b, del);
-      shelfEl.appendChild(item);
-    }
-  }
   const showIssues = (issues: ParseIssue[]) => {
     lastIssues = issues;
     issueList.replaceChildren(...issues.map((i) => { const li = document.createElement('li'); li.textContent = i.message; return li; }));
     issuesBox.hidden = issues.length === 0;
   };
-  const importBuilding = (text: string) => {
-    const r = parseBuilding(text);
-    if (!r.ok) { showIssues(r.issues); toast(`読み込めませんでした（問題 ${r.issues.length} 件）`); return; }
-    showIssues([]);
-    const added = game.addDesign(r.design) === 'added';
-    toast(added ? `「${r.design.name}」を棚に入れました` : '同じ建物がもう棚にあります');
-    game.selectedDesign = r.design.id;
-    selectTool('build');
+  const viewerEl = $('viewer');
+  const viewerList = $('viewerList');
+  const pasteEl = $<HTMLTextAreaElement>('buildPaste');
+  let viewer: BuildingViewer | null = null;
+  let viewerSel: string | null = null;
+  let vtab: 'import' | 'shelf' = 'import';
+  /** 読み込む欄に貼った建物の見本（まだ棚に入れていない） */
+  let preview: BuildingDesign | null = null;
+  let viewerShown: BuildingDesign | null | undefined;
+  const viewerIsOpen = () => viewerEl.classList.contains('open');
+  const renderViewer = () => {
+    document.querySelectorAll<HTMLButtonElement>('[data-vtab]').forEach((b) => b.classList.toggle('on', b.dataset.vtab === vtab));
+    $('vImport').hidden = vtab !== 'import';
+    viewerList.hidden = vtab !== 'shelf';
+    let d: BuildingDesign | null = null;
+    if (vtab === 'shelf') {
+      const designs = [...game.designs.values()];
+      if (!viewerSel || !game.designs.has(viewerSel)) viewerSel = game.selectedDesign && game.designs.has(game.selectedDesign) ? game.selectedDesign : designs[0]?.id ?? null;
+      viewerList.replaceChildren(...designs.map((x) => {
+        const li = document.createElement('li');
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = `🏠 ${x.name}`;
+        b.title = x.name;
+        b.classList.toggle('on', x.id === viewerSel);
+        b.addEventListener('click', () => { viewerSel = x.id; renderViewer(); });
+        li.appendChild(b);
+        return li;
+      }));
+      d = viewerSel ? game.designs.get(viewerSel) ?? null : null;
+      $('viewerEmpty').textContent = 'まだ建物がありません。「📥 読み込む」から入れてください';
+    } else {
+      d = preview;
+      $('viewerEmpty').textContent = '左の欄に AI の返事や .geo.json の中身を貼ると、ここに見本が出ます';
+    }
+    $('viewerEmpty').hidden = !!d;
+    $('viewerName').textContent = d ? d.name : '';
+    $('viewerStats').textContent = d ? `${designStats(d).label}・建てるのに約 ${buildMinutes(d)} 分` : '';
+    const add = $<HTMLButtonElement>('viewerAdd'), place = $<HTMLButtonElement>('viewerPlace'), del = $<HTMLButtonElement>('viewerDelete');
+    add.hidden = vtab !== 'import';
+    add.disabled = !d;
+    add.textContent = d && game.designs.has(d.id) ? 'もう棚にあります（棚で見る）' : '棚に入れる';
+    place.hidden = del.hidden = vtab !== 'shelf';
+    place.disabled = del.disabled = !d;
+    // 同じ建物なら見本を作り直さない（回した向きを保つ）
+    if (viewer && d !== viewerShown) { viewer.show(d); viewerShown = d; }
   };
+  const setViewer = async (open: boolean, tab?: 'import' | 'shelf') => {
+    if (tab) vtab = tab;
+    viewerEl.classList.toggle('open', open);
+    viewerEl.setAttribute('aria-hidden', String(!open));
+    if (!open) { viewer?.close(); return; }
+    stroke = null;
+    game.endEdit();
+    radial.close(false);
+    viewer ??= new BuildingViewer($<HTMLCanvasElement>('viewerCanvas'), forceWebGL);
+    await viewer.open();
+    viewerShown = undefined;
+    renderViewer();
+  };
+  document.querySelectorAll<HTMLButtonElement>('[data-vtab]').forEach((b) => b.addEventListener('click', () => { vtab = b.dataset.vtab as 'import' | 'shelf'; renderViewer(); }));
+  /** 貼った文を読んで、見本を出す（問題があれば並べる） */
+  const updatePreview = () => {
+    const text = pasteEl.value;
+    if (!text.trim()) { preview = null; showIssues([]); renderViewer(); return; }
+    const r = parseBuilding(text);
+    if (r.ok) { preview = r.design; showIssues([]); } else { preview = null; showIssues(r.issues); }
+    renderViewer();
+  };
+  let previewTimer = 0;
+  pasteEl.addEventListener('input', () => { clearTimeout(previewTimer); previewTimer = window.setTimeout(updatePreview, 250); });
   $('buildCopyPrompt').addEventListener('click', () => copyText(buildPrompt($<HTMLTextAreaElement>('buildIdea').value)));
   $('buildCopyFix').addEventListener('click', () => copyText(buildFixPrompt(lastIssues)));
-  $('buildLoad').addEventListener('click', () => {
-    const ta = $<HTMLTextAreaElement>('buildPaste');
-    if (!ta.value.trim()) { toast('AI の返事や .geo.json の中身を貼ってください'); return; }
-    importBuilding(ta.value);
-  });
   const readFile = async (f: File) => {
-    if (f.size > LIMITS.fileBytes * 4) { showIssues([{ code: 'file_size', message: `ファイルが ${Math.ceil(f.size / 1024)} KB あります。${LIMITS.fileBytes / 1024} KB 以下にしてください。` }]); return; }
-    importBuilding(await f.text());
+    if (f.size > LIMITS.fileBytes * 4) {
+      preview = null;
+      showIssues([{ code: 'file_size', message: `ファイルが ${Math.ceil(f.size / 1024)} KB あります。${LIMITS.fileBytes / 1024} KB 以下にしてください。` }]);
+      renderViewer();
+      return;
+    }
+    pasteEl.value = await f.text();
+    updatePreview();
   };
   $<HTMLInputElement>('buildFile').addEventListener('change', (e) => {
     const input = e.target as HTMLInputElement;
@@ -534,7 +623,7 @@ async function main() {
     input.value = '';
     if (f) void readFile(f);
   });
-  // 箱庭の画面に .geo.json を落としても読み込む（エディタのとき）
+  // 箱庭の画面に .geo.json を落としても、建物の窓を開いて見本を出す（エディタのとき）
   const layoutDrop = $('layout');
   layoutDrop.addEventListener('dragover', (e) => {
     if (mode !== 'edit' || !e.dataTransfer?.types.includes('Files')) return;
@@ -547,54 +636,23 @@ async function main() {
     const f = e.dataTransfer?.files[0];
     if (mode !== 'edit' || !f) return;
     e.preventDefault();
-    void readFile(f);
+    void setViewer(true, 'import').then(() => readFile(f));
   });
-  renderShelf();
-
-  // ---------- 建物の棚のビューワー（エディタの「建物」欄から開く窓） ----------
-  const viewerEl = $('viewer');
-  const viewerList = $('viewerList');
-  let viewer: BuildingViewer | null = null;
-  let viewerSel: string | null = null;
-  const viewerIsOpen = () => viewerEl.classList.contains('open');
-  const renderViewer = () => {
-    const designs = [...game.designs.values()];
-    if (!viewerSel || !game.designs.has(viewerSel)) viewerSel = game.selectedDesign && game.designs.has(game.selectedDesign) ? game.selectedDesign : designs[0]?.id ?? null;
-    viewerList.replaceChildren(...designs.map((d) => {
-      const li = document.createElement('li');
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = `🏠 ${d.name}`;
-      b.title = d.name;
-      b.classList.toggle('on', d.id === viewerSel);
-      b.addEventListener('click', () => { viewerSel = d.id; renderViewer(); });
-      li.appendChild(b);
-      return li;
-    }));
-    const d = viewerSel ? game.designs.get(viewerSel)! : null;
-    $('viewerEmpty').hidden = !!d;
-    $('viewerName').textContent = d ? d.name : '';
-    $('viewerStats').textContent = d ? designStats(d).label : '';
-    $<HTMLButtonElement>('viewerPlace').disabled = !d;
-    $<HTMLButtonElement>('viewerDelete').disabled = !d;
-    viewer?.show(d);
-  };
-  const setViewer = async (open: boolean) => {
-    viewerEl.classList.toggle('open', open);
-    viewerEl.setAttribute('aria-hidden', String(!open));
-    if (!open) { viewer?.close(); return; }
-    viewer ??= new BuildingViewer($<HTMLCanvasElement>('viewerCanvas'), forceWebGL);
-    await viewer.open();
-    renderViewer();
-  };
-  $('openViewer').addEventListener('click', () => void setViewer(true));
   $('viewerClose').addEventListener('click', () => void setViewer(false));
   viewerEl.addEventListener('pointerdown', (e) => { if (e.target === viewerEl) void setViewer(false); });
+  $('viewerAdd').addEventListener('click', () => {
+    if (!preview) return;
+    const added = game.addDesign(preview) === 'added';
+    if (added) toast(`「${preview.name}」を棚に入れました`);
+    viewerSel = preview.id;
+    vtab = 'shelf';
+    renderViewer();
+  });
   $('viewerPlace').addEventListener('click', () => {
     if (!viewerSel) return;
-    game.selectedDesign = viewerSel;
+    const id = viewerSel;
     void setViewer(false);
-    selectTool('build');
+    pickTool(`build:${id}`);
     toast('置く場所をクリックしてください（R で向きを変える）');
   });
   $('viewerDelete').addEventListener('click', () => {
@@ -602,12 +660,11 @@ async function main() {
     if (!d || !confirm(`「${d.name}」を棚から消しますか？ 箱庭に置いた分も消えます。`)) return;
     game.removeDesign(d.id);
     viewerSel = null;
-    renderShelf();
+    if (game.tool === 'build' && !game.selectedDesign) renderChip();
     renderViewer();
   });
 
   const layoutEl = $('layout');
-  const modeButtons = document.querySelectorAll<HTMLButtonElement>('#modes button[data-mode]');
   const setViewOnly = (on: boolean) => {
     if (viewOnly === on) return;
     viewOnly = on;
@@ -619,13 +676,13 @@ async function main() {
     mode = m;
     layoutEl.classList.remove('mode-view', 'mode-edit');
     layoutEl.classList.add(`mode-${m}`);
-    modeButtons.forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
     // エディタでは左ドラッグを道具に使う（視点は右ドラッグで回す）
     controls.mouseButtons = m === 'edit'
       ? { LEFT: null, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE } as unknown as typeof controls.mouseButtons
       : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     game.tool = m === 'edit' ? editTool : 'look';
     if (m === 'edit') selectTool(editTool);
+    else radial.close(false);
     game.cursor.visible = false;
     tooltipEl.style.display = 'none';
     pinned = null;
@@ -633,7 +690,15 @@ async function main() {
     ghosts.setHover(-1);
     if (m === 'view') refreshDex();
   };
-  modeButtons.forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode as Mode)));
+
+  // 右のパネル：「ようす」と「図鑑」を切り替える
+  document.querySelectorAll<HTMLButtonElement>('[data-pane]').forEach((b) => b.addEventListener('click', () => {
+    const pane = b.dataset.pane;
+    document.querySelectorAll<HTMLButtonElement>('[data-pane]').forEach((x) => x.classList.toggle('on', x === b));
+    $('paneStatus').hidden = pane !== 'status';
+    $('paneDex').hidden = pane !== 'dex';
+    if (pane === 'dex') refreshDex();
+  }));
 
   // Esc メニュー：画面全体をすりガラスにして、保存などのメニューを出す
   const menuEl = $('menu');
@@ -644,12 +709,14 @@ async function main() {
     if (open) {
       stroke = null;
       game.endEdit();
+      radial.close(false);
       tooltipEl.style.display = 'none';
       game.cursor.visible = false;
       showSaveStatus();
     }
   };
   $('menuOpen').addEventListener('click', () => setMenu(true));
+  $('menuFab').addEventListener('click', () => setMenu(true));
   $('menuClose').addEventListener('click', () => setMenu(false));
   // 全画面表示（Fullscreen API）。ブラウザの Esc などで抜けた時もスイッチの表示を合わせる
   const fsBtn = $<HTMLButtonElement>('fullscreen');
@@ -660,10 +727,13 @@ async function main() {
     $('fullscreenNote').textContent = 'このブラウザでは使えません（iPhone の Safari など）';
   }
   fsBtn.addEventListener('click', async () => {
+    const entering = !document.fullscreenElement;
+    // 全画面にする時は、その場でメニューを閉じる（全画面になった箱庭がすぐ見えるように）
+    if (entering) setMenu(false);
     // 埋め込みの画面などでは、要求が成功も失敗もせず止まることがあるので時間を区切る
     const timeout = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 1500));
     try {
-      const req = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      const req = entering ? document.documentElement.requestFullscreen({ navigationUI: 'hide' }) : document.exitFullscreen();
       if ((await Promise.race([req, timeout])) === 'timeout' && !document.fullscreenElement) toast('この画面では全画面にできませんでした（ブラウザの設定や埋め込み表示のため）', 3500);
     } catch {
       toast('全画面にできませんでした', 2500);
@@ -675,16 +745,38 @@ async function main() {
   // パネルの外（すりガラスの部分）を押しても閉じる
   menuEl.addEventListener('pointerdown', (e) => { if (e.target === menuEl) setMenu(false); });
 
+  /** 最後のマウスの位置（画面の座標。道具の輪を出す所） */
+  const lastClient = { x: innerWidth / 2, y: innerHeight / 2 };
+  window.addEventListener('pointermove', (e) => { lastClient.x = e.clientX; lastClient.y = e.clientY; });
   /** 押している移動キー（WASD・Space・Shift）。e.code で見るので、日本語入力中でも効く */
   const moveKeys = new Set<string>();
   const MOVE_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight'];
-  window.addEventListener('keyup', (e) => moveKeys.delete(e.code));
-  window.addEventListener('blur', () => moveKeys.clear());
+  window.addEventListener('keyup', (e) => {
+    moveKeys.delete(e.code);
+    // Q を離した所の道具を選ぶ
+    if (e.code === 'KeyQ' && radial.isOpen) radial.close(true);
+  });
+  window.addEventListener('blur', () => { moveKeys.clear(); radial.close(false); });
   window.addEventListener('keydown', (e) => {
-    if (viewerIsOpen()) { if (e.key === 'Escape') void setViewer(false); return; } // 棚を見ている間は、Esc で閉じるだけ
-    if (e.key === 'Escape') { setMenu(!menuOpen()); return; }
+    if (viewerIsOpen()) { if (e.key === 'Escape') void setViewer(false); return; } // 建物の窓を開いている間は、Esc で閉じるだけ
+    if (e.key === 'Escape') {
+      if (radial.isOpen) { radial.close(false); return; }
+      setMenu(!menuOpen());
+      return;
+    }
     if (menuOpen()) return; // メニューを開いている間は他のキーを受け付けない
     if ((e.target as HTMLElement).closest?.('input[type="text"], input[type="number"], textarea, select')) return;
+    // Tab：見るモード ⇄ エディタモード（ブラウザのフォーカス移動はさせない）
+    if (e.code === 'Tab') {
+      e.preventDefault();
+      if (!e.repeat) setMode(mode === 'view' ? 'edit' : 'view');
+      return;
+    }
+    // Q（押している間）：道具の輪。見るモードからでもエディタに入って出す
+    if (e.code === 'KeyQ') {
+      if (!e.repeat && !radial.isOpen) openRadial(lastClient.x, lastClient.y, false);
+      return;
+    }
     // Ctrl+Z（Mac は ⌘Z）：エディタで、最後の編集を取り消す。押した位置（e.code）で見るので日本語入力中でも効く
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.code === 'KeyZ') {
       e.preventDefault();
@@ -698,13 +790,12 @@ async function main() {
       if (e.code === 'Space') e.preventDefault();
       return;
     }
-    const k = e.key.toLowerCase();
-    if (k === 'v') setMode('view');
-    else if (k === 'e') setMode('edit');
-    else if (k === 'r' && mode === 'edit' && game.tool === 'build') game.rotateBuild(); // 次に置く建物の向き（カーソルの枠は毎フレーム作り直す）
-    else {
-      const t = EDIT_TOOLS.find((x) => x.key === e.key);
-      if (t) selectTool(t.id);
+    if (e.code === 'KeyR' && mode === 'edit' && game.tool === 'build') { game.rotateBuild(); return; } // 次に置く建物の向き（カーソルの枠は毎フレーム作り直す）
+    // 1〜5：グループの、最後に使った道具
+    const n = /^Digit([1-5])$/.exec(e.code);
+    if (n && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      radial.setItems(radialItems());
+      pickTool(radial.lastOf(GROUP_IDS[+n[1] - 1]));
     }
   });
 
@@ -797,11 +888,11 @@ async function main() {
   });
 
   // 見るモード：作物・動物にホバーすると情報を小さく出す。右クリックで固定（他の所を触るまで）
-  type Target = { kind: 'animal'; animal: Animal } | { kind: 'crop'; col: number } | { kind: 'visitor'; visitor: Visitor } | { kind: 'firefly'; pos: THREE.Vector3 };
+  type Target = { kind: 'animal'; animal: Animal } | { kind: 'crop'; col: number } | { kind: 'visitor'; visitor: Visitor } | { kind: 'firefly'; pos: THREE.Vector3 } | { kind: 'site'; key: string };
   let pinned: Target | null = null;
   /** 同じ対象か（観察の時間を続けて数えるかどうかにも使う。ホタルはどの粒でも同じ） */
   const targetKey = (t: Target | null) =>
-    !t ? '' : t.kind === 'animal' ? `a${t.animal.id}` : t.kind === 'crop' ? `c${t.col}` : t.kind === 'visitor' ? `v${t.visitor.def.id}` : 'firefly';
+    !t ? '' : t.kind === 'animal' ? `a${t.animal.id}` : t.kind === 'crop' ? `c${t.col}` : t.kind === 'visitor' ? `v${t.visitor.def.id}` : t.kind === 'site' ? `s${t.key}` : 'firefly';
   const sameTarget = (a: Target | null, b: Target | null) => !!a && !!b && targetKey(a) === targetKey(b);
   /** 図鑑の対象（作物は対象外） */
   const dexIdOf = (t: Target | null): DexId | null =>
@@ -836,6 +927,9 @@ async function main() {
       while (o && !o.userData.animal) o = o.parent;
       if (o) return { kind: 'animal', animal: o.userData.animal as Animal };
     }
+    // 建設中の建物（地形より手前にある時）
+    const site = game.siteAt(raycaster.ray.origin, raycaster.ray.direction, voxelHit ? voxelHit.t : Infinity);
+    if (site) return { kind: 'site', key: site.key };
     const col = game.cropColAt(voxelHit);
     return col !== null ? { kind: 'crop', col } : null;
   };
@@ -864,6 +958,14 @@ async function main() {
       }
       return `<div class="tt-title">${def.icon} ${def.name}</div><div class="tt-sub">${RARITY_STARS[def.rarity]}</div><div class="tt-line">${def.note}</div>` + ringHtml(t);
     }
+    if (t.kind === 'site') {
+      // 建ち終わった・片付けた建物は対象から外す
+      const s = game.siteInfo(t.key);
+      if (!s) return null;
+      const left = s.minutes >= 60 ? `${Math.floor(s.minutes / 60)}時間${s.minutes % 60}分` : `${s.minutes}分`;
+      return `<div class="tt-title">🏗 ${esc(s.name)}</div><div class="tt-sub">建設中</div><div class="tt-line">組み上がったパーツ ${s.built} / ${s.total}</div>` +
+        `<div class="tt-line">完成まで あと約 ${left}</div><div class="bar"><i style="width:${Math.round(s.progress * 100)}%"></i></div>`;
+    }
     const d = game.describeCrop(t.col, lastEnv);
     if (!d) return null;
     return `<div class="tt-title">${CROP_ICONS[game.farm.crops.get(t.col)!.kind]} ${d.title}</div>` + d.lines.map((l) => `<div class="tt-line">${l}</div>`).join('') +
@@ -872,7 +974,8 @@ async function main() {
 
   const targetWorldPos = (t: Target) =>
     t.kind === 'animal' ? t.animal.object.position.clone().add(new THREE.Vector3(0, 1.2, 0))
-      : t.kind === 'visitor' ? t.visitor.anchor.clone() : t.kind === 'firefly' ? t.pos.clone() : game.colTop(t.col).add(new THREE.Vector3(0, 0.4, 0));
+      : t.kind === 'visitor' ? t.visitor.anchor.clone() : t.kind === 'firefly' ? t.pos.clone()
+      : t.kind === 'site' ? game.siteInfo(t.key)?.top ?? new THREE.Vector3() : game.colTop(t.col).add(new THREE.Vector3(0, 0.4, 0));
 
   /** 観察：同じ生き物にカーソルを 1.5 秒合わせ続けると図鑑に「観察した」と載る */
   const OBSERVE_SECONDS = 1.5;
@@ -1008,7 +1111,6 @@ async function main() {
   const QUALITY_NAMES: Record<Quality, string> = { high: '高', medium: '中', low: '低' };
   const isMobile = navigator.maxTouchPoints > 0 && Math.min(screen.width, screen.height) < 820;
   // スマホは閲覧限定：建物の棚と読み込みは出さない（置いた建物は表示する）
-  if (isMobile) $('buildBox').hidden = true;
   let quality: Quality = 'high';
   // 画質の初期値は「高」（画面の選択に合わせる）。WebGL2・スマホは重くならないよう「自動」にする（起動の所で切り替える）
   let qualityAuto = $<HTMLSelectElement>('quality').value === 'auto';
@@ -1055,7 +1157,7 @@ async function main() {
     $('st-season').textContent = SEASON_NAMES[season] + (season !== calendarSeason ? '（手動）' : '');
     $('st-weather').textContent = WEATHER_NAMES[weatherOverride ?? weatherAt(new Date(), season)];
     const f = game.summary();
-    $('st-farm').innerHTML = dl([['畑', `${f.fields} マス`], ['育っている', f.growing], ['収穫できる', f.ripe], ['育つ苗木', f.saplings], ['🔑 土地の権利', rights()], ['次の権利まで', `あと ${3 - (progress.points % 3)} ポイント`], ['開いた土地', `${world ? countOpen(world.plots) : 0} / 16`]]);
+    $('st-farm').innerHTML = dl([['畑', `${f.fields} マス`], ['育っている', f.growing], ['収穫できる', f.ripe], ['育つ苗木', f.saplings], ['建設中', `${f.building} 棟`], ['🔑 土地の権利', rights()], ['次の権利まで', `あと ${3 - (progress.points % 3)} ポイント`], ['開いた土地', `${world ? countOpen(world.plots) : 0} / 16`]]);
     const e = eco.env();
     $('st-env').innerHTML = dl([['🌼 花', e.flowers], ['🌳 木', e.trees], ['🌿 草地', e.grass], ['💧 水辺', e.waterside], ['🐟 深い水', e.deepWater], ['🟫 畑', e.farmland]]);
     $('st-inv').innerHTML = dl(CROP_KINDS.map((k) => [`${CROP_ICONS[k]} ${CROPS[k].name}`, f.inventory[k] ?? 0]));
@@ -1162,7 +1264,7 @@ async function main() {
     worldSettings = { ...s };
     game.restore(save);
     game.farm.speed = simSpeed();
-    renderShelf();
+    renderChip();
     // 住人は畑・苗木を戻した後に（苗木の列に住人を戻さないように）
     eco.restore(save.dex ?? {}, save.residents ?? []);
     eco.resetClock(game.farm.simMs);
@@ -1170,7 +1272,7 @@ async function main() {
     const target = save.farm.simMs + Math.max(0, Date.now() - save.savedAt);
     const r = game.catchUp(target, envAt);
     if (r.hours >= 0.05) {
-      const news = [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : ''].filter(Boolean).join('・');
+      const news = [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : '', r.built > 0 ? `${r.built} 棟の建物が完成しました` : ''].filter(Boolean).join('・');
       toast(`おかえりなさい。${fmtHours(r.hours)}たちました${news ? `：${news}` : ''}`, 5000);
     }
     // 閉じていた間は引っ越してこない（判定の基準をいまにそろえる）
@@ -1607,7 +1709,7 @@ async function main() {
     lastEnv = { season: s, raining: weatherNow.rain > 0.5 };
     game.tick(dt, lastEnv);
     // ドラッグ中もカーソル（白い枠）をマウスに追従させる。ドラッグ中は使った直後のマスが赤くならないよう白のまま
-    if (mode === 'edit' && mouseInside) {
+    if (mode === 'edit' && mouseInside && !radial.isOpen) {
       const { plot: gp, hit } = stroke ? { plot: -1, hit: pickAtMouse() } : ghostAtMouse();
       ghosts.setHover(gp);
       if (gp >= 0) {

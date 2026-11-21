@@ -37,8 +37,9 @@ export interface SaveData {
     saplings: [col: number, variant: number, rot: number, progress: number][];
     wet: [col: number, until: number][];
   };
-  /** 建物（v3）：棚に入れた建物と、置いた場所（x, z は枠のボクセル座標、rot は 90° 刻み） */
-  buildings: { designs: BuildingDesign[]; placed: [designId: string, x: number, z: number, rot: Rot][] };
+  /** 建物（v3）：棚に入れた建物と、置いた場所（x, z は枠のボクセル座標、rot は 90° 刻み）。
+   *  progress は建設の進み具合（0〜1）。建ち終わった建物と古い記録には無い（＝完成） */
+  buildings: { designs: BuildingDesign[]; placed: [designId: string, x: number, z: number, rot: Rot, progress?: number][] };
 }
 
 /** v1（大きさを選んで作った箱庭）のデータ。地形の作り方が変わったので引き継げない */

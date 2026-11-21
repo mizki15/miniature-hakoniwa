@@ -8,61 +8,12 @@
   </head>
   <body>
     <div id="layout">
-      <!-- 左：生き物図鑑 -->
-      <aside id="left" class="side glass">
-        <header>
-          <span>生き物図鑑</span>
-          <button class="collapse" data-target="left" title="たたむ">‹</button>
-        </header>
-        <div class="side-body">
-          <div class="dex-grid" id="dexGrid"></div>
-          <div id="dexDetail">カードを選ぶと説明が出ます</div>
-        </div>
-      </aside>
-
-      <!-- 左：エディタ（エディタモードのみ） -->
-      <aside id="editor" class="side glass">
-        <header><span>エディタ</span></header>
-        <div class="side-body">
-          <div id="tools" class="tool-list"></div>
-          <div id="seedBox">
-            <h3>種</h3>
-            <div id="seeds" class="seed-list"></div>
-          </div>
-          <div id="buildBox">
-            <h3>建物</h3>
-            <div id="shelf" class="seed-list"></div>
-            <button id="openViewer" type="button" class="open-viewer">🔍 棚を見る</button>
-            <details id="buildImport">
-              <summary>建物を読み込む</summary>
-              <label class="build-label" for="buildIdea">作ってほしいもの</label>
-              <textarea id="buildIdea" rows="2" placeholder="例：赤い屋根の小さな木の小屋。正面に扉、横に窓が 1 つ"></textarea>
-              <button id="buildCopyPrompt" type="button">AI に頼む文をコピー</button>
-              <textarea id="buildPaste" rows="3" placeholder="AI の返事や .geo.json の中身をここに貼る"></textarea>
-              <div class="build-row">
-                <button id="buildLoad" type="button">読み込む</button>
-                <label class="build-file">ファイルを選ぶ<input id="buildFile" type="file" accept=".json,.geo.json,application/json" hidden></label>
-              </div>
-              <div id="buildIssues" hidden>
-                <ul id="buildIssueList"></ul>
-                <button id="buildCopyFix" type="button">AI に直してもらう文をコピー</button>
-              </div>
-            </details>
-          </div>
-          <div id="toolHint" class="tool-hint"></div>
-          <div class="howto">
-            <div><b>左ドラッグ</b>：なぞった所にまとめて使う</div>
-            <div><b>右ドラッグ</b>：回転　<b>ホイール</b>：ズーム</div>
-            <div><b>中ドラッグ</b>：移動　<b>V</b>：見るモードへ　<b>Esc</b>：メニュー</div>
-          </div>
-        </div>
-      </aside>
-
       <!-- 中央：箱庭 -->
       <main id="stage">
         <div id="app"></div>
-        <button class="reopen glass" id="reopen-left" data-target="left" title="図鑑をひらく">›</button>
-        <button class="reopen glass" id="reopen-right" data-target="right" title="ステータスをひらく">‹</button>
+        <button class="reopen glass" id="reopen-right" data-target="right" title="ようす・図鑑をひらく">‹</button>
+        <!-- メニュー（PC：右上のボタン） -->
+        <button id="menuFab" class="menu-fab glass" type="button" title="メニュー（Esc）">☰</button>
 
         <!-- デバッグウィンドウ -->
         <div id="ui" class="glass">
@@ -216,12 +167,16 @@
           <div id="stats"></div>
         </div>
 
-        <!-- モード切り替え（画面下中央） -->
+        <!-- スマホ：メニューのボタン（画面下中央） -->
         <div id="modes" class="glass">
-          <button data-mode="view"><span class="ic">👁</span>見る<span class="k">V</span></button>
-          <button data-mode="edit"><span class="ic">🛠</span>エディタ<span class="k">E</span></button>
-          <button id="menuOpen" class="menu-btn"><span class="ic">☰</span>メニュー<span class="k">Esc</span></button>
+          <button id="menuOpen" class="menu-btn"><span class="ic">☰</span>メニュー</button>
         </div>
+        <!-- エディタ：いま持っている道具（押すと道具の輪を出す） -->
+        <button id="toolChip" class="glass" type="button" title="道具を替える">
+          <span id="toolChipIcon" class="ic"></span><b id="toolChipName"></b><span id="toolHint" class="tool-hint"></span>
+        </button>
+        <!-- 道具の輪（ラジアルメニュー） -->
+        <div id="radial" aria-hidden="true"></div>
         <div id="toast"></div>
         <!-- ステータスモード：ホバーした物の情報 -->
         <div id="tooltip" class="glass"></div>
@@ -230,10 +185,18 @@
       <!-- 右：ステータス（一部はまだレイアウトのみ） -->
       <aside id="right" class="side glass">
         <header>
+          <div class="seg" role="tablist">
+            <button type="button" data-pane="status" class="on" role="tab">🏡 ようす</button>
+            <button type="button" data-pane="dex" role="tab">📖 図鑑</button>
+          </div>
           <button class="collapse" data-target="right" title="たたむ">›</button>
-          <span>ステータス</span>
         </header>
         <div class="side-body">
+          <div id="paneDex" hidden>
+            <div class="dex-grid" id="dexGrid"></div>
+            <div id="dexDetail">カードを選ぶと説明が出ます</div>
+          </div>
+          <div id="paneStatus">
           <section class="stat-block">
             <h3>箱庭</h3>
             <dl>
@@ -263,24 +226,48 @@
             <div class="skeleton-line short"></div>
           </section>
           <div class="placeholder-note">（準備中）</div>
+          </div>
         </div>
       </aside>
     </div>
 
-    <!-- 建物の棚のビューワー（エディタの「建物」欄から開く） -->
+    <!-- 建物の窓（読み込みと棚）。メニューと同じく、画面全体をすりガラスにして表示 -->
     <div id="viewer" aria-hidden="true">
-      <div class="viewer-panel" role="dialog" aria-label="建物の棚">
-        <header class="viewer-head"><span>🏠 建物の棚</span><button id="viewerClose" type="button" title="閉じる（Esc）">×</button></header>
+      <div class="viewer-panel" role="dialog" aria-label="建物">
+        <header class="viewer-head">
+          <div class="seg" role="tablist">
+            <button type="button" data-vtab="import" role="tab">📥 読み込む</button>
+            <button type="button" data-vtab="shelf" role="tab">🗂 棚</button>
+          </div>
+          <button id="viewerClose" type="button" title="閉じる（Esc）">×</button>
+        </header>
         <div class="viewer-body">
-          <ul id="viewerList" class="viewer-list"></ul>
+          <div class="viewer-side">
+            <div id="vImport" class="v-import">
+              <label class="build-label" for="buildIdea">① 作ってほしいもの</label>
+              <textarea id="buildIdea" rows="2" placeholder="例：赤い屋根の小さな木の小屋。正面に扉、横に窓が 1 つ"></textarea>
+              <button id="buildCopyPrompt" type="button">AI に頼む文をコピー</button>
+              <label class="build-label" for="buildPaste">② AI の返事や .geo.json の中身</label>
+              <textarea id="buildPaste" rows="6" placeholder="ここに貼ると、右に見本が出ます"></textarea>
+              <div class="build-row">
+                <label class="build-file">ファイルを選ぶ<input id="buildFile" type="file" accept=".json,.geo.json,application/json" hidden></label>
+              </div>
+              <div id="buildIssues" hidden>
+                <ul id="buildIssueList"></ul>
+                <button id="buildCopyFix" type="button">AI に直してもらう文をコピー</button>
+              </div>
+            </div>
+            <ul id="viewerList" class="viewer-list" hidden></ul>
+          </div>
           <div class="viewer-stage">
             <canvas id="viewerCanvas"></canvas>
-            <div id="viewerEmpty" class="viewer-empty" hidden>まだ建物がありません。「建物を読み込む」から入れてください</div>
+            <div id="viewerEmpty" class="viewer-empty" hidden></div>
             <div class="viewer-info">
               <div id="viewerName" class="viewer-name"></div>
               <div id="viewerStats" class="viewer-stats"></div>
               <div class="viewer-hint">ドラッグで回す・ホイールで寄る</div>
               <div class="viewer-actions">
+                <button id="viewerAdd" type="button" class="primary">棚に入れる</button>
                 <button id="viewerPlace" type="button" class="primary">箱庭に置く</button>
                 <button id="viewerDelete" type="button">棚から消す</button>
               </div>
@@ -324,18 +311,23 @@
             </div>
             <p class="menu-note">画質・音・時刻などの設定は、順次デバッグ画面からここへ移します。</p>
           </section>
-          <section class="menu-card">
-            <h2>🎮 操作</h2>
+          <details class="menu-card menu-howto">
+            <summary><h2>🎮 操作方法</h2></summary>
             <dl class="menu-keys">
-              <dt>V / E</dt><dd>見るモード／エディタモード</dd>
+              <dt>Tab</dt><dd>見るモード ⇄ エディタモード</dd>
+              <dt>Q（押したまま）</dt><dd>道具の輪を出す。選んで離すと持ち替え（画面下の道具を押しても出る）</dd>
+              <dt>1〜5</dt><dd>エディタ：畑・植える・地形・ブロック・建物（最後に使った道具）</dd>
               <dt>Esc</dt><dd>このメニューを開く・閉じる</dd>
               <dt>左ドラッグ</dt><dd>見る：視点を回す／エディタ：なぞって道具を使う</dd>
               <dt>右ドラッグ</dt><dd>見る：視点を動かす／エディタ：視点を回す</dd>
-              <dt>右クリック</dt><dd>作物・動物の情報を固定（もう一度で解除）</dd>
+              <dt>中ドラッグ</dt><dd>エディタ：視点を動かす</dd>
               <dt>ホイール</dt><dd>ズーム</dd>
-              <dt>2〜8</dt><dd>エディタの道具を選ぶ</dd>
+              <dt>W A S D</dt><dd>視点を動かす（Space で上、Shift で下）</dd>
+              <dt>右クリック</dt><dd>見る：作物・動物・建設中の建物の情報を固定（もう一度で解除）</dd>
+              <dt>R</dt><dd>建物を置く時の向きを変える</dd>
+              <dt>Ctrl + Z</dt><dd>エディタ：最後の編集を取り消す</dd>
             </dl>
-          </section>
+          </details>
         </div>
       </div>
     </div>
