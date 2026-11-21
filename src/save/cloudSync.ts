@@ -1,15 +1,18 @@
 /**
  * Google Drive との自動同期をまとめる。通信・保存・画面はすべて外から渡す（テストで差し替えられるように）。
- * - PC：変更があれば 5 分に 1 回まで送る。ページが隠れる時は 5 分を待たずに送る
+ * - PC：編集するたびに、手が止まって少したったら送る。ページが隠れる時も送る
+ * - 画面に戻った時・開いている間は時々、Drive が進んでいないか見る（開いたままの別の PC が古いままにならないように）
  * - スマホ（viewer）：Drive を読むだけで、決して送らない
- * - 同時に走る同期は 1 本だけ。どちらを残すか聞いている間も「走っている」に含める
+ * - 同時に走る同期は 1 本だけ。走っている間に頼まれたら、終わった後にもう 1 回だけ走る
+ *   どちらを残すか聞いている間も「走っている」に含める
  * 設計書：docs/superpowers/specs/2026-11-21-google-sync-design.md
  */
 import { decideSync, decideViewer } from './syncDecision';
 import { NeedsLoginError } from './driveErrors';
 import type { Account, SyncState } from './syncState';
 
-export const UPLOAD_INTERVAL_MS = 5 * 60_000;
+/** 編集が止まってから送るまで（筆でなぞる間に何度も送らないように） */
+export const EDIT_DELAY_MS = 3000;
 
 export type CloudStatus =
   | { kind: 'signedOut' }
@@ -49,6 +52,8 @@ export interface CloudDeps {
 
 export class CloudSync {
   private running: Promise<void> | null = null;
+  private again = false;
+  private editTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private d: CloudDeps) {}
 
@@ -84,22 +89,22 @@ export class CloudSync {
     this.d.onStatus({ kind: 'signedOut' });
   }
 
-  /** 端末内に保存した後（PC）：変更があり、前回から 5 分たっていれば送る */
-  afterLocalSave() {
-    if (this.d.viewer || !this.d.state.changed()) return;
-    if (this.d.now() - this.d.state.lastSyncAt() < UPLOAD_INTERVAL_MS) return;
-    void this.syncOnce();
+  /** プレイヤーが手を加えた時（PC）：手が止まって EDIT_DELAY_MS たったら送る */
+  onEdit() {
+    if (this.d.viewer) return;
+    if (this.editTimer) clearTimeout(this.editTimer);
+    this.editTimer = setTimeout(() => { this.editTimer = null; void this.syncOnce(); }, EDIT_DELAY_MS);
   }
 
-  /** ページが隠れる・閉じる時（PC）：変更があれば 5 分を待たずに送る */
+  /** ページが隠れる・閉じる時（PC）：変更があれば待たずに送る */
   onHidden() {
     if (this.d.viewer || !this.d.state.changed()) return;
+    if (this.editTimer) { clearTimeout(this.editTimer); this.editTimer = null; }
     void this.syncOnce();
   }
 
-  /** アプリに戻った時（スマホ）：Drive が変わっていれば読み直す */
+  /** 画面に戻った時・開いている間の見回り：Drive が進んでいれば追いつく（PC・スマホとも） */
   onVisible() {
-    if (!this.d.viewer) return;
     void this.syncOnce();
   }
 
@@ -109,7 +114,11 @@ export class CloudSync {
   async idle() { while (this.running) await this.running; }
 
   private syncOnce(): Promise<void> {
-    this.running ??= this.run().finally(() => { this.running = null; });
+    if (this.running) { this.again = true; return this.running; }
+    const loop = async () => {
+      do { this.again = false; await this.run(); } while (this.again);
+    };
+    this.running = loop().finally(() => { this.running = null; });
     return this.running;
   }
 

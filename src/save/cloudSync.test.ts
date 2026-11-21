@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CloudSync, type CloudDeps, type CloudStatus } from './cloudSync';
+import { CloudSync, EDIT_DELAY_MS, type CloudDeps, type CloudStatus } from './cloudSync';
 import { NeedsLoginError } from './driveErrors';
 import { createSyncState } from './syncState';
 
@@ -84,36 +84,73 @@ describe('CloudSync（PC）', () => {
     expect(t.state.changed()).toBe(false);
   });
 
-  it('throttleFiveMinutes', async () => {
-    const t = setup({ marker: '5', changed: true });
-    await t.cloud.start(); // 送る
-    expect(t.drive.upload).toHaveBeenCalledTimes(1);
-    t.state.markChanged();
-    t.advance(4 * 60_000);
-    t.cloud.afterLocalSave();
-    await t.cloud.idle();
-    expect(t.drive.upload).toHaveBeenCalledTimes(1);
-    t.advance(60_000);
-    t.cloud.afterLocalSave();
-    await t.cloud.idle();
-    expect(t.drive.upload).toHaveBeenCalledTimes(2);
+  it('editUploadsShortlyAfter', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ marker: '5', changed: false });
+      t.state.markChanged();
+      t.cloud.onEdit();
+      await vi.advanceTimersByTimeAsync(EDIT_DELAY_MS - 1);
+      expect(t.drive.upload).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await t.cloud.idle();
+      expect(t.drive.upload).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
   });
 
-  it('noChangeNoUpload', async () => {
+  it('burstOfEditsUploadsOnce', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ marker: '5', changed: false });
+      for (let i = 0; i < 5; i++) { t.state.markChanged(); t.cloud.onEdit(); await vi.advanceTimersByTimeAsync(500); }
+      await vi.advanceTimersByTimeAsync(EDIT_DELAY_MS);
+      await t.cloud.idle();
+      expect(t.drive.upload).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('editDuringUploadUploadsAgain', async () => {
+    const t = setup({ marker: '5', changed: true });
+    let release!: () => void;
+    const realUpload = t.drive.upload.getMockImplementation()!;
+    t.drive.upload.mockImplementationOnce((d, at, id) => new Promise((r) => { release = () => r(realUpload(d, at, id)); }));
+    const first = t.cloud.syncNow();
+    await vi.waitFor(() => expect(t.drive.upload).toHaveBeenCalledTimes(1));
+    t.state.markChanged();
+    void t.cloud.syncNow(); // 送っている間に次の変更
+    release();
+    await first;
+    await t.cloud.idle();
+    expect(t.drive.upload).toHaveBeenCalledTimes(2);
+    expect(t.state.changed()).toBe(false);
+  });
+
+  it('noChangeNoUploadOnHidden', async () => {
     const t = setup({ marker: '5', changed: false });
-    t.advance(10 * 60_000);
-    t.cloud.afterLocalSave();
+    t.cloud.onHidden();
     await t.cloud.idle();
     expect(t.drive.remoteInfo).not.toHaveBeenCalled();
   });
 
-  it('concurrentSyncRunsOnce', async () => {
-    const t = setup({ marker: '5', changed: true });
-    t.advance(10 * 60_000);
-    t.cloud.afterLocalSave();
-    t.cloud.onHidden();
+  it('pcReturningToOpenTabCatchesUp', async () => {
+    // 開いたままの PC に戻ってきた：別の PC が Drive を進めていれば、黙って追いつく
+    const t = setup({ remote: { id: 'f1', version: '9', savedAt: 900 }, marker: '5', changed: false });
+    t.cloud.onVisible();
     await t.cloud.idle();
-    expect(t.drive.remoteInfo).toHaveBeenCalledTimes(1);
+    expect(t.deps.applyRemote).toHaveBeenCalledTimes(1);
+    expect(t.state.marker()).toBe('9');
+    expect(t.deps.askConflict).not.toHaveBeenCalled();
+  });
+
+  it('concurrentRequestsCoalesce', async () => {
+    const t = setup({ marker: '5', changed: true });
+    void t.cloud.syncNow();
+    void t.cloud.syncNow();
+    t.cloud.onHidden();
+    t.cloud.onVisible();
+    await t.cloud.idle();
+    expect(t.drive.upload).toHaveBeenCalledTimes(1);
+    expect(t.drive.remoteInfo.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it('noUploadWhileAsking', async () => {
@@ -121,9 +158,9 @@ describe('CloudSync（PC）', () => {
     const t = setup({ remote: { id: 'f1', version: '7', savedAt: 900 }, marker: '5', changed: true, conflict: () => new Promise((r) => { answer = r; }) });
     const started = t.cloud.start();
     await vi.waitFor(() => expect(t.deps.askConflict).toHaveBeenCalled());
-    t.advance(10 * 60_000);
-    t.cloud.afterLocalSave();
+    t.state.markChanged();
     t.cloud.onHidden();
+    t.cloud.onVisible();
     await Promise.resolve();
     expect(t.drive.upload).not.toHaveBeenCalled();
     answer('remote');
@@ -241,8 +278,7 @@ describe('CloudSync（スマホ）', () => {
   it('viewerNeverUploads', async () => {
     const t = setup({ viewer: true, changed: true, remote: null });
     await t.cloud.start();
-    t.advance(10 * 60_000);
-    t.cloud.afterLocalSave();
+    t.cloud.onEdit();
     t.cloud.onHidden();
     await t.cloud.syncNow();
     expect(t.drive.upload).not.toHaveBeenCalled();

@@ -200,7 +200,10 @@ async function main() {
   const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat, buildingMat });
   // Drive との同期：プレイヤーが手を加えたら印を立てる（生き物の発見や時間の経過では立てない）
   const syncState = createSyncState(localStorage);
-  game.onPlayerChange = () => syncState.markChanged();
+  let cloud: CloudSync | null = null; // Google 同期（保存の所で作る）
+  /** プレイヤーが手を加えた：印を立て、少したったら Drive に送る */
+  const playerChanged = () => { syncState.markChanged(); cloud?.onEdit(); };
+  game.onPlayerChange = playerChanged;
   game.farm.speed = parseFloat($<HTMLSelectElement>('simSpeed').value); // 時間の流れの初期値（画面の選択）
   // 生き物（住人・訪問者・図鑑・来るかどうかの判定）
   const eco = new EcoManager({
@@ -213,7 +216,7 @@ async function main() {
   const onPlot = (r: PlotResult) => {
     game.addPlot(r);
     progress.rightsUsed++;
-    game.unsaved = true; syncState.markChanged();
+    game.unsaved = true; playerChanged();
     opening = false;
     openingDone = null;
     refreshGhosts();
@@ -1192,7 +1195,7 @@ async function main() {
       await startWorld(s.seed, s.detail, s.params, s.flowerStyle, 1 << START_PLOT);
       eco.restore({}, null);
       worldSettings = s;
-      game.unsaved = true; syncState.markChanged();
+      game.unsaved = true; playerChanged();
     }
   };
   const hasProgress = () => game.edits.size > 0 || game.farm.crops.size > 0 || game.farm.saplings.length > 0;
@@ -1261,13 +1264,12 @@ async function main() {
       await r;
     }
   });
-  $('detail').addEventListener('change', () => { syncState.markChanged(); doRegen(true); });
-  $('flowerStyle').addEventListener('change', () => { syncState.markChanged(); doRegen(true); });
+  $('detail').addEventListener('change', () => { playerChanged(); doRegen(true); });
+  $('flowerStyle').addEventListener('change', () => { playerChanged(); doRegen(true); });
 
   // この端末（IndexedDB）に保存
   let persisted = false;
   let lastSavedAt = 0;
-  let cloud: CloudSync | null = null; // Google 同期（下で作る）
   let saving = false;
   const saveStatusEl = $('saveStatus');
   const showSaveStatus = (extra = '') => {
@@ -1290,7 +1292,6 @@ async function main() {
     saving = true;
     try {
       await (savingDone = writeLocal());
-      cloud?.afterLocalSave();
     } catch (err) {
       console.error(err);
       toast('保存できませんでした');
@@ -1334,7 +1335,7 @@ async function main() {
       const save = await decodeSave(new Uint8Array(await file.arrayBuffer()));
       if (hasProgress() && !confirm('読み込むと、今の箱庭は上書きされます。よろしいですか？')) return;
       await loadFrom(save, true);
-      syncState.markChanged();
+      playerChanged();
       await saveNow();
       toast('読み込みました');
     } catch (err) {
@@ -1405,6 +1406,9 @@ async function main() {
     cloudSignOutBtn.addEventListener('click', () => { void c.signOut().then(() => toast('ログアウトしました（この端末の箱庭はそのままです）')); });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') c.onHidden(); else c.onVisible(); });
     window.addEventListener('pagehide', () => c.onHidden());
+    // 別の PC で進めた箱庭に追いつく：窓に戻った時と、開いている間は 1 分ごとに Drive を見る
+    window.addEventListener('focus', () => c.onVisible());
+    setInterval(() => { if (document.visibilityState === 'visible' && cloudKind === 'ok') c.onVisible(); }, 60_000);
   }
 
   // デバッグウィンドウの開閉（スマホでは最初はたたんでおく）
