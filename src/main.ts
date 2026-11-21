@@ -1083,6 +1083,8 @@ async function main() {
   $<HTMLInputElement>('round').addEventListener('change', (e) => { U.roundEdges.value = (e.target as HTMLInputElement).checked ? 1 : 0; });
   const blendInput = $<HTMLInputElement>('blend');
   blendInput.addEventListener('input', () => { U.blend.value = parseFloat(blendInput.value); });
+  const bumpInput = $<HTMLInputElement>('bump');
+  bumpInput.addEventListener('input', () => { U.bump.value = parseFloat(bumpInput.value); });
   $<HTMLInputElement>('dof').addEventListener('change', (e) => { dofOn = (e.target as HTMLInputElement).checked; updatePost(); });
   $<HTMLInputElement>('ssao').addEventListener('change', (e) => { aoOn = (e.target as HTMLInputElement).checked; updatePost(); });
   const aoInput = $<HTMLInputElement>('aoStrength');

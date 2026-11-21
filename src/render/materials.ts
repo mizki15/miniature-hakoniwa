@@ -17,6 +17,7 @@ const smoothstep: N = smoothstepT;
 /** シェーダー間で共有する値（UI や昼夜サイクルから更新する） */
 export const U = {
   roundEdges: uniform(1),
+  bump: uniform(1), // 地面の質感（法線の凹凸）の強さ。0 = なし
   blend: uniform(0.8), // 境界のなじみ（0 = くっきり, 1 = なめらか）
   warp: uniform(0.45), // 境界のゆらぎ
   waterLevel: uniform(10),
@@ -87,6 +88,68 @@ function faceFrame(pL: N, nL: N) {
   const tU = isX.select(vec3(0, 0, 1), vec3(1, 0, 0));
   const tV = isX.select(vec3(0, 1, 0), isY.select(vec3(0, 0, 1), vec3(0, 1, 0)));
   return { faceUV, tU, tV };
+}
+
+/**
+ * 地面の質感（バンプ）：面の上の座標 p（ブロック単位）での、法線の傾き (u, v) を返す。
+ * 高さの模様 h の傾きの逆向き（-∂h/∂u, -∂h/∂v）。ノイズは 1 ピクセルにつき 1 回だけ
+ * （種類で細かさを変えて共有）、セル・目地・年輪・畝は式で作る。
+ */
+function terrainBump(p: N, t: N, kind: N): N {
+  const isT = (id: number) => near(t, id);
+  const side = kind.greaterThan(1.5);
+  // 種類ごとのノイズの細かさ：草 9、土 6、岩 3（割れ目のゆらぎ）、砂 14、道・畑 10、丸太 7、葉 5
+  const freq = isT(1).select(9, isT(2).select(6, isT(3).select(3, isT(4).select(14, isT(6).select(7, isT(7).or(isT(8)).select(5, float(10)))))));
+  const n: N = mx_noise_vec3(vec3(p.mul(freq), t.mul(3.7)));
+  const grain = n.xy; // -1..1 くらい
+
+  // 岩：ゆらいだセルごとに面を傾け、セルの縁（割れ目）は溝へ落ちる
+  const q = p.mul(2.2).add(n.xy.mul(0.25));
+  const cf: N = fract(q), cell: N = floor(q);
+  const cellTilt = vec2(hash3(vec3(cell, 1)), hash3(vec3(cell, 2))).sub(0.5).mul(0.7);
+  const g = float(0.1);
+  const crack = vec2(
+    smoothstep(float(1).sub(g), 1, cf.x).sub(float(1).sub(smoothstep(0, g, cf.x))),
+    smoothstep(float(1).sub(g), 1, cf.y).sub(float(1).sub(smoothstep(0, g, cf.y))),
+  ).mul(0.9);
+  const stone = cellTilt.add(crack).add(grain.mul(0.15));
+
+  // 石畳：ブロックの半分の石を段ごとに半分ずらす。目地へ向かって落ち、石ごとに少し傾く
+  const row = floor(p.y.mul(2));
+  const sp = vec2(p.x.mul(2).add(fract(row.mul(0.5)).mul(2).mul(0.5)), p.y.mul(2));
+  const sf: N = fract(sp), sid: N = floor(sp);
+  const gg = float(0.14);
+  const groove = vec2(
+    smoothstep(float(1).sub(gg), 1, sf.x).sub(float(1).sub(smoothstep(0, gg, sf.x))),
+    smoothstep(float(1).sub(gg), 1, sf.y).sub(float(1).sub(smoothstep(0, gg, sf.y))),
+  ).mul(1.1);
+  const cobble = groove.add(vec2(hash3(vec3(sid, 3)), hash3(vec3(sid, 4))).sub(0.5).mul(0.35)).add(grain.mul(0.08));
+
+  // 丸太：上下の面は年輪（中心からの同心円）、側面は縦の樹皮の筋
+  const lc = fract(p).sub(0.5);
+  const lr = max(length(lc), 0.001);
+  const rings = lc.div(lr).mul(sin(lr.mul(Math.PI * 2 * 5)).mul(0.3));
+  const bark = vec2(sin(p.x.mul(Math.PI * 2 * 5).add(n.x.mul(1.5))).mul(0.45), grain.y.mul(0.1));
+  const log = side.select(bark, rings.add(grain.mul(0.06)));
+
+  // 砂：細かい粒と、ゆるい風紋（筋に直角に傾く）
+  const ph = p.x.mul(0.8).add(p.y.mul(0.3)).mul(Math.PI * 2 * 1.6).add(n.z.mul(0.8));
+  const sand = grain.mul(0.16).add(vec2(0.8, 0.3).mul(cos(ph).mul(0.22)));
+
+  // 畑：畝の溝（上面だけ。h = |sin(3πx)| の傾き）と、ざらつき
+  const fx = p.x.mul(Math.PI * 3);
+  const farmTop = vec2(sin(fx).sign().mul(cos(fx)).mul(-0.45), 0);
+  const farm = side.select(vec2(0), farmTop).add(grain.mul(0.14));
+
+  return isT(1).select(grain.mul(0.38), // 草：細かい毛羽立ち
+    isT(2).select(grain.mul(0.42), // 土：粒とくぼみ
+    isT(3).select(stone,
+    isT(4).select(sand,
+    isT(16).select(cobble,
+    isT(6).select(log,
+    isT(15).select(grain.mul(0.2), // 土の道：踏み固めた細かいざらつき
+    isT(13).or(isT(14)).select(farm,
+    isT(7).or(isT(8)).select(grain.mul(0.4), vec2(0))))))))));
 }
 
 /**
@@ -163,7 +226,11 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   const eu: N = lite ? float(0) : edgeKind(tU).mul(smoothstep(float(1).sub(w), 1, fr.x)).sub(edgeKind(tU.negate()).mul(float(1).sub(smoothstep(0, w, fr.x))));
   const ev: N = lite ? float(0) : edgeKind(tV).mul(smoothstep(float(1).sub(w), 1, fr.y)).sub(edgeKind(tV.negate()).mul(float(1).sub(smoothstep(0, w, fr.y))));
   const k = U.roundEdges.mul(0.9);
-  if (!lite) m.normalNode = transformNormalToView(normalize(nL.add(tU.mul(eu.mul(k))).add(tV.mul(ev.mul(k)))));
+  // 地面の質感：ブロックの種類ごとの模様で法線を傾ける（形は平らな箱のまま）
+  const bump: N = lite ? vec2(0) : terrainBump(faceUV, typeAt(voxel), kind).mul(U.bump)
+    // 遠くでは弱める（細かい模様のちらつきを防ぐ）
+    .mul(float(1).sub(smoothstep(18, 70, length(positionWorld.sub(cameraPosition)))));
+  if (!lite) m.normalNode = transformNormalToView(normalize(nL.add(tU.mul(eu.mul(k).add(bump.x))).add(tV.mul(ev.mul(k).add(bump.y)))));
   // 影の参照位置は「曲げる前」の法線方向に少し浮かせる（縁のギザギザ防止）
   m.receivedShadowPositionNode = positionWorld.add(normalWorldGeometry.mul(SHADOW_OFFSET));
 
