@@ -1,5 +1,5 @@
 import { hash2, makeNoise2D } from './noise';
-import { DIRT, GRASS, SAND, STONE, WATER } from './blocks';
+import { DIRT, GRASS, SAND, STONE, WATER, isWalkableTop } from './blocks';
 import { FRAME, isOpenCol, plotRect } from './plots';
 
 /** 小物（木・花）の配置。地面のボクセル座標で持つ */
@@ -232,7 +232,7 @@ export function applyEdits(world: World, edits: number[]) {
     }
     world.heights[col] = h;
     const top = h > 0 ? world.voxels[x + z * N + (h - 1) * N * N] : 0;
-    world.walkable[col] = (top === GRASS || top === SAND || top === DIRT || top === 13 || top === 14) && !treeCols.has(col) && h >= world.waterLevel ? 1 : 0;
+    world.walkable[col] = isWalkableTop(top) && !treeCols.has(col) && h >= world.waterLevel ? 1 : 0;
   }
   world.flowers = world.flowers.filter((f) => !cols.has(Math.floor(f.x) + Math.floor(f.z) * N));
 }

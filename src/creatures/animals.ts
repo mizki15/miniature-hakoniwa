@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { WorldData as World } from '../world/terrain';
+import { isPathBlock } from '../world/blocks';
 import { approach, gaitPose, turnToward, wrapAngle, type Gait } from './motion';
 
 /**
@@ -227,16 +228,34 @@ export class Animal {
     return { walk: this.world.walkable[ix + iz * N] === 1, h: this.world.heights[ix + iz * N] };
   }
 
-  /** 次の行き先。たいていは今向いている方の前のほう（行ったり来たりしない） */
+  /** その場所の一番上が道か */
+  private onPath(x: number, z: number) {
+    const N = this.world.size;
+    const ix = Math.floor(x), iz = Math.floor(z);
+    if (ix < 0 || iz < 0 || ix >= N || iz >= N) return false;
+    const h = this.world.heights[ix + iz * N];
+    return h > 0 && isPathBlock(this.world.voxels[ix + iz * N + (h - 1) * N * N]);
+  }
+
+  /**
+   * 次の行き先。たいていは今向いている方の前のほう（行ったり来たりしない）。
+   * 道（土の道・石畳）の上に行ける候補があれば、たいていそちらを選ぶ（道を好んで歩く）
+   */
   private pickTarget() {
+    let first: THREE.Vector2 | null = null;
     for (let tries = 0; tries < 20; tries++) {
       const ahead = tries < 12 && Math.random() < 0.7;
       const a = ahead ? this.heading + (Math.random() - 0.5) * 2.2 : Math.random() * Math.PI * 2;
       const r = 2 + Math.random() * 7;
       // 向きは atan2(dx, dz)（前は +z）
       const tx = this.pos.x + Math.sin(a) * r, tz = this.pos.y + Math.cos(a) * r;
-      if (this.clearPath(tx, tz)) { this.target = new THREE.Vector2(tx, tz); return; }
+      if (!this.clearPath(tx, tz)) continue;
+      if (this.onPath(tx, tz)) { this.target = new THREE.Vector2(tx, tz); return; }
+      first ??= new THREE.Vector2(tx, tz);
+      // 道を探すのは 8 回まで。道の上にいる時は、道から外れる候補を少しだけ選びにくくする
+      if (tries >= 8 && !(this.onPath(this.pos.x, this.pos.y) && Math.random() < 0.6)) break;
     }
+    if (first) this.target = first;
   }
 
   /** まっすぐ歩いて行けるか（途中に水・木・高い段差がない）。崖の前で行ったり来たりしないように、道を先に確かめる */

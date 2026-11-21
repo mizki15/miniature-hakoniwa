@@ -39,8 +39,8 @@ import type { InitResult, PlotResult, RemeshResult } from './world/worker';
 import { FRAME, PLOT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect, rightsLeft } from './world/plots';
 import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
-import { GameController, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
-import { Radial, type RadialItem } from './ui/radial';
+import { FLOWER_KINDS, GameController, PATH_KINDS, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
+import { Radial } from './ui/radial';
 import { buildMinutes } from './build/construction';
 import { parseBuilding, type BuildingDesign, type ParseIssue } from './build/geoParse';
 import { buildFixPrompt, buildPrompt } from './build/aiPrompt';
@@ -452,40 +452,61 @@ async function main() {
   const CROP_ICONS: Record<CropKind, string> = { turnip: '🥬', wheat: '🌾', pumpkin: '🎃' };
   let editTool: Tool = 'till';
 
-  // 道具の輪（Q を押している間、または画面下の道具を押すと出る）。似た作業はグループにまとめる
+  // 道具の輪（Q を押している間に出る）でグループを選び、左のエディタパネルでその中の道具を選ぶ
   const radial = new Radial($('radial'));
-  /** グループの並び（1〜5 のキーもこの順） */
-  const GROUP_IDS = ['g:farm', 'g:plant', 'g:land', 'g:block', 'g:build'];
-  const radialItems = (): RadialItem[] => [
-    { id: 'g:farm', icon: '🌾', label: '畑', children: [
-      { id: 'till', icon: '⛏', label: '耕す' }, { id: 'water', icon: '💧', label: '水やり' }, { id: 'harvest', icon: '🧺', label: '収穫' },
+  /** 道具の選択肢 1 つ。id：'till'・'seed:wheat'・'block:3'・'flower:1'・'path:15'・'build:<建物>' など */
+  type ToolOption = { id: string; icon: string; name: string; help: string };
+  const help = (t: Tool) => TOOLS.find((x) => x.id === t)!.help;
+  /** グループ（1〜5 のキーもこの順） */
+  const GROUPS: { id: string; icon: string; name: string; options: () => ToolOption[] }[] = [
+    { id: 'g:farm', icon: '🌾', name: '畑', options: () => [
+      { id: 'till', icon: '⛏', name: '耕す', help: help('till') },
+      { id: 'water', icon: '💧', name: '水やり', help: help('water') },
+      { id: 'harvest', icon: '🧺', name: '収穫', help: help('harvest') },
     ] },
-    { id: 'g:plant', icon: '🌱', label: '植える', children: [
-      ...CROP_KINDS.map((k) => ({ id: `seed:${k}`, icon: CROP_ICONS[k], label: CROPS[k].name })), { id: 'plant', icon: '🌳', label: '苗木' },
+    { id: 'g:plant', icon: '🌱', name: '植物', options: () => [
+      ...CROP_KINDS.map((k) => ({ id: `seed:${k}`, icon: CROP_ICONS[k], name: `${CROPS[k].name}の種`, help: `畑にまく。育つまで ${CROPS[k].hours} 時間` })),
+      { id: 'plant', icon: '🌳', name: '苗木', help: help('plant') },
+      ...FLOWER_KINDS.map((f) => ({ id: `flower:${f.variant}`, icon: f.icon, name: f.name, help: help('flower') })),
+      { id: 'fell', icon: '🪓', name: '木を切る', help: help('fell') },
     ] },
-    { id: 'g:land', icon: '⛰', label: '地形', children: [{ id: 'dig', icon: '🕳', label: '掘る' }, { id: 'level', icon: '📏', label: '整地' }] },
-    { id: 'g:block', icon: '🧱', label: 'ブロック', children: PLACE_BLOCKS.map((b) => ({ id: `block:${b.id}`, icon: b.icon, label: b.name })) },
-    { id: 'g:build', icon: '🏠', label: '建物', children: [
-      ...[...game.designs.values()].slice(-8).map((d) => ({ id: `build:${d.id}`, icon: '🏠', label: d.name })),
-      { id: 'unbuild', icon: '🧹', label: '片付ける' },
-      { id: 'shelf', icon: '📦', label: '読み込み・棚', noRemember: true },
+    { id: 'g:land', icon: '⛰', name: '地形', options: () => [
+      { id: 'dig', icon: '🕳', name: '掘る', help: help('dig') },
+      { id: 'level', icon: '📏', name: '整地', help: help('level') },
+      ...PATH_KINDS.map((p) => ({ id: `path:${p.id}`, icon: p.icon, name: p.name, help: help('path') })),
+    ] },
+    { id: 'g:block', icon: '🧱', name: 'ブロック', options: () => PLACE_BLOCKS.map((b) => ({ id: `block:${b.id}`, icon: b.icon, name: b.name, help: `${b.name}のブロックを置く` })) },
+    { id: 'g:build', icon: '🏠', name: '建物', options: () => [
+      ...[...game.designs.values()].map((d) => ({ id: `build:${d.id}`, icon: '🏠', name: d.name, help: help('build') })),
+      { id: 'unbuild', icon: '🧹', name: '片付ける', help: help('unbuild') },
     ] },
   ];
-  /** 道具の輪で選んだ物を持つ（'till'・'seed:wheat'・'block:3'・'build:<建物>'・'shelf' など） */
+  const groupOf = (id: string) => GROUPS.find((g) => g.options().some((o) => o.id === id)) ?? GROUPS[0];
+  /** グループごとに、最後に選んだ道具 */
+  const lastByGroup = new Map<string, string>();
+  let editPick = 'till';
+  /** 道具を持つ。グループの id（'g:farm' など）なら、そのグループで最後に使った道具 */
   const pickTool = (id: string | null) => {
     if (!id || viewOnly) return;
-    if (id === 'shelf') { void setViewer(true, game.designs.size ? 'shelf' : 'import'); return; }
+    if (id.startsWith('g:')) {
+      const g = GROUPS.find((x) => x.id === id)!;
+      const opts = g.options();
+      const last = lastByGroup.get(id);
+      id = last && opts.some((o) => o.id === last) ? last : opts[0].id;
+    }
     let t: Tool;
     if (id.startsWith('seed:')) { game.seed = id.slice(5) as CropKind; t = 'seed'; }
     else if (id.startsWith('block:')) { game.block = parseInt(id.slice(6), 10); t = 'raise'; }
+    else if (id.startsWith('flower:')) { game.flowerVariant = parseInt(id.slice(7), 10); t = 'flower'; }
+    else if (id.startsWith('path:')) { game.pathBlock = parseInt(id.slice(5), 10); t = 'path'; }
     else if (id.startsWith('build:')) {
       const did = id.slice(6);
       if (!game.designs.has(did)) return;
       game.selectedDesign = did;
       t = 'build';
     } else t = id as Tool;
-    radial.setItems(radialItems());
-    radial.setCurrent(id);
+    editPick = id;
+    lastByGroup.set(groupOf(id).id, id);
     selectTool(t);
   };
   radial.onPick = pickTool;
@@ -495,31 +516,43 @@ async function main() {
     stroke = null;
     game.endEdit();
     game.cursor.visible = false;
-    radial.setItems(radialItems());
+    radial.setItems(GROUPS.map((g) => ({ id: g.id, icon: g.icon, label: g.name })));
+    radial.setCurrent(groupOf(editPick).id);
     radial.open(x, y, sticky);
   };
 
-  /** 画面下の「いま持っている道具」 */
-  const renderChip = () => {
-    const t = TOOLS.find((x) => x.id === game.tool) ?? TOOLS[1];
-    let icon = t.icon, name = t.name;
-    if (game.tool === 'seed') { icon = CROP_ICONS[game.seed]; name = `${CROPS[game.seed].name}の種`; }
-    else if (game.tool === 'raise') { icon = PLACE_BLOCKS.find((b) => b.id === game.block)?.icon ?? icon; name = `${game.blockName()}を置く`; }
-    else if (game.tool === 'build') { const d = game.selectedDesign ? game.designs.get(game.selectedDesign) : undefined; if (d) name = d.name; }
-    $('toolChipIcon').textContent = icon;
-    $('toolChipName').textContent = name; // 建物の名前は読み込んだ物なので textContent で
-    hintEl.textContent = t.help;
+  /** 左のエディタパネル：いまのグループの道具を並べる */
+  const toolsEl = $('tools');
+  const renderEditor = () => {
+    const g = groupOf(editPick);
+    $('editorTitle').textContent = `${g.icon} ${g.name}`;
+    toolsEl.replaceChildren(...g.options().map((o) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      const ic = Object.assign(document.createElement('span'), { className: 'ic', textContent: o.icon });
+      const nm = Object.assign(document.createElement('span'), { className: 'n', textContent: o.name }); // 建物の名前は読み込んだ物なので textContent で
+      const d = Object.assign(document.createElement('span'), { className: 'd', textContent: o.help });
+      b.append(ic, nm, d);
+      b.classList.toggle('on', o.id === editPick);
+      b.addEventListener('click', () => pickTool(o.id));
+      return b;
+    }));
+    $('openBuildings').hidden = g.id !== 'g:build';
+    hintEl.textContent = help(game.tool === 'look' ? 'till' : game.tool);
+    $('editorRights').textContent = `🔑 土地の権利 ${rights()}（次まで あと ${3 - (progress.points % 3)} ポイント）`;
   };
-  $('toolChip').addEventListener('click', () => {
-    const r = $('toolChip').getBoundingClientRect();
-    openRadial(r.left + r.width / 2, r.top - 190, true);
+  const renderChip = renderEditor;
+  $('editorHead').addEventListener('click', () => {
+    const r = $('editorHead').getBoundingClientRect();
+    openRadial(r.right + 200, r.top + 200, true);
   });
+  $('openBuildings').addEventListener('click', () => void setViewer(true, game.designs.size ? 'shelf' : 'import'));
   const selectTool = (t: Tool) => {
     if (t === 'look' || viewOnly) { setMode('view'); return; }
     editTool = t;
     if (mode !== 'edit') setMode('edit');
     game.tool = t;
-    renderChip();
+    renderEditor();
   };
 
   // ---------- 建物の窓（読み込み・見本・棚） ----------
@@ -645,6 +678,7 @@ async function main() {
     const added = game.addDesign(preview) === 'added';
     if (added) toast(`「${preview.name}」を棚に入れました`);
     viewerSel = preview.id;
+    renderEditor();
     vtab = 'shelf';
     renderViewer();
   });
@@ -660,7 +694,7 @@ async function main() {
     if (!d || !confirm(`「${d.name}」を棚から消しますか？ 箱庭に置いた分も消えます。`)) return;
     game.removeDesign(d.id);
     viewerSel = null;
-    if (game.tool === 'build' && !game.selectedDesign) renderChip();
+    renderEditor();
     renderViewer();
   });
 
@@ -690,15 +724,6 @@ async function main() {
     ghosts.setHover(-1);
     if (m === 'view') refreshDex();
   };
-
-  // 右のパネル：「ようす」と「図鑑」を切り替える
-  document.querySelectorAll<HTMLButtonElement>('[data-pane]').forEach((b) => b.addEventListener('click', () => {
-    const pane = b.dataset.pane;
-    document.querySelectorAll<HTMLButtonElement>('[data-pane]').forEach((x) => x.classList.toggle('on', x === b));
-    $('paneStatus').hidden = pane !== 'status';
-    $('paneDex').hidden = pane !== 'dex';
-    if (pane === 'dex') refreshDex();
-  }));
 
   // Esc メニュー：画面全体をすりガラスにして、保存などのメニューを出す
   const menuEl = $('menu');
@@ -793,10 +818,7 @@ async function main() {
     if (e.code === 'KeyR' && mode === 'edit' && game.tool === 'build') { game.rotateBuild(); return; } // 次に置く建物の向き（カーソルの枠は毎フレーム作り直す）
     // 1〜5：グループの、最後に使った道具
     const n = /^Digit([1-5])$/.exec(e.code);
-    if (n && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      radial.setItems(radialItems());
-      pickTool(radial.lastOf(GROUP_IDS[+n[1] - 1]));
-    }
+    if (n && !e.ctrlKey && !e.metaKey && !e.altKey) pickTool(GROUPS[+n[1] - 1].id);
   });
 
   // マウスの位置から光線を作る
@@ -1150,18 +1172,13 @@ async function main() {
   $('skip1').addEventListener('click', () => { game.skip(1, lastEnv); toast('1 時間進めました'); });
   $('skip6').addEventListener('click', () => { game.skip(6, lastEnv); toast('6 時間進めました'); });
 
-  // 右パネル（ステータス）
-  const dl = (rows: [string, string | number][]) => rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  // 右のパネル（図鑑）の上の、時刻・季節・天気
   const updateStatus = (hh: number, mm: number, season: number, calendarSeason: number) => {
     $('st-time').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
     $('st-season').textContent = SEASON_NAMES[season] + (season !== calendarSeason ? '（手動）' : '');
     $('st-weather').textContent = WEATHER_NAMES[weatherOverride ?? weatherAt(new Date(), season)];
-    const f = game.summary();
-    $('st-farm').innerHTML = dl([['畑', `${f.fields} マス`], ['育っている', f.growing], ['収穫できる', f.ripe], ['育つ苗木', f.saplings], ['建設中', `${f.building} 棟`], ['🔑 土地の権利', rights()], ['次の権利まで', `あと ${3 - (progress.points % 3)} ポイント`], ['開いた土地', `${world ? countOpen(world.plots) : 0} / 16`]]);
-    const e = eco.env();
-    $('st-env').innerHTML = dl([['🌼 花', e.flowers], ['🌳 木', e.trees], ['🌿 草地', e.grass], ['💧 水辺', e.waterside], ['🐟 深い水', e.deepWater], ['🟫 畑', e.farmland]]);
-    $('st-inv').innerHTML = dl(CROP_KINDS.map((k) => [`${CROP_ICONS[k]} ${CROPS[k].name}`, f.inventory[k] ?? 0]));
-    $('st-residents').innerHTML = dl(eco.animals.slice(0, 10).map((a) => [`${a.info.icon} ${a.name}`, ACTIVITY_NAMES[a.activity]]));
+    // 土地の権利は、エディタのパネルの下に出す
+    if (mode === 'edit') $('editorRights').textContent = `🔑 土地の権利 ${rights()}（次まで あと ${3 - (progress.points % 3)} ポイント）`;
   };
 
   // 天気
@@ -1515,6 +1532,16 @@ async function main() {
 
   // デバッグウィンドウの開閉（スマホでは最初はたたんでおく）
   const uiEl = $('ui');
+  // 出すかどうかはメニューの設定で決める（ふだんは隠す。この端末に覚える）
+  const DEBUG_KEY = 'hakoniwa.showDebug';
+  const debugBtn = $<HTMLButtonElement>('debugToggle');
+  const setDebug = (on: boolean) => {
+    uiEl.hidden = !on;
+    debugBtn.setAttribute('aria-checked', String(on));
+    try { localStorage.setItem(DEBUG_KEY, on ? '1' : '0'); } catch { /* 保存できなくても表示は変える */ }
+  };
+  setDebug(localStorage.getItem(DEBUG_KEY) === '1');
+  debugBtn.addEventListener('click', () => setDebug(!!uiEl.hidden));
   // 狭い画面では CSS で最初からたたまれている（.expanded でひらく）。広い画面では .collapsed でたたむ
   const narrow = window.matchMedia('(max-width: 760px)');
   $('uiTitle').addEventListener('click', () => uiEl.classList.toggle(narrow.matches ? 'expanded' : 'collapsed'));

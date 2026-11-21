@@ -16,7 +16,7 @@
         <button id="menuFab" class="menu-fab glass" type="button" title="メニュー（Esc）">☰</button>
 
         <!-- デバッグウィンドウ -->
-        <div id="ui" class="glass">
+        <div id="ui" class="glass" hidden>
           <div class="title" id="uiTitle" title="クリックでたたむ／ひらく">Hakoniwa <small>デバッグ</small><span class="fold">▾</span></div>
           <div class="row">
             <button id="rotL" title="左に90°回転">⟲ 90°</button>
@@ -171,10 +171,6 @@
         <div id="modes" class="glass">
           <button id="menuOpen" class="menu-btn"><span class="ic">☰</span>メニュー</button>
         </div>
-        <!-- エディタ：いま持っている道具（押すと道具の輪を出す） -->
-        <button id="toolChip" class="glass" type="button" title="道具を替える">
-          <span id="toolChipIcon" class="ic"></span><b id="toolChipName"></b><span id="toolHint" class="tool-hint"></span>
-        </button>
         <!-- 道具の輪（ラジアルメニュー） -->
         <div id="radial" aria-hidden="true"></div>
         <div id="toast"></div>
@@ -182,51 +178,33 @@
         <div id="tooltip" class="glass"></div>
       </main>
 
-      <!-- 右：ステータス（一部はまだレイアウトのみ） -->
+      <!-- 左：エディタ（エディタモードのみ）。道具の輪で選んだグループの、細かい選択 -->
+      <aside id="editor" class="side glass">
+        <header id="editorHead" title="グループを替える">
+          <span id="editorTitle"></span><span class="editor-switch">⇄</span>
+        </header>
+        <div class="side-body">
+          <div id="tools" class="tool-list"></div>
+          <button id="openBuildings" type="button" class="open-viewer" hidden>📦 建物を読み込む・棚を見る</button>
+          <div id="toolHint" class="tool-hint"></div>
+          <div id="editorRights" class="editor-rights"></div>
+        </div>
+      </aside>
+
+      <!-- 右：図鑑（見るモード）。上に時刻・季節・天気 -->
       <aside id="right" class="side glass">
         <header>
-          <div class="seg" role="tablist">
-            <button type="button" data-pane="status" class="on" role="tab">🏡 ようす</button>
-            <button type="button" data-pane="dex" role="tab">📖 図鑑</button>
-          </div>
+          <span>📖 図鑑</span>
           <button class="collapse" data-target="right" title="たたむ">›</button>
         </header>
         <div class="side-body">
-          <div id="paneDex" hidden>
-            <div class="dex-grid" id="dexGrid"></div>
-            <div id="dexDetail">カードを選ぶと説明が出ます</div>
-          </div>
-          <div id="paneStatus">
-          <section class="stat-block">
-            <h3>箱庭</h3>
-            <dl>
-              <dt>時刻</dt><dd id="st-time">—</dd>
-              <dt>季節</dt><dd id="st-season">—</dd>
-              <dt>天気</dt><dd id="st-weather">—</dd>
-            </dl>
-          </section>
-          <section class="stat-block">
-            <h3>住人</h3>
-            <dl id="st-residents"></dl>
-          </section>
-          <section class="stat-block">
-            <h3>環境</h3>
-            <dl id="st-env"></dl>
-          </section>
-          <section class="stat-block">
-            <h3>畑・素材</h3>
-            <dl id="st-farm"></dl>
-            <h3 class="sub-h">持ち物</h3>
-            <dl id="st-inv"></dl>
-          </section>
-          <section class="stat-block">
-            <h3>できごと</h3>
-            <div class="skeleton-line"></div>
-            <div class="skeleton-line"></div>
-            <div class="skeleton-line short"></div>
-          </section>
-          <div class="placeholder-note">（準備中）</div>
-          </div>
+          <dl class="now-line">
+            <dt>時刻</dt><dd id="st-time">—</dd>
+            <dt>季節</dt><dd id="st-season">—</dd>
+            <dt>天気</dt><dd id="st-weather">—</dd>
+          </dl>
+          <div class="dex-grid" id="dexGrid"></div>
+          <div id="dexDetail">カードを選ぶと説明が出ます</div>
         </div>
       </aside>
     </div>
@@ -309,7 +287,11 @@
               <div class="setting-text"><b>全画面表示</b><small id="fullscreenNote">ブラウザの枠を隠して、箱庭を画面いっぱいに</small></div>
               <button id="fullscreen" class="switch" role="switch" aria-checked="false"><span></span></button>
             </div>
-            <p class="menu-note">画質・音・時刻などの設定は、順次デバッグ画面からここへ移します。</p>
+            <div class="setting">
+              <div class="setting-text"><b>デバッグウィンドウ</b><small>時刻・天気・画質などを試す窓を、左上に出す</small></div>
+              <button id="debugToggle" class="switch" role="switch" aria-checked="false"><span></span></button>
+            </div>
+            <p class="menu-note">画質・音・時刻などの設定は、順次デバッグウィンドウからここへ移します。</p>
           </section>
           <details class="menu-card menu-howto">
             <summary><h2>🎮 操作方法</h2></summary>

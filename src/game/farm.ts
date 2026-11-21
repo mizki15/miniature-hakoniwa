@@ -36,7 +36,7 @@ export class Farm {
   crops = new Map<number, Crop>();
   saplings: Sapling[] = [];
   wetUntil = new Map<number, number>(); // 列 → 湿っている期限（simMs）
-  inventory: Record<string, number> = { turnip: 0, wheat: 0, pumpkin: 0 };
+  inventory: Record<string, number> = { turnip: 0, wheat: 0, pumpkin: 0, wood: 0 };
   simMs = Date.now();
   speed = 1; // 早送りの倍率（デバッグ用）
 

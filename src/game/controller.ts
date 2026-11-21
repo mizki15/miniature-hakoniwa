@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { AIR, CONIFER, DIRT, FARMLAND, GRASS, LEAVES, LOG, SAND, STONE, WATER, WET_FARMLAND, isOpaque } from '../world/blocks';
+import { AIR, COBBLE, CONIFER, DIRT, FARMLAND, GRASS, LEAVES, LOG, PATH, SAND, STONE, WATER, WET_FARMLAND, isOpaque, isWalkableTop } from '../world/blocks';
 import { CHUNK, type MeshData } from '../world/mesher';
 import type { WorldData } from '../world/terrain';
 import type { ChunkMesh, DetailModel, PlotPlacements, PlotResult } from '../world/worker';
@@ -15,7 +15,7 @@ import { buildBuildingMesh } from '../build/geoMesh';
 import { canPlace, footprintCols, rayHitPlaced, rayHitPlacedT, rotatedBounds, type Rot } from '../build/placement';
 import { advanceProgress, buildOrder, builtCount, cubeBox, minutesLeft } from '../build/construction';
 
-export type Tool = 'look' | 'till' | 'seed' | 'water' | 'harvest' | 'plant' | 'dig' | 'raise' | 'level' | 'build' | 'unbuild';
+export type Tool = 'look' | 'till' | 'seed' | 'water' | 'harvest' | 'plant' | 'flower' | 'fell' | 'dig' | 'raise' | 'level' | 'path' | 'build' | 'unbuild';
 
 /** 置いた建物 1 棟。progress：建設の進み具合（0〜1、1 で完成） */
 interface PlacedBuilding { id: string; x: number; z: number; rot: Rot; progress: number }
@@ -59,7 +59,11 @@ interface UndoEntry {
   placed: PlacedBuilding[];
   decor: Float32Array[];
   treeCols: Set<number>;
+  planted: Map<number, number>;
 }
+
+/** 木を 1 本切ると手に入る木材 */
+const WOOD_PER_TREE = 3;
 
 export const TOOLS: { id: Tool; name: string; icon: string; help: string }[] = [
   { id: 'look', name: '見る', icon: '👁', help: '眺めるだけ。水面をクリックすると波紋' },
@@ -67,14 +71,28 @@ export const TOOLS: { id: Tool; name: string; icon: string; help: string }[] = [
   { id: 'seed', name: '種まき', icon: '🌱', help: '畑に種をまく' },
   { id: 'water', name: '水やり', icon: '💧', help: '畑に水をやる（6 時間、倍の速さで育つ）' },
   { id: 'harvest', name: '収穫', icon: '🧺', help: '育ちきった作物を収穫する' },
-  { id: 'plant', name: '植林', icon: '🌳', help: '苗木を植える（約 1 日で木になる）' },
+  { id: 'plant', name: '苗木', icon: '🌳', help: '苗木を植える（約 1 日で木になる）' },
+  { id: 'flower', name: '花を植える', icon: '🌷', help: '草地に花を植える。花は虫や鳥を呼ぶ' },
+  { id: 'fell', name: '木を切る', icon: '🪓', help: `育った木を切って木材 ${WOOD_PER_TREE} 個。切り株から、また育つ` },
   { id: 'dig', name: '掘る', icon: '🕳', help: 'ブロックを掘る。水のそばを掘ると水が流れ込む' },
   { id: 'raise', name: 'ブロックを置く', icon: '🧱', help: '選んだブロックを置く' },
   { id: 'level', name: '整地', icon: '📏', help: '最初に押したマスの高さに、なぞった所を削る・盛る' },
+  { id: 'path', name: '道を敷く', icon: '🛤', help: '地面を道にする。住人は道を好んで歩く' },
   { id: 'build', name: '建物を置く', icon: '🏠', help: '選んだ建物を地面に置く。下から少しずつ建っていく' },
   { id: 'unbuild', name: '片付ける', icon: '🧹', help: '置いた建物を取り除く（棚には残る）' },
 ];
 
+/** 植えられる花（色）。variant は花の形の番号（0 赤・1 黄・2 白） */
+export const FLOWER_KINDS: { variant: number; name: string; icon: string }[] = [
+  { variant: 0, name: '赤い花', icon: '🌹' },
+  { variant: 1, name: '黄色い花', icon: '🌼' },
+  { variant: 2, name: '白い花', icon: '🤍' },
+];
+/** 敷ける道 */
+export const PATH_KINDS: { id: number; name: string; icon: string }[] = [
+  { id: PATH, name: '土の道', icon: '🟤' },
+  { id: COBBLE, name: '石畳', icon: '⬜' },
+];
 /** 整地で、1 列あたり削る・盛る高さの上限 */
 const LEVEL_MAX = 8;
 
@@ -127,6 +145,12 @@ export class GameController {
   seed: CropKind = 'turnip';
   /** 「ブロックを置く」で置くブロック */
   block: number = DIRT;
+  /** 「花を植える」で植える花（FLOWER_KINDS の variant） */
+  flowerVariant = 0;
+  /** 「道を敷く」で敷く道のブロック */
+  pathBlock: number = PATH;
+  /** 植えた花（列 → 花の形）。地形から作り直せないので保存する */
+  private planted = new Map<number, number>();
   /** 整地：このなぞりでそろえる高さ（最初に押した列の地面の高さ）。なぞりごとに決め直す */
   private levelTarget: number | null = null;
   /** 建設中の建物の見た目 */
@@ -213,6 +237,7 @@ export class GameController {
     this.growingMeshes = [];
     this.decor = [];
     this.treeCols.clear();
+    this.planted.clear();
     this.treeGeos = [];
     this.flowerGeos = [];
     this.delta = [];
@@ -414,6 +439,74 @@ export class GameController {
       }
       if (removed) { d.placements = new Float32Array(keep); this.buildDecor(d); }
     }
+    this.planted.delete(x + z * this.world!.size);
+  }
+
+  /** 花を 1 本足す（列の中で少しずらし、向き・大きさはばらつかせる） */
+  private addFlower(col: number, variant: number) {
+    const w = this.world!;
+    const geo = this.flowerGeos[variant];
+    if (!geo) return;
+    const x = col % w.size, z = Math.floor(col / w.size);
+    let d = this.decor.find((q) => q.kind === 'flower' && q.variant === variant);
+    if (!d) { d = { kind: 'flower', variant, geo, mat: this.deps.flowerMat, placements: new Float32Array(0), mesh: null, shared: this.flowerShared }; this.decor.push(d); }
+    const merged = new Float32Array(d.placements.length + 5);
+    merged.set(d.placements);
+    merged.set([x + 0.2 + Math.random() * 0.6, w.heights[col], z + 0.2 + Math.random() * 0.6, Math.random() * Math.PI * 2, 0.8 + Math.random() * 0.4], d.placements.length);
+    d.placements = merged;
+    this.buildDecor(d);
+    this.planted.set(col, variant);
+  }
+
+  /** その列に花があるか */
+  private hasFlower(col: number) {
+    const N = this.world!.size;
+    for (const d of this.decor) {
+      if (d.kind !== 'flower') continue;
+      for (let i = 0; i < d.placements.length; i += 5) if (Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * N === col) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 光線が当たる、育った木の列（地形より手前のもの）。木は「根元から てっぺん、葉の広がりの 7 割」の箱で見る。
+   * 自然の木と、植えて育った木（育ち具合 0.6 以上）。当たらなければ null
+   */
+  private treeColAtRay(voxelT: number): number | null {
+    const w = this.world!;
+    const ray = this.lastRay;
+    if (!ray) return null;
+    const half = w.size / 2;
+    let best: number | null = null, bestT = voxelT + 0.5;
+    const test = (col: number, cx: number, cz: number, ground: number, top: number, r: number) => {
+      const lo = [cx - r, ground, cz - r], hi = [cx + r, top, cz + r];
+      let t0 = 0, t1 = Infinity;
+      for (let a = 0; a < 3; a++) {
+        const o = ray.origin[a], dd = ray.dir[a];
+        if (Math.abs(dd) < 1e-12) { if (o < lo[a] || o > hi[a]) return; continue; }
+        let ta = (lo[a] - o) / dd, tb = (hi[a] - o) / dd;
+        if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+        if (t0 > t1) return;
+      }
+      if (t0 < bestT) { bestT = t0; best = col; }
+    };
+    for (const d of this.decor) {
+      if (d.kind !== 'tree' || !d.placements.length) continue;
+      if (!d.geo.boundingBox) d.geo.computeBoundingBox();
+      const b = d.geo.boundingBox!;
+      for (let i = 0; i < d.placements.length; i += 5) {
+        const px = d.placements[i], py = d.placements[i + 1], pz = d.placements[i + 2], s = d.placements[i + 4];
+        test(Math.floor(px) + Math.floor(pz) * w.size, px - half, pz - half, py, py + b.max.y * s, Math.max(0.5, b.max.x * s * 0.7));
+      }
+    }
+    for (const sp of this.farm.saplings) {
+      const shape = sp.progress >= 0.25 ? this.treeShape(sp.col) : null;
+      if (!shape) continue;
+      const x = sp.col % w.size, z = Math.floor(sp.col / w.size);
+      test(sp.col, x + 0.5 - half, z + 0.5 - half, shape.ground, shape.top, Math.max(0.5, shape.radius * 0.7));
+    }
+    return best;
   }
 
   // ---------- 地形の編集 ----------
@@ -430,7 +523,7 @@ export class GameController {
     const w = this.world!;
     const h = w.heights[col];
     const top = h > 0 ? w.voxels[col + (h - 1) * w.size * w.size] : AIR;
-    w.walkable[col] = (top === GRASS || top === SAND || top === DIRT || isFarm(top)) && !this.treeCols.has(col) && !this.buildingCols.has(col) && h >= w.waterLevel ? 1 : 0;
+    w.walkable[col] = isWalkableTop(top) && !this.treeCols.has(col) && !this.buildingCols.has(col) && h >= w.waterLevel ? 1 : 0;
   }
 
   // ---------- 取り消し（Ctrl+Z） ----------
@@ -458,6 +551,7 @@ export class GameController {
       placed: this.placed.map((p) => ({ ...p })),
       decor: this.decor.map((d) => d.placements),
       treeCols: new Set(this.treeCols),
+      planted: new Map(this.planted),
     };
   }
 
@@ -496,7 +590,8 @@ export class GameController {
     for (const c of this.treeCols) if (!r.treeCols.has(c)) cols.add(c);
     for (const c of r.treeCols) if (!this.treeCols.has(c)) cols.add(c);
     this.treeCols = r.treeCols;
-    // 花
+    // 花（植えた花の記録も）・切った木
+    this.planted = r.planted;
     r.decor.forEach((p, k) => {
       const d = this.decor[k];
       if (d && d.placements !== p) { d.placements = p; this.buildDecor(d); }
@@ -698,6 +793,15 @@ export class GameController {
       if (bh.index >= 0 && bh.t < hit.t) return res(false, '建物があります');
     }
     if (this.tool !== 'raise' && this.buildingCols.has(col)) return res(false, '建物があります');
+    if (this.tool === 'fell') {
+      // 指した所の手前の木。なければ、指した列に立っている木
+      const tc = this.treeColAtRay(hit.t) ?? (this.treeCols.has(col) ? col : null);
+      if (tc === null) return res(false, '木を選んでください');
+      const tx = tc % w.size, tz = Math.floor(tc / w.size), ty = w.heights[tc] - 1;
+      const sp = this.farm.saplings.find((s) => s.col === tc);
+      if (sp && sp.progress < 1) return res(false, `まだ育っています（${Math.floor(sp.progress * 100)}%）`, tx, ty, tz);
+      return res(true, `木を切る（木材 +${WOOD_PER_TREE}）`, tx, ty, tz);
+    }
     switch (this.tool) {
       case 'till':
         if (!topFace || !isTop) return res(false, '地面の上面を選んでください');
@@ -726,6 +830,22 @@ export class GameController {
           if (this.treeCols.has(x + dx + (z + dz) * w.size)) return res(false, '近くに木があります');
         }
         return res(true, '苗木を植える');
+      }
+      case 'flower': {
+        if (!topFace || !isTop) return res(false, '地面の上面を選んでください');
+        if (t !== GRASS) return res(false, '草地に植えられます');
+        if (this.treeCols.has(col)) return res(false, '木の根元には植えられません');
+        if (this.hasFlower(col)) return res(false, 'もう花があります');
+        return res(true, `${FLOWER_KINDS.find((f) => f.variant === this.flowerVariant)?.name ?? '花'}を植える`);
+      }
+      case 'path': {
+        if (!topFace || !isTop) return res(false, '地面の上面を選んでください');
+        if (this.treeCols.has(col)) return res(false, '木の根元には敷けません');
+        if (this.farm.crops.has(col)) return res(false, '作物があります');
+        const name = PATH_KINDS.find((p) => p.id === this.pathBlock)?.name ?? '道';
+        if (t === this.pathBlock) return res(false, `もう${name}です`);
+        if (t !== GRASS && t !== DIRT && t !== SAND && !isFarm(t) && t !== PATH && t !== COBBLE) return res(false, '草地・土・砂の所に敷けます');
+        return res(true, `${name}を敷く`);
       }
       case 'dig':
         if (y === 0) return res(false, '一番下は掘れません');
@@ -814,6 +934,41 @@ export class GameController {
         w.walkable[col] = 0;
         this.rebuildGrowing();
         return '苗木を植えました';
+      }
+      case 'flower':
+        this.addFlower(col, this.flowerVariant);
+        return `${FLOWER_KINDS.find((f) => f.variant === this.flowerVariant)?.name ?? '花'}を植えました`;
+      case 'path':
+        this.removeFlowersAt(x, z);
+        this.farmland.delete(col);
+        this.farm.wetUntil.delete(col);
+        this.setVoxel(x, y, z, this.pathBlock);
+        return `${PATH_KINDS.find((p) => p.id === this.pathBlock)?.name ?? '道'}を敷きました`;
+      case 'fell': {
+        // 自然の木：形を消して、同じ種類の若木（切り株から育つ）にする。植えた木：育ち具合を 0 に戻す
+        const sp = this.farm.saplings.find((s) => s.col === col);
+        if (sp) sp.progress = 0;
+        else {
+          for (const d of this.decor) {
+            if (d.kind !== 'tree') continue;
+            const keep: number[] = [];
+            let found: number[] | null = null;
+            for (let i = 0; i < d.placements.length; i += 5) {
+              if (!found && Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * w.size === col) { found = [...d.placements.subarray(i, i + 5)]; continue; }
+              for (let k = 0; k < 5; k++) keep.push(d.placements[i + k]);
+            }
+            if (found) {
+              d.placements = new Float32Array(keep);
+              this.buildDecor(d);
+              this.farm.plantSapling(col, d.variant, found[3]);
+              break;
+            }
+          }
+        }
+        this.farm.inventory.wood = (this.farm.inventory.wood ?? 0) + WOOD_PER_TREE;
+        this.rebuildGrowing();
+        this.onEnvChanged?.();
+        return `木を切りました（木材 +${WOOD_PER_TREE}、全部で ${this.farm.inventory.wood}）`;
       }
       case 'dig': {
         const wasTop = y === w.heights[col] - 1;
@@ -1266,6 +1421,7 @@ export class GameController {
         crops: [...f.crops.values()].map((c) => [c.col, c.kind, +c.progress.toFixed(5)]),
         saplings: f.saplings.map((s) => [s.col, s.variant, s.rot, +s.progress.toFixed(5)]),
         wet: [...f.wetUntil.entries()].filter(([, u]) => u > f.simMs),
+        flowers: [...this.planted.entries()],
       },
       buildings: {
         designs: [...this.designs.values()],
@@ -1293,6 +1449,22 @@ export class GameController {
       w.walkable[col] = 0;
     }
     for (const [col, until] of save.farm.wet) f.wetUntil.set(col, until);
+    // 切った自然の木：その列には若木（植えた木）があるので、生成した木の形は消す
+    const sapCols = new Set(f.saplings.map((s) => s.col));
+    for (const d of this.decor) {
+      if (d.kind !== 'tree' || !sapCols.size) continue;
+      const keep: number[] = [];
+      for (let i = 0; i < d.placements.length; i += 5) {
+        if (sapCols.has(Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * w.size)) continue;
+        for (let k = 0; k < 5; k++) keep.push(d.placements[i + k]);
+      }
+      if (keep.length !== d.placements.length) { d.placements = new Float32Array(keep); this.buildDecor(d); }
+    }
+    // 植えた花（今の地面が草地の列だけ）
+    for (const [col, variant] of save.farm.flowers ?? []) {
+      const h = w.heights[col];
+      if (h > 0 && w.voxels[col + (h - 1) * w.size * w.size] === GRASS && !this.treeCols.has(col)) this.addFlower(col, variant);
+    }
     // 建物：棚は保存のものに置き換える
     for (const g of this.buildingGeos.values()) g.dispose();
     this.buildingGeos.clear();

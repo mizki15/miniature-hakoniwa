@@ -36,6 +36,8 @@ export interface SaveData {
     crops: [col: number, kind: CropKind, progress: number][];
     saplings: [col: number, variant: number, rot: number, progress: number][];
     wet: [col: number, until: number][];
+    /** 植えた花（列, 花の形）。無ければ無し */
+    flowers?: [col: number, variant: number][];
   };
   /** 建物（v3）：棚に入れた建物と、置いた場所（x, z は枠のボクセル座標、rot は 90° 刻み）。
    *  progress は建設の進み具合（0〜1）。建ち終わった建物と古い記録には無い（＝完成） */

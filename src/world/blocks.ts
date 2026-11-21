@@ -13,9 +13,15 @@ export const PETAL_Y = 11;
 export const PETAL_W = 12;
 export const FARMLAND = 13; // 耕した土（乾いている）
 export const WET_FARMLAND = 14; // 耕した土（湿っている）
-export const BLOCK_COUNT = 15;
+export const PATH = 15; // 土の道
+export const COBBLE = 16; // 石畳
+export const BLOCK_COUNT = 17;
 
 export const isOpaque = (t: number) => t > 0 && t !== WATER;
+/** 一番上がこのブロックなら、住人が歩ける（草地・砂・土・畑・道） */
+export const isWalkableTop = (t: number) => t === GRASS || t === SAND || t === DIRT || t === FARMLAND || t === WET_FARMLAND || t === PATH || t === COBBLE;
+/** 道（住人が好んで歩く） */
+export const isPathBlock = (t: number) => t === PATH || t === COBBLE;
 
 /** 面の種類：0=上面, 1=下面, 2=側面 */
 export type FaceKind = 0 | 1 | 2;
@@ -42,6 +48,8 @@ const PALETTE: Record<number, [number, number, number][]> = {
   [PETAL_W]: [hexToLinear(0xf6f2ea), hexToLinear(0xe2ddd2), hexToLinear(0xefeae0)],
   [FARMLAND]: [hexToLinear(0x9a7448), hexToLinear(0x7d5f3f), hexToLinear(0x8b6a46)],
   [WET_FARMLAND]: [hexToLinear(0x5e4329), hexToLinear(0x7d5f3f), hexToLinear(0x6e5136)],
+  [PATH]: [hexToLinear(0xc4a574), hexToLinear(0x7d5f3f), hexToLinear(0x9c7c52)],
+  [COBBLE]: [hexToLinear(0xa9a79c), hexToLinear(0x7f858c), hexToLinear(0x8d8b82)],
 };
 
 export function faceColor(t: number, kind: FaceKind): [number, number, number] {
