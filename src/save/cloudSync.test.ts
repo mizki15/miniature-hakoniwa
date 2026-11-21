@@ -46,7 +46,6 @@ function setup(o: Opts = {}) {
   const deps: CloudDeps = {
     drive, state, viewer: o.viewer ?? false, now: () => now,
     localHasProgress: () => o.progress ?? true,
-    localSavedAt: () => 400,
     buildEncoded: vi.fn(async () => ({ data: new Uint8Array([9]), savedAt: now })),
     applyRemote: vi.fn(async () => {}),
     askConflict: vi.fn(o.conflict ?? (async () => 'remote' as const)),
@@ -71,7 +70,7 @@ describe('CloudSync（PC）', () => {
   it('bothChangedAsksAndLocalWins', async () => {
     const t = setup({ remote: { id: 'f1', version: '7', savedAt: 900 }, marker: '5', changed: true, conflict: async () => 'local' });
     await t.cloud.start();
-    expect(t.deps.askConflict).toHaveBeenCalledWith(900, 400);
+    expect(t.deps.askConflict).toHaveBeenCalledWith(900, t.state.changeStamp() || expect.any(Number));
     expect(t.drive.upload).toHaveBeenCalledWith(expect.any(Uint8Array), expect.any(Number), 'f1');
     expect(t.state.marker()).toBe('8');
     expect(t.state.changed()).toBe(false);
@@ -131,6 +130,59 @@ describe('CloudSync（PC）', () => {
     await started;
     await t.cloud.idle();
     expect(t.drive.upload).not.toHaveBeenCalled();
+  });
+
+  it('killedUploadKeepsChangedMark', async () => {
+    const t = setup({ marker: '5', changed: true });
+    t.drive.upload.mockImplementationOnce(() => new Promise(() => {})); // タブを閉じて終わらない
+    void t.cloud.start();
+    await vi.waitFor(() => expect(t.drive.upload).toHaveBeenCalled());
+    expect(t.state.changed()).toBe(true);
+  });
+
+  it('changeDuringUploadStaysChanged', async () => {
+    const t = setup({ marker: '5', changed: true });
+    t.drive.upload.mockImplementationOnce(async () => { t.state.markChanged(); return { id: 'f1', version: '6' }; });
+    await t.cloud.start();
+    expect(t.state.marker()).toBe('6');
+    expect(t.state.changed()).toBe(true);
+  });
+
+  it('failedApplyRemoteKeepsMarker', async () => {
+    const t = setup({ remote: { id: 'f1', version: '7', savedAt: 900 }, marker: '5', changed: false });
+    (t.deps.applyRemote as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('保存できませんでした'));
+    await t.cloud.start();
+    expect(t.state.marker()).toBe('5');
+    expect(t.last().kind).toBe('error');
+  });
+
+  it('conflictShowsWhenPlayerLastChanged', async () => {
+    const t = setup({ remote: { id: 'f1', version: '7', savedAt: 900 }, marker: '5', changed: true, conflict: async () => 'remote' });
+    const stamp = t.state.changeStamp();
+    await t.cloud.start();
+    expect(t.deps.askConflict).toHaveBeenCalledWith(900, stamp);
+  });
+
+  it('signInWithOtherAccountClearsMarker', async () => {
+    const t = setup({ marker: '5', changed: false });
+    t.drive.accountInfo.mockResolvedValueOnce({ email: 'other@example.com' });
+    t.drive.remoteInfo.mockResolvedValueOnce({ id: 'g1', version: '5', savedAt: 900 }); // 版の数字が偶然同じ
+    await t.cloud.signIn();
+    expect(t.drive.upload).not.toHaveBeenCalled();
+    expect(t.deps.askConflict).toHaveBeenCalled(); // 初めての端末として扱う（手が入っているので聞く）
+  });
+
+  it('signOutDuringSyncDiscardsResult', async () => {
+    let release!: () => void;
+    const t = setup({ remote: { id: 'f1', version: '7', savedAt: 900 }, marker: '5', changed: false });
+    t.drive.download.mockImplementationOnce(() => new Promise((r) => { release = () => r(new Uint8Array([1])); }));
+    const started = t.cloud.start();
+    await vi.waitFor(() => expect(t.drive.download).toHaveBeenCalled());
+    await t.cloud.signOut();
+    release();
+    await started;
+    expect(t.state.marker()).toBeNull();
+    expect(t.deps.applyRemote).not.toHaveBeenCalled();
   });
 
   it('expiredTokenGoesToNeedsLoginWithoutPopup', async () => {

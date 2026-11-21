@@ -54,6 +54,32 @@ describe('SyncState', () => {
   });
 });
 
+describe('SyncState の変更の印（いつ変えたか）', () => {
+  it('changeStampIsZeroWhenUnchanged', () => {
+    expect(createSyncState(fakeStorage()).changeStamp()).toBe(0);
+  });
+
+  it('changeStampGrowsOnEveryMark', () => {
+    const s = createSyncState(fakeStorage());
+    s.markChanged();
+    const a = s.changeStamp();
+    s.markChanged();
+    expect(a).toBeGreaterThan(0);
+    expect(s.changeStamp()).toBeGreaterThan(a);
+  });
+
+  it('clearChangedIfKeepsNewerChange', () => {
+    const s = createSyncState(fakeStorage());
+    s.markChanged();
+    const seen = s.changeStamp();
+    s.markChanged(); // 送っている間に変えた
+    s.clearChangedIf(seen);
+    expect(s.changed()).toBe(true);
+    s.clearChangedIf(s.changeStamp());
+    expect(s.changed()).toBe(false);
+  });
+});
+
 describe('TokenStore', () => {
   it('tokenRoundTrips', () => {
     const t = createTokenStore(fakeStorage());

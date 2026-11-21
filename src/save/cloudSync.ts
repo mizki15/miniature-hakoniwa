@@ -37,12 +37,11 @@ export interface CloudDeps {
   viewer: boolean;
   now(): number;
   localHasProgress(): boolean;
-  /** 端末内の箱庭を最後に保存した時刻（聞く時に見せる） */
-  localSavedAt(): number;
   buildEncoded(): Promise<{ data: Uint8Array; savedAt: number }>;
-  /** Drive の箱庭を読み込んで表示し、端末内にも保存する */
+  /** Drive の箱庭を読み込んで表示し、端末内にも保存する。保存できなかったら投げること */
   applyRemote(data: Uint8Array): Promise<void>;
-  askConflict(remoteAt: number, localAt: number): Promise<'remote' | 'local'>;
+  /** localChangedAt：この端末で最後に手を加えた時刻（0 なら不明） */
+  askConflict(remoteAt: number, localChangedAt: number): Promise<'remote' | 'local'>;
   /** スマホの初回：手の入った箱庭を Drive のものに入れ替えてよいか */
   askReplace(): Promise<boolean>;
   onStatus(s: CloudStatus): void;
@@ -63,13 +62,15 @@ export class CloudSync {
 
   /** ボタンから（クリックの中で呼ぶこと：ポップアップを出す） */
   async signIn() {
+    const prev = this.d.state.account();
     try {
-      await this.d.drive.signIn(this.d.state.account()?.email);
+      await this.d.drive.signIn(prev?.email);
       const acc = await this.d.drive.accountInfo();
+      // 別のアカウントを選んだ：前のアカウントの版の印は使えない（数字が偶然同じこともある）
+      if (prev && prev.email !== acc.email) this.d.state.setMarker(null);
       this.d.state.setAccount(acc);
     } catch (err) {
-      const acc = this.d.state.account();
-      this.d.onStatus(acc ? { kind: 'error', email: acc.email, message: messageOf(err) } : { kind: 'signedOut' });
+      this.d.onStatus(!prev ? { kind: 'signedOut' } : this.d.drive.hasToken() ? { kind: 'error', email: prev.email, message: messageOf(err) } : { kind: 'needsLogin', email: prev.email });
       throw err;
     }
     await this.syncOnce();
@@ -123,41 +124,46 @@ export class CloudSync {
       if (this.d.viewer) {
         const a = decideViewer({ remoteVersion: remote?.version ?? null, markerVersion: marker, localHasProgress: this.d.localHasProgress() });
         if (a === 'askReplace' && !(await this.d.askReplace())) { await this.signOut(); return; }
-        if (a !== 'none' && remote) await this.download(remote);
+        if (a !== 'none' && remote) await this.download(remote, acc.email);
       } else {
         let a = decideSync({ remoteVersion: remote?.version ?? null, markerVersion: marker, localChanged: this.d.state.changed(), localHasProgress: this.d.localHasProgress() });
-        if (a === 'ask' && remote) a = (await this.d.askConflict(remote.savedAt, this.d.localSavedAt())) === 'remote' ? 'download' : 'upload';
-        if (a === 'upload') await this.upload(remote?.id);
-        else if (a === 'download' && remote) await this.download(remote);
+        if (a === 'ask' && remote) a = (await this.d.askConflict(remote.savedAt, this.d.state.changeStamp())) === 'remote' ? 'download' : 'upload';
+        if (a === 'upload') await this.upload(remote?.id, acc.email);
+        else if (a === 'download' && remote) await this.download(remote, acc.email);
       }
+      if (!this.same(acc.email)) return; // 途中でログアウト・別のアカウントになった
       this.d.onStatus({ kind: 'ok', email: acc.email, lastSyncAt: this.d.state.lastSyncAt() });
     } catch (err) {
+      if (err instanceof AccountChanged || !this.same(acc.email)) return;
       if (err instanceof NeedsLoginError) this.d.onStatus({ kind: 'needsLogin', email: acc.email });
       else this.d.onStatus({ kind: 'error', email: acc.email, message: messageOf(err) });
     }
   }
 
-  private async upload(existingId?: string) {
-    // 送っている間の変更を取りこぼさないよう、作る前に印を下ろし、失敗したら戻す
-    this.d.state.clearChanged();
-    try {
-      const { data, savedAt } = await this.d.buildEncoded();
-      const r = await this.d.drive.upload(data, savedAt, existingId);
-      this.d.state.setMarker(r.version);
-      this.d.state.setLastSyncAt(this.d.now());
-    } catch (err) {
-      this.d.state.markChanged();
-      throw err;
-    }
+  private same(email: string) { return this.d.state.account()?.email === email; }
+
+  private async upload(existingId: string | undefined, email: string) {
+    // 印は送れた後に下ろす（タブを閉じて途中で終わっても残る）。送っている間に変えていたら残す
+    const seen = this.d.state.changeStamp();
+    const { data, savedAt } = await this.d.buildEncoded();
+    const r = await this.d.drive.upload(data, savedAt, existingId);
+    if (!this.same(email)) throw new AccountChanged();
+    this.d.state.setMarker(r.version);
+    this.d.state.clearChangedIf(seen);
+    this.d.state.setLastSyncAt(this.d.now());
   }
 
-  private async download(remote: RemoteInfo) {
+  private async download(remote: RemoteInfo, email: string) {
     const data = await this.d.drive.download(remote.id);
-    await this.d.applyRemote(data);
+    if (!this.same(email)) throw new AccountChanged();
+    await this.d.applyRemote(data); // 端末内に保存できなかったら投げる（印は進めない）
     this.d.state.setMarker(remote.version);
     this.d.state.clearChanged();
     this.d.state.setLastSyncAt(this.d.now());
   }
 }
+
+/** 同期の途中でログアウト・別のアカウントになった：結果を捨てる */
+class AccountChanged extends Error {}
 
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : '同期できませんでした');

@@ -30,7 +30,7 @@ import { renderDex } from './creatures/dex';
 import { OldSaveError, SAVE_VERSION, decodeSave, encodeSave, type SaveData } from './save/format';
 import { loadLocal, requestPersist, saveLocal } from './save/store';
 import { createSyncState } from './save/syncState';
-import { DRIVE_CLIENT_ID, accountInfo, download, hasToken, remoteInfo, signIn, signOut, upload } from './save/drive';
+import { DRIVE_CLIENT_ID, accountInfo, download, hasToken, prepareSignIn, remoteInfo, signIn, signOut, upload } from './save/drive';
 import { CloudSync, type CloudStatus } from './save/cloudSync';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
@@ -1185,7 +1185,7 @@ async function main() {
       const stays = eco.visitorStays;
       await loadFrom(s, false);
       eco.readdVisitors(stays);
-      game.unsaved = true; syncState.markChanged();
+      game.unsaved = true; // 画質の自動切り替えでも通るので、同期の「変更」には数えない
     } else {
       const s = settingsFromUI();
       progress = { points: 0, rightsUsed: 0, unlocks: [], firsts: [], newMarks: [] };
@@ -1261,8 +1261,8 @@ async function main() {
       await r;
     }
   });
-  $('detail').addEventListener('change', () => doRegen(true));
-  $('flowerStyle').addEventListener('change', () => doRegen(true));
+  $('detail').addEventListener('change', () => { syncState.markChanged(); doRegen(true); });
+  $('flowerStyle').addEventListener('change', () => { syncState.markChanged(); doRegen(true); });
 
   // この端末（IndexedDB）に保存
   let persisted = false;
@@ -1275,24 +1275,35 @@ async function main() {
     const time = t ? `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}` : '—';
     saveStatusEl.innerHTML = `この端末に保存：${time}${persisted ? '' : '<br><small>（ブラウザに「消さないで」と頼めませんでした。書き出しで控えを）</small>'}${extra ? `<br>${extra}` : ''}`;
   };
+  let savingDone: Promise<void> | null = null;
+  const writeLocal = async () => {
+    const save = buildSave();
+    const data = await encodeSave(save);
+    await saveLocal({ key: 'main', data, savedAt: save.savedAt, version: save.version });
+    lastSavedAt = save.savedAt;
+    game.unsaved = false;
+    if (!persisted) persisted = await requestPersist();
+    showSaveStatus(`${(data.byteLength / 1024).toFixed(1)} KB`);
+  };
   const saveNow = async () => {
     if (!world || !worldSettings || saving) return;
     saving = true;
     try {
-      const save = buildSave();
-      const data = await encodeSave(save);
-      await saveLocal({ key: 'main', data, savedAt: save.savedAt, version: save.version });
-      lastSavedAt = save.savedAt;
-      game.unsaved = false;
-      if (!persisted) persisted = await requestPersist();
-      showSaveStatus(`${(data.byteLength / 1024).toFixed(1)} KB`);
+      await (savingDone = writeLocal());
       cloud?.afterLocalSave();
     } catch (err) {
       console.error(err);
       toast('保存できませんでした');
     } finally {
       saving = false;
+      savingDone = null;
     }
+  };
+  /** 走っている保存を待ってから、今の箱庭を必ず保存する（失敗したら投げる）。Drive から読み込んだ時に使う */
+  const saveStrict = async () => {
+    while (savingDone) await savingDone.catch(() => {});
+    saving = true;
+    try { await (savingDone = writeLocal()); } finally { saving = false; savingDone = null; }
   };
   $('saveNow').addEventListener('click', async () => { await saveNow(); toast('保存しました'); });
   // ページを離れる時・隠れる時にも保存
@@ -1368,7 +1379,6 @@ async function main() {
       viewer: isMobile,
       now: () => Date.now(),
       localHasProgress: hasProgress,
-      localSavedAt: () => lastSavedAt,
       buildEncoded: async () => { const s = buildSave(); return { data: await encodeSave(s), savedAt: s.savedAt }; },
       applyRemote: async (data) => {
         let save: SaveData;
@@ -1376,18 +1386,19 @@ async function main() {
           throw new Error(err instanceof OldSaveError ? 'Drive の保存データは古い形式なので読み込めません' : 'Drive の保存データを読めませんでした');
         }
         await loadFrom(save, true);
-        await saveNow();
+        try { await saveStrict(); } catch { throw new Error('読み込んだ箱庭をこの端末に保存できませんでした'); }
         toast('Google Drive の箱庭を読み込みました');
       },
       askConflict: async (remoteAt, localAt) => {
         for (;;) {
-          if (confirm(`この端末と Google Drive の両方で箱庭が変わっています。\nDrive：${whenText(remoteAt)} ／ この端末：${whenText(localAt)}\n\nOK：Drive の箱庭を読み込む\nキャンセル：この端末の箱庭を残す`)) return 'remote';
+          if (confirm(`この端末と Google Drive の両方で箱庭が変わっています。\nDrive：${whenText(remoteAt)} ／ この端末：${localAt ? `${whenText(localAt)}（最後に手を加えた時）` : 'ここで手を加えた記録なし'}\n\nOK：Drive の箱庭を読み込む\nキャンセル：この端末の箱庭を残す`)) return 'remote';
           if (confirm('Drive の箱庭を、この端末の箱庭で上書きします。よろしいですか？')) return 'local';
         }
       },
       askReplace: async () => confirm('Drive の箱庭に入れ替えますか？（今の箱庭は書き出しで控えを取れます）'),
       onStatus: renderCloud,
     });
+    prepareSignIn();
     const c = cloud;
     cloudSignInBtn.addEventListener('click', () => { c.signIn().catch((err) => toast(err instanceof Error ? err.message : 'ログインできませんでした', 4000)); });
     cloudSyncBtn.addEventListener('click', () => { void c.syncNow(); });

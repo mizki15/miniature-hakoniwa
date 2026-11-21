@@ -35,25 +35,42 @@ function loadGis() {
 /** 有効なトークンがあるか（ポップアップなしで通信できるか） */
 export const hasToken = () => tokens.get() !== null;
 
-/** ログイン（トークンを取る）。ボタンのクリックの中から呼ぶこと。hint は前に使ったメールアドレス */
-export async function signIn(hint?: string): Promise<void> {
-  if (!DRIVE_CLIENT_ID) throw new Error('Google 同期の設定（Client ID）がありません');
-  await loadGis();
-  await new Promise<void>((resolve, reject) => {
-    const client = google.accounts.oauth2.initTokenClient({
-      client_id: DRIVE_CLIENT_ID,
-      scope: SCOPE,
-      login_hint: hint,
-      callback: (res: any) => {
-        if (res.error) { reject(new Error(res.error_description || res.error)); return; }
-        tokens.set({ value: res.access_token, expires: Date.now() + (Number(res.expires_in) || 3600) * 1000 });
-        resolve();
-      },
-      error_callback: (err: any) => reject(new Error(err?.type === 'popup_closed' ? 'ログインが中断されました' : err?.message || 'ログインできませんでした')),
-    });
-    // 前にログインしていれば同意画面を省く（多くは一瞬で閉じる）。初めてなら同意を求める
-    client.requestAccessToken({ prompt: hint ? '' : 'consent' });
+let client: any = null;
+let pending: { resolve: () => void; reject: (e: Error) => void } | null = null;
+function ensureClient() {
+  client ??= google.accounts.oauth2.initTokenClient({
+    client_id: DRIVE_CLIENT_ID,
+    scope: SCOPE,
+    callback: (res: any) => {
+      const p = pending; pending = null;
+      if (res.error) { p?.reject(new Error(res.error_description || res.error)); return; }
+      tokens.set({ value: res.access_token, expires: Date.now() + (Number(res.expires_in) || 3600) * 1000 });
+      p?.resolve();
+    },
+    error_callback: (err: any) => {
+      const p = pending; pending = null;
+      p?.reject(new Error(err?.type === 'popup_closed' ? 'ログインが中断されました' : err?.message || 'ログインできませんでした'));
+    },
   });
+}
+
+/** 起動時に呼ぶ：ログインの部品を先に読み込んでおく（タップの中ですぐポップアップを開けるように。iPhone の Safari は待つと止める） */
+export function prepareSignIn() {
+  if (!DRIVE_CLIENT_ID) return;
+  loadGis().then(ensureClient).catch(() => { /* 押した時にもう一度試す */ });
+}
+
+/** ログイン（トークンを取る）。ボタンのクリックの中から、await を挟まずに呼ぶこと。hint は前に使ったメールアドレス */
+export function signIn(hint?: string): Promise<void> {
+  if (!DRIVE_CLIENT_ID) return Promise.reject(new Error('Google 同期の設定（Client ID）がありません'));
+  const open = () => new Promise<void>((resolve, reject) => {
+    pending?.reject(new Error('ログインが中断されました'));
+    pending = { resolve, reject };
+    // 前にログインしていれば同意画面を省く（多くは一瞬で閉じる）。初めてなら同意を求める
+    client.requestAccessToken({ prompt: hint ? '' : 'consent', login_hint: hint });
+  });
+  if (client) return open(); // 部品が読み込み済み：クリックの中でそのまま開く
+  return loadGis().then(() => { ensureClient(); return open(); });
 }
 
 /** ログアウト：トークンを取り消して消す */
