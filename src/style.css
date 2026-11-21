@@ -111,20 +111,17 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 #editor { left: var(--gap); }
 #layout:not(.mode-edit) #editor { transform: translateX(calc(-100% - var(--gap) * 2)); opacity: 0; pointer-events: none; }
 #layout.mode-edit #ui { left: calc(var(--side-w) + var(--gap) * 2); }
-#editorHead { cursor: pointer; }
-#editorHead .editor-switch { color: var(--muted); font-size: 14px; }
-#editorHead:hover .editor-switch { color: var(--ink); }
+.editor-head { justify-content: center; padding: 8px 10px; }
+.seg-wide { display: flex; width: 100%; }
+.seg-wide button { flex: 1; padding: 5px 4px; display: flex; flex-direction: column; align-items: center; line-height: 1.2; }
+.seg-wide button small { font-size: 9.5px; font-weight: 400; opacity: 0.75; }
 .tool-list { display: flex; flex-direction: column; gap: 6px; }
-.tool-list button { display: grid; grid-template-columns: 28px 1fr; align-items: center; gap: 0 8px; text-align: left; border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.3); border-radius: 12px; padding: 6px 10px; cursor: pointer; color: var(--ink); font: inherit; font-size: 13px; }
-.tool-list button .ic { font-size: 18px; grid-row: span 2; text-align: center; }
+.tool-list button { display: grid; grid-template-columns: 28px 1fr; align-items: center; gap: 0 8px; min-height: 36px; text-align: left; border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.3); border-radius: 12px; padding: 6px 10px; cursor: pointer; color: var(--ink); font: inherit; font-size: 13px; }
+.tool-list button .ic { font-size: 18px; text-align: center; }
 .tool-list button .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool-list button .d { font-size: 10.5px; color: var(--muted); }
 .tool-list button.on { background: rgba(91, 143, 58, 0.85); color: #fff; border-color: rgba(91,143,58,0.9); }
-.tool-list button.on .d { color: rgba(255,255,255,0.85); }
 .open-viewer { margin-top: 8px; width: 100%; border: 1px dashed rgba(91, 143, 58, 0.7); background: rgba(255,255,255,0.25); border-radius: 12px; padding: 7px 10px; cursor: pointer; font: inherit; font-size: 12.5px; color: var(--ink); }
 .open-viewer[hidden] { display: none; }
-.tool-hint { margin-top: 12px; font-size: 12px; color: var(--ink); min-height: 2.4em; padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,0.25); }
-.editor-rights { margin-top: 10px; font-size: 11.5px; color: var(--muted); }
 #layout.drop-target #editor { outline: 2px dashed rgba(91, 143, 58, 0.9); }
 #ui[hidden] { display: none !important; }
 /* 図鑑の上の、時刻・季節・天気 */
@@ -132,21 +129,25 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .now-line dt { color: var(--muted); }
 .now-line dd { margin: 0; white-space: nowrap; }
 
-/* 道具の輪（ラジアルメニュー） */
-#radial { position: fixed; inset: 0; z-index: 40; display: none; user-select: none; }
-#radial.open { display: block; }
-.radial-ring { position: absolute; width: 236px; height: 236px; margin: -118px 0 0 -118px; border-radius: 50%; background: rgba(255, 255, 255, 0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.6); box-shadow: 0 10px 40px rgba(20, 40, 60, 0.25); }
-.radial-center { position: absolute; transform: translate(-50%, -50%); width: 76px; text-align: center; font-size: 12px; font-weight: 700; color: #1f2933; text-shadow: 0 1px 0 rgba(255, 255, 255, 0.8); pointer-events: none; }
-.radial-item { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 50%; background: rgba(255, 255, 255, 0.88); border: 2px solid rgba(255, 255, 255, 0.95); box-shadow: 0 4px 14px rgba(20, 40, 60, 0.22); color: #1f2933; cursor: pointer; transition: transform 0.08s ease, background 0.08s; }
-.radial-group { width: 66px; height: 66px; }
-.radial-child { width: 58px; height: 58px; animation: ri-pop 0.12s ease; }
-.radial-item .ri-ic { font-size: 22px; line-height: 1.1; }
-.radial-child .ri-ic { font-size: 19px; }
-.radial-item .ri-lb { font-size: 10px; max-width: 54px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.radial-item.current { border-color: rgba(91, 143, 58, 0.9); }
-.radial-item.last:not(.hl) { background: rgba(240, 248, 234, 0.92); }
-.radial-item.hl { background: rgba(91, 143, 58, 0.95); color: #fff; border-color: #fff; transform: translate(-50%, -50%) scale(1.12); }
-@keyframes ri-pop { from { opacity: 0; transform: translate(-50%, -50%) scale(0.6); } }
+/* エディタ：指している所の判定（画面下中央。空なら出さない） */
+.hint-bar { position: absolute; left: 50%; bottom: var(--gap); transform: translateX(-50%); z-index: 3; display: none; max-width: min(640px, 70vw); padding: 7px 16px; border-radius: 14px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+#layout.mode-edit .hint-bar:not(:empty) { display: block; }
+
+/* ホバーの説明（道具のボタン・図鑑のカード） */
+.hover-tip { position: fixed; z-index: 30; max-width: 260px; padding: 8px 11px; border-radius: 12px; font-size: 12px; line-height: 1.6; color: #1f2933; background: rgba(255, 255, 255, 0.94); border: 1px solid rgba(255, 255, 255, 0.95); box-shadow: 0 8px 26px rgba(20, 40, 60, 0.25); pointer-events: none; opacity: 0; transition: opacity 0.12s; visibility: hidden; }
+.hover-tip.show { opacity: 1; visibility: visible; }
+.hover-tip .dex-muted { color: #56616d; }
+.hover-tip .dex-season { color: #56616d; }
+.hover-tip .dex-season.on { color: #1f2933; }
+
+/* 図鑑の上：土地の権利とゲージ */
+.rights-box { margin: 0 0 12px; padding: 7px 9px; border-radius: 10px; background: rgba(255,255,255,0.3); font-size: 12.5px; }
+.rights-row { display: flex; align-items: baseline; gap: 6px; }
+.rights-row b { font-size: 15px; }
+.rights-row span { white-space: nowrap; }
+.rights-next { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; text-align: right; }
+.rights-gauge { height: 7px; margin-top: 5px; border-radius: 4px; background: rgba(0, 0, 0, 0.12); overflow: hidden; }
+.rights-gauge i { display: block; height: 100%; width: 0; border-radius: 4px; background: linear-gradient(90deg, #e0b54a, #f2d36b); transition: width 0.4s ease; }
 
 /* メニュー（PC：右上のボタン。スマホは画面下中央のまま） */
 .menu-fab { position: absolute; top: var(--gap); right: var(--gap); z-index: 3; width: 44px; height: 44px; border-radius: 14px; font-size: 20px; cursor: pointer; padding: 0; }
@@ -214,9 +215,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .dex-card.observed .dex-icon, .dex-card.seen .dex-icon { background: rgba(255,255,255,0.75); color: var(--ink); font-size: 24px; }
 .dex-card.observed .dex-name { color: var(--ink); }
 .dex-card .dex-count { font-size: 10px; color: var(--muted); }
-.dex-card { cursor: pointer; }
-.dex-card.sel { outline: 2px solid rgba(47,125,225,0.7); }
-#dexDetail { margin-top: 10px; font-size: 12px; line-height: 1.6; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,0.3); min-height: 3em; }
+.dex-card { cursor: default; }
+.dex-card:hover { border-color: rgba(91, 143, 58, 0.7); }
 @media (max-width: 760px) {
   #tooltip { display: none !important; }
   /* スマホ：メニュー（保存・Google 同期）のボタンだけ出す */
@@ -276,7 +276,8 @@ body.night {
 body.night .glass { box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08); }
 body.night .side header { text-shadow: none; }
 body.night .side .seg { background: rgba(255, 255, 255, 0.1); }
-body.night .now-line, body.night .tab:not(.on), body.night .dex-card, body.night .skeleton-line, body.night #dexDetail, body.night .tool-hint { background: rgba(255, 255, 255, 0.08); }
+body.night .rights-gauge { background: rgba(255, 255, 255, 0.15); }
+body.night .now-line, body.night .rights-box, body.night .tab:not(.on), body.night .dex-card, body.night .skeleton-line { background: rgba(255, 255, 255, 0.08); }
 body.night .dex-card { border-color: rgba(255, 255, 255, 0.14); }
 body.night .dex-icon { background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.45); }
 body.night .dex-card.observed .dex-icon, body.night .dex-card.seen .dex-icon { background: rgba(255, 255, 255, 0.85); }

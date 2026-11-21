@@ -12,31 +12,31 @@ const nameOf = (id: DexId) => (isVisitorId(id) ? VISITOR[id].name : SPECIES[id a
 const iconOf = (id: DexId) => (isVisitorId(id) ? VISITOR[id].icon : SPECIES[id as Species].icon);
 const hintOf = (id: DexId) => (isVisitorId(id) ? VISITOR[id].hint : RESIDENT_TEXT[id as Species].hint);
 
-let selectedId: DexId | null = null;
-
-export function renderDex(grid: HTMLElement, detail: HTMLElement, dex: Dex, animals: Animal[], visitors: Visitor[]) {
+/**
+ * 図鑑のカードを並べる。説明はカードにしばらくカーソルを合わせた時だけ出す（tip で、カードと説明の HTML を渡す）
+ */
+export function renderDex(grid: HTMLElement, dex: Dex, animals: Animal[], visitors: Visitor[], tip: (card: HTMLElement, html: () => string) => void) {
   grid.innerHTML = '';
   const observed = DEX_ORDER.filter((id) => dexStage(dex, id) === 'observed').length;
   const head = (text: string) => { const h = document.createElement('div'); h.className = 'dex-head'; h.textContent = text; grid.appendChild(h); };
   head(`観察 ${observed} / ${DEX_ORDER.length}　・　住人`);
 
-  const show = (id: DexId) => {
+  const describe = (id: DexId): string => {
     const stage = dexStage(dex, id);
     if (stage !== 'observed') {
-      detail.innerHTML = `<b>？？？</b><br>${hintOf(id)}` +
-        (stage === 'seen' ? '<br><span class="dex-muted">カーソルをしばらく合わせると観察できる</span>' : '');
-      return;
+      return `<b>？？？</b><br>${hintOf(id)}` +
+        (stage === 'seen' ? '<br><span class="dex-muted">箱庭で、カーソルをしばらく合わせると観察できる</span>' : '');
     }
     const e = dex[id];
     const seasons = SEASON_NAMES.map((n, i) => `<span class="dex-season${e.seasons.includes(i) ? ' on' : ''}">${n}</span>`).join('');
     if (isVisitorId(id)) {
       const v = VISITOR[id];
       const here = visitors.some((x) => x.def.id === id) ? '<br>いま箱庭にいる' : '';
-      detail.innerHTML = `<b>${v.icon} ${v.name}</b>　${RARITY_STARS[v.rarity]}<br>${v.note}<br>好きな環境：${v.likes}<br>観察した季節：${seasons}${here}`;
+      return `<b>${v.icon} ${v.name}</b>　${RARITY_STARS[v.rarity]}<br>${v.note}<br>好きな環境：${v.likes}<br>観察した季節：${seasons}${here}`;
     } else {
       const sp = id as Species, info = SPECIES[sp];
       const members = animals.filter((a) => a.species === sp).map((a) => `${a.name}（${ACTIVITY_NAMES[a.activity]}）`).join('、') || 'いまはいない';
-      detail.innerHTML = `<b>${info.icon} ${info.name}</b>　${RARITY_STARS[rarityOf(id)]}<br>${info.note}<br>好きな環境：${RESIDENT_TEXT[sp].likes}<br>得意なこと：${info.skill}<br>観察した季節：${seasons}<br>住人：${members}`;
+      return `<b>${info.icon} ${info.name}</b>　${RARITY_STARS[rarityOf(id)]}<br>${info.note}<br>好きな環境：${RESIDENT_TEXT[sp].likes}<br>得意なこと：${info.skill}<br>観察した季節：${seasons}<br>住人：${members}`;
     }
   };
 
@@ -44,19 +44,13 @@ export function renderDex(grid: HTMLElement, detail: HTMLElement, dex: Dex, anim
     if (i === 7) head('訪問者');
     const stage = dexStage(dex, id);
     const card = document.createElement('div');
-    card.className = `dex-card ${stage}` + (selectedId === id ? ' sel' : '');
+    card.className = `dex-card ${stage}`;
     const count = isVisitorId(id) ? (visitors.some((v) => v.def.id === id) ? 'いる' : '') : (() => { const n = animals.filter((a) => a.species === id).length; return n ? `${n} 匹` : ''; })();
     card.innerHTML = stage === 'unknown'
       ? '<div class="dex-icon">?</div><div class="dex-name">？？？</div>'
       : `<div class="dex-icon"><span class="dex-emoji">${iconOf(id)}</span></div><div class="dex-name">${stage === 'seen' ? '？？？' : nameOf(id)}</div>` +
         (stage === 'observed' && count ? `<div class="dex-count">${count}</div>` : '');
-    card.addEventListener('click', () => {
-      grid.querySelectorAll('.dex-card.sel').forEach((c) => c.classList.remove('sel'));
-      card.classList.add('sel');
-      selectedId = id;
-      show(id);
-    });
+    tip(card, () => describe(id));
     grid.appendChild(card);
   });
-  if (selectedId) show(selectedId);
 }

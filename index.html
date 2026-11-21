@@ -164,6 +164,14 @@
             <button id="skip1">+1時間</button>
             <button id="skip6">+6時間</button>
           </div>
+          <div class="row">
+            <label title="WASD で視点を動かす速さ（注視点までの距離に掛ける倍率）">移動の速さ <input type="range" id="moveSpeed" min="0.05" max="1.5" step="0.05" value="0.35" /></label>
+            <span id="moveSpeedLabel"></span>
+          </div>
+          <div class="row">
+            <label title="道具のボタンや図鑑のカードにカーソルを合わせてから、説明が出るまでの時間">説明が出るまで <input type="range" id="tipDelay" min="0" max="1.5" step="0.05" value="0.2" /></label>
+            <span id="tipDelayLabel"></span>
+          </div>
           <div id="stats"></div>
         </div>
 
@@ -171,23 +179,25 @@
         <div id="modes" class="glass">
           <button id="menuOpen" class="menu-btn"><span class="ic">☰</span>メニュー</button>
         </div>
-        <!-- 道具の輪（ラジアルメニュー） -->
-        <div id="radial" aria-hidden="true"></div>
+        <!-- エディタ：指している所の判定（画面下中央） -->
+        <div id="toolHint" class="hint-bar glass"></div>
         <div id="toast"></div>
         <!-- ステータスモード：ホバーした物の情報 -->
         <div id="tooltip" class="glass"></div>
       </main>
 
-      <!-- 左：エディタ（エディタモードのみ）。道具の輪で選んだグループの、細かい選択 -->
+      <!-- 左：エディタ（エディタモードのみ）。上で Build・Life・Terrain を選び、その中の道具を選ぶ -->
       <aside id="editor" class="side glass">
-        <header id="editorHead" title="グループを替える">
-          <span id="editorTitle"></span><span class="editor-switch">⇄</span>
+        <header class="editor-head">
+          <div class="seg seg-wide" role="tablist">
+            <button type="button" data-group="g:build" role="tab">Build<small>⇧1</small></button>
+            <button type="button" data-group="g:life" role="tab">Life<small>⇧2</small></button>
+            <button type="button" data-group="g:terrain" role="tab">Terrain<small>⇧3</small></button>
+          </div>
         </header>
         <div class="side-body">
           <div id="tools" class="tool-list"></div>
           <button id="openBuildings" type="button" class="open-viewer" hidden>📦 建物を読み込む・棚を見る</button>
-          <div id="toolHint" class="tool-hint"></div>
-          <div id="editorRights" class="editor-rights"></div>
         </div>
       </aside>
 
@@ -203,11 +213,18 @@
             <dt>季節</dt><dd id="st-season">—</dd>
             <dt>天気</dt><dd id="st-weather">—</dd>
           </dl>
+          <div class="rights-box">
+            <div class="rights-row"><span>🔑 土地の権利</span><b id="rightsCount">0</b></div>
+            <div class="rights-gauge"><i id="rightsGauge"></i></div>
+            <small id="rightsNext" class="rights-next"></small>
+          </div>
           <div class="dex-grid" id="dexGrid"></div>
-          <div id="dexDetail">カードを選ぶと説明が出ます</div>
         </div>
       </aside>
     </div>
+
+    <!-- ホバーの説明（道具のボタン・図鑑のカード） -->
+    <div id="hoverTip" class="hover-tip"></div>
 
     <!-- 建物の窓（読み込みと棚）。メニューと同じく、画面全体をすりガラスにして表示 -->
     <div id="viewer" aria-hidden="true">
@@ -297,14 +314,13 @@
             <summary><h2>🎮 操作方法</h2></summary>
             <dl class="menu-keys">
               <dt>Tab</dt><dd>見るモード ⇄ エディタモード</dd>
-              <dt>Q（押したまま）</dt><dd>道具の輪を出す。選んで離すと持ち替え（画面下の道具を押しても出る）</dd>
-              <dt>1〜5</dt><dd>エディタ：畑・植える・地形・ブロック・建物（最後に使った道具）</dd>
+              <dt>Shift + 1〜3</dt><dd>Build・Life・Terrain（そのグループで最後に使った道具。見るモードからでもエディタへ）</dd>
               <dt>Esc</dt><dd>このメニューを開く・閉じる</dd>
-              <dt>左ドラッグ</dt><dd>見る：視点を回す／エディタ：なぞって道具を使う</dd>
-              <dt>右ドラッグ</dt><dd>見る：視点を動かす／エディタ：視点を回す</dd>
-              <dt>中ドラッグ</dt><dd>エディタ：視点を動かす</dd>
+              <dt>左ドラッグ</dt><dd>エディタ：なぞって道具を使う（見る：水面をクリックで波紋）</dd>
+              <dt>右ドラッグ</dt><dd>視点を回す</dd>
+              <dt>中ドラッグ</dt><dd>視点を動かす</dd>
               <dt>ホイール</dt><dd>ズーム</dd>
-              <dt>W A S D</dt><dd>視点を動かす（Space で上、Shift で下）</dd>
+              <dt>W A S D</dt><dd>視点を水平に動かす</dd>
               <dt>右クリック</dt><dd>見る：作物・動物・建設中の建物の情報を固定（もう一度で解除）</dd>
               <dt>R</dt><dd>建物を置く時の向きを変える</dd>
               <dt>Ctrl + Z</dt><dd>エディタ：最後の編集を取り消す</dd>

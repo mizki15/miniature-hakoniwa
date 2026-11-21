@@ -211,16 +211,21 @@ export type WorldData = Omit<World, 'trees' | 'flowers'>;
 export function applyEdits(world: World, edits: number[]) {
   const N = world.size, H = world.height;
   const cols = new Set<number>();
+  /** 地面の表面（生成した時の一番上）より上を変えた列。木の根元は、切ってから掘った時だけ変わる */
+  const surfaceCols = new Set<number>();
   for (let i = 0; i + 1 < edits.length; i += 2) {
     const idx = edits[i];
     if (idx < 0 || idx >= world.voxels.length) continue;
     const col = idx % (N * N);
     // 開いていない区画の差分は当てない（その区画を開いた時に当てる）
     if (!isOpenCol(world.plots, col % N, Math.floor(col / N))) continue;
+    if (Math.floor(idx / (N * N)) >= world.heights[col] - 1) surfaceCols.add(col);
     world.voxels[idx] = edits[i + 1];
     cols.add(col);
   }
   if (cols.size === 0) return;
+  // 切った木の根元を掘った列には、生成した木を戻さない
+  world.trees = world.trees.filter((t) => !surfaceCols.has(Math.floor(t.x) + Math.floor(t.z) * N));
   const treeCols = new Set(world.trees.map((t) => Math.floor(t.x) + Math.floor(t.z) * N));
   for (const col of cols) {
     const x = col % N, z = Math.floor(col / N);

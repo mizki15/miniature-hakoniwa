@@ -849,7 +849,12 @@ export class GameController {
       }
       case 'dig':
         if (y === 0) return res(false, '一番下は掘れません');
-        if (this.treeCols.has(col) && isTop) return res(false, '木の根元は掘れません');
+        if (this.treeCols.has(col) && isTop) {
+          // 育っている途中の苗木なら、苗木ごと掘れる。育った木は先に「木を切る」
+          const sp = this.farm.saplings.find((s) => s.col === col);
+          if (!sp || sp.progress >= 1) return res(false, '木の根元は掘れません（先に木を切る）');
+          return res(true, '苗木ごと掘る');
+        }
         return res(true, '掘る');
       case 'raise': {
         const tx = x + hit.nx, ty = y + hit.ny, tz = z + hit.nz;
@@ -973,6 +978,13 @@ export class GameController {
       case 'dig': {
         const wasTop = y === w.heights[col] - 1;
         if (wasTop) {
+          // 育っている途中の苗木は、掘ると一緒になくなる
+          const si = this.farm.saplings.findIndex((s) => s.col === col);
+          if (si >= 0) {
+            this.farm.saplings.splice(si, 1);
+            this.treeCols.delete(col);
+            this.rebuildGrowing();
+          }
           this.removeFlowersAt(x, z);
           if (this.farm.crops.delete(col)) this.rebuildCrops();
           this.farmland.delete(col);
