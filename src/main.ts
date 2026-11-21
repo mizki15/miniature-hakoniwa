@@ -29,6 +29,7 @@ import type { Visitor } from './creatures/visitors';
 import { renderDex } from './creatures/dex';
 import { OldSaveError, SAVE_VERSION, decodeSave, encodeSave, type SaveData } from './save/format';
 import { loadLocal, requestPersist, saveLocal } from './save/store';
+import { createSyncState } from './save/syncState';
 import { DRIVE_CLIENT_ID, download, remoteInfo, upload } from './save/drive';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
@@ -196,6 +197,9 @@ async function main() {
 
   // 触れる・育つ要素（道具・畑・植林・地形の編集）
   const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat, buildingMat });
+  // Drive との同期：プレイヤーが手を加えたら印を立てる（生き物の発見や時間の経過では立てない）
+  const syncState = createSyncState(localStorage);
+  game.onPlayerChange = () => syncState.markChanged();
   game.farm.speed = parseFloat($<HTMLSelectElement>('simSpeed').value); // 時間の流れの初期値（画面の選択）
   // 生き物（住人・訪問者・図鑑・来るかどうかの判定）
   const eco = new EcoManager({
@@ -208,7 +212,7 @@ async function main() {
   const onPlot = (r: PlotResult) => {
     game.addPlot(r);
     progress.rightsUsed++;
-    game.unsaved = true;
+    game.unsaved = true; syncState.markChanged();
     opening = false;
     openingDone = null;
     refreshGhosts();
@@ -1171,14 +1175,14 @@ async function main() {
       const stays = eco.visitorStays;
       await loadFrom(s, false);
       eco.readdVisitors(stays);
-      game.unsaved = true;
+      game.unsaved = true; syncState.markChanged();
     } else {
       const s = settingsFromUI();
       progress = { points: 0, rightsUsed: 0, unlocks: [], firsts: [], newMarks: [] };
       await startWorld(s.seed, s.detail, s.params, s.flowerStyle, 1 << START_PLOT);
       eco.restore({}, null);
       worldSettings = s;
-      game.unsaved = true;
+      game.unsaved = true; syncState.markChanged();
     }
   };
   const hasProgress = () => game.edits.size > 0 || game.farm.crops.size > 0 || game.farm.saplings.length > 0;
@@ -1307,6 +1311,7 @@ async function main() {
       const save = await decodeSave(new Uint8Array(await file.arrayBuffer()));
       if (hasProgress() && !confirm('読み込むと、今の箱庭は上書きされます。よろしいですか？')) return;
       await loadFrom(save, true);
+      syncState.markChanged();
       await saveNow();
       toast('読み込みました');
     } catch (err) {

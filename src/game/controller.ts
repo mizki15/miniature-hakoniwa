@@ -98,6 +98,8 @@ export class GameController {
   edits = new Map<number, number>();
   /** 前回の保存から変わったか（道具を使った時に立てる） */
   unsaved = false;
+  /** プレイヤーが手を加えた時に呼ぶ（Drive との同期の「変更あり」に使う。時間が進んだだけでは呼ばない） */
+  onPlayerChange?: () => void;
 
   private terrainMat: THREE.Material | null = null;
   private typeTex: THREE.Data3DTexture | null = null;
@@ -462,7 +464,7 @@ export class GameController {
     this.rebuildGrowing();
     this.rebuildBuildings();
     this.onEnvChanged?.();
-    this.unsaved = true;
+    this.unsaved = true; this.onPlayerChange?.();
     return `「${r.label}」を取り消しました`;
   }
 
@@ -700,7 +702,7 @@ export class GameController {
       visited.add(col);
     }
     if (!c.ok) return c.msg;
-    this.unsaved = true;
+    this.unsaved = true; this.onPlayerChange?.();
     if (this.recording) this.recording.changed = true;
     switch (this.tool) {
       case 'build': {
@@ -774,7 +776,7 @@ export class GameController {
   addDesign(d: BuildingDesign): 'added' | 'exists' {
     if (this.designs.has(d.id)) return 'exists';
     this.designs.set(d.id, d);
-    this.unsaved = true;
+    this.unsaved = true; this.onPlayerChange?.();
     return 'added';
   }
 
@@ -785,7 +787,7 @@ export class GameController {
     this.buildingGeos.get(id)?.dispose();
     this.buildingGeos.delete(id);
     if (this.selectedDesign === id) this.selectedDesign = null;
-    this.unsaved = true;
+    this.unsaved = true; this.onPlayerChange?.();
     this.rebuildBuildings();
   }
 
