@@ -252,6 +252,7 @@ export class GameController {
     this.sites = [];
     // 取り消しの記録は箱庭ごと
     this.undo.clear();
+    this.redo.clear();
     this.recording = null;
     for (const c of chunks) this.setChunk(c);
 
@@ -587,6 +588,8 @@ export class GameController {
 
   private undo = new UndoStack<UndoEntry>(50);
   private recording: UndoEntry | null = null;
+  /** やり直し（取り消した編集）の記録 */
+  private redo = new UndoStack<UndoEntry>(50);
 
   /** なぞり（またはクリック）を始める前に呼ぶ */
   beginEdit(label: string) {
@@ -594,8 +597,13 @@ export class GameController {
     if (this.recording) this.endEdit();
     this.levelTarget = null;
     if (!this.world) return;
+    this.recording = this.snapshot(label);
+  }
+
+  /** いまの畑・苗木・花・建物の写し（地形は、変えた所だけ後で足す） */
+  private snapshot(label: string): UndoEntry {
     const f = this.farm;
-    this.recording = {
+    return {
       label,
       changed: false,
       voxels: new Map(),
@@ -615,7 +623,7 @@ export class GameController {
     const r = this.recording;
     this.recording = null;
     this.levelTarget = null;
-    if (r && (r.changed || r.voxels.size)) this.undo.push(r);
+    if (r && (r.changed || r.voxels.size)) { this.undo.push(r); this.redo.clear(); } // 新しく編集したら、やり直しの記録は捨てる
     this.groundDirty = true; // 花・苗木・建物など、ボクセル以外の変化でも置き直す
   }
 
@@ -624,8 +632,29 @@ export class GameController {
     if (this.locked || !this.world || this.recording) return null;
     const r = this.undo.pop();
     if (!r) return null;
+    this.redo.push(this.applyEntry(r));
+    return `「${r.label}」を取り消しました`;
+  }
+
+  /** 取り消した編集をやり直す（Ctrl+Y・Ctrl+Shift+Z）。やり直したら知らせの文、何もなければ null */
+  redoLast(): string | null {
+    if (this.locked || !this.world || this.recording) return null;
+    const r = this.redo.pop();
+    if (!r) return null;
+    this.undo.push(this.applyEntry(r));
+    return `「${r.label}」をやり直しました`;
+  }
+
+  /**
+   * 記録の状態に戻す。戻す前の状態を、同じ形の記録にして返す
+   * （取り消しの記録を当てるとやり直しの記録が、やり直しの記録を当てると取り消しの記録ができる）
+   */
+  private applyEntry(r: UndoEntry): UndoEntry {
+    const back = this.snapshot(r.label);
+    for (const i of r.voxels.keys()) back.voxels.set(i, this.world!.voxels[i]);
+    back.changed = true;
     this.groundDirty = true;
-    const w = this.world;
+    const w = this.world!;
     const N = w.size;
     const cols = new Set<number>();
     // 地形：新しく変えた順の逆に戻す（同じ所は最初の種類だけ覚えているので、順番は問わない）
@@ -669,7 +698,7 @@ export class GameController {
     this.rebuildBuildings();
     this.env();
     this.unsaved = true; this.onPlayerChange?.();
-    return `「${r.label}」を取り消しました`;
+    return back;
   }
 
   private setVoxel(x: number, y: number, z: number, t: number) {
@@ -924,13 +953,25 @@ export class GameController {
       }
       case 'level': {
         // 整地は列で見る（坂をなぞると側面に当たることが多いので、面の向きは問わない）
-        if (this.treeCols.has(col)) return res(false, '木があります');
-        if (this.farm.crops.has(col)) return res(false, '作物があります');
-        const h = w.heights[col];
+        let lx = x, lz = z, lcol = col;
+        // 側面に当たった時：当たった列がもうそろっていて、面の向こう（へこみ側）の低い列がまだなら、そちらを選ぶ
+        // （へこみの底にカーソルが届かなくても、へこみの壁を指せば埋まる）
+        if (this.levelTarget !== null && hit.ny === 0) {
+          const ax = x + hit.nx, az = z + hit.nz;
+          if (ax >= 0 && az >= 0 && ax < w.size && az < w.size) {
+            const acol = ax + az * w.size;
+            if (w.heights[col] === this.levelTarget && w.heights[acol] !== this.levelTarget && w.heights[acol] <= y) { lx = ax; lz = az; lcol = acol; }
+          }
+        }
+        if (this.buildingCols.has(lcol)) return res(false, '建物があります', lx, w.heights[lcol] - 1, lz);
+        if (this.treeCols.has(lcol)) return res(false, '木があります', lx, w.heights[lcol] - 1, lz);
+        if (this.farm.crops.has(lcol)) return res(false, '作物があります', lx, w.heights[lcol] - 1, lz);
+        if (!canSetCol(w.plots, lx, lz)) return res(false, 'ここはそろえられません', lx, w.heights[lcol] - 1, lz);
+        const h = w.heights[lcol];
         const target = this.levelTarget ?? h;
-        if (Math.abs(h - target) > LEVEL_MAX) return res(false, `高さが違いすぎます（${LEVEL_MAX} 段まで）`, x, h - 1, z);
-        if (target < 1 || target >= w.height - 2) return res(false, 'ここはそろえられません', x, h - 1, z);
-        return res(true, h > target ? `削って高さ ${target} にそろえる` : h < target ? `盛って高さ ${target} にそろえる` : `高さ ${target} にそろえる`, x, h - 1, z);
+        if (Math.abs(h - target) > LEVEL_MAX) return res(false, `高さが違いすぎます（${LEVEL_MAX} 段まで）`, lx, h - 1, lz);
+        if (target < 1 || target >= w.height - 2) return res(false, 'ここはそろえられません', lx, h - 1, lz);
+        return res(true, h > target ? `削って高さ ${target} にそろえる` : h < target ? `盛って高さ ${target} にそろえる` : `高さ ${target} にそろえる`, lx, h - 1, lz);
       }
     }
     return null;
@@ -1549,6 +1590,7 @@ export class GameController {
     this.rebuildGrowing();
     this.rebuildBuildings();
     this.undo.clear();
+    this.redo.clear();
     this.wetCheck = 0;
     this.unsaved = false;
   }

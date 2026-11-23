@@ -783,6 +783,13 @@ async function main() {
       toast(game.undoLast() ?? '取り消せる編集がありません');
       return;
     }
+    // Ctrl+Y・Ctrl+Shift+Z（Mac は ⌘⇧Z）：取り消した編集をやり直す
+    if ((e.ctrlKey || e.metaKey) && ((!e.shiftKey && e.code === 'KeyY') || (e.shiftKey && e.code === 'KeyZ'))) {
+      e.preventDefault();
+      if (mode !== 'edit' || stroke) return;
+      toast(game.redoLast() ?? 'やり直せる編集がありません');
+      return;
+    }
     if (MOVE_CODES.includes(e.code)) { moveKeys.add(e.code); return; }
     if (e.code === 'KeyR' && mode === 'edit' && game.tool === 'build') game.rotateBuild(); // 次に置く建物の向き（カーソルの枠は毎フレーム作り直す）
   });
