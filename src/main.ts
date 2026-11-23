@@ -452,13 +452,13 @@ async function main() {
   const CROP_ICONS: Record<CropKind, string> = { turnip: '🥬', wheat: '🌾', pumpkin: '🎃' };
   let editTool: Tool = 'till';
 
-  // 左のエディタパネル：上の Build｜Life｜Terrain（Shift+1〜3）でグループを選び、その中の道具を選ぶ
+  // 左のエディタパネル：上の Build｜Life｜Terrain（1〜3 キー）でグループを選び、その中の道具を選ぶ
   /** ホバーの説明（道具のボタン・図鑑のカード） */
   const hoverTip = new HoverTip($('hoverTip'));
   /** 道具の選択肢 1 つ。id：'till'・'seed:wheat'・'block:3'・'flower:1'・'path:15'・'build:<建物>' など */
   type ToolOption = { id: string; icon: string; name: string; help: string };
   const help = (t: Tool) => TOOLS.find((x) => x.id === t)!.help;
-  /** グループ（Shift+1〜3 もこの順） */
+  /** グループ（1〜3 キーもこの順） */
   const GROUPS: { id: string; name: string; options: () => ToolOption[] }[] = [
     { id: 'g:build', name: 'Build', options: () => [
       ...[...game.designs.values()].map((d) => ({ id: `build:${d.id}`, icon: '🏠', name: d.name, help: help('build') })),
@@ -769,9 +769,9 @@ async function main() {
       if (!e.repeat) setMode(mode === 'view' ? 'edit' : 'view');
       return;
     }
-    // Shift+1〜3：Build・Life・Terrain（見るモードからでもエディタに入る）。押す位置（e.code）で見るので、Shift で記号になっても効く
-    const g = /^Digit([1-3])$/.exec(e.code);
-    if (g && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // 1〜3（テンキーも）：Build・Life・Terrain（見るモードからでもエディタに入る）。押す位置（e.code）で見るので、日本語入力中でも効く
+    const g = /^(?:Digit|Numpad)([1-3])$/.exec(e.code);
+    if (g && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       pickTool(GROUPS[+g[1] - 1].id);
       return;
