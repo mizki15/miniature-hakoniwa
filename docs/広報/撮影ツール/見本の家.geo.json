@@ -1,0 +1,40 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [{
+    "description": { "identifier": "geometry.cottage" },
+    "bones": [
+      { "name": "stone", "pivot": [0,0,0], "cubes": [ { "origin": [-44,0,-36], "size": [88,6,72] } ] },
+      { "name": "white", "pivot": [0,0,0], "cubes": [ { "origin": [-38,6,-30], "size": [76,44,60] } ] },
+      { "name": "wood_posts", "pivot": [0,0,0], "cubes": [
+        { "origin": [-40,6,-32], "size": [6,44,6] }, { "origin": [34,6,-32], "size": [6,44,6] },
+        { "origin": [-40,6,26], "size": [6,44,6] }, { "origin": [34,6,26], "size": [6,44,6] },
+        { "origin": [-40,46,-32], "size": [80,4,4] }, { "origin": [-40,46,28], "size": [80,4,4] }
+      ] },
+      { "name": "wood_door", "pivot": [0,0,0], "cubes": [ { "origin": [-8,6,-32], "size": [16,28,2] } ] },
+      { "name": "flower_knob", "pivot": [0,0,0], "cubes": [ { "origin": [4,18,-33], "size": [2,2,1] } ] },
+      { "name": "glass", "pivot": [0,0,0], "cubes": [
+        { "origin": [-30,22,-31], "size": [14,14,1] }, { "origin": [16,22,-31], "size": [14,14,1] },
+        { "origin": [-39,22,-8], "size": [1,14,16] }, { "origin": [38,22,-8], "size": [1,14,16] }
+      ] },
+      { "name": "wood_frames", "pivot": [0,0,0], "cubes": [
+        { "origin": [-31,20,-32], "size": [16,2,2] }, { "origin": [15,20,-32], "size": [16,2,2] }
+      ] },
+      { "name": "leaf_boxes", "pivot": [0,0,0], "cubes": [
+        { "origin": [-31,17,-36], "size": [16,4,4] }, { "origin": [15,17,-36], "size": [16,4,4] }
+      ] },
+      { "name": "flower_box", "pivot": [0,0,0], "cubes": [
+        { "origin": [-29,21,-35], "size": [3,2,2] }, { "origin": [-23,21,-35], "size": [3,2,2] }, { "origin": [-18,21,-35], "size": [2,2,2] },
+        { "origin": [17,21,-35], "size": [3,2,2] }, { "origin": [22,21,-35], "size": [3,2,2] }, { "origin": [27,21,-35], "size": [2,2,2] }
+      ] },
+      { "name": "white_gable", "pivot": [0,0,0], "cubes": [
+        { "origin": [-30,50,-30], "size": [60,8,60] }, { "origin": [-20,58,-30], "size": [40,8,60] }, { "origin": [-10,66,-30], "size": [20,6,60] }
+      ] },
+      { "name": "roof", "pivot": [0,76,0], "cubes": [
+        { "origin": [-48,76,-38], "size": [48,4,76], "pivot": [0,76,0], "rotation": [0,0,-35] },
+        { "origin": [0,76,-38], "size": [48,4,76], "pivot": [0,76,0], "rotation": [0,0,35] }
+      ] },
+      { "name": "brick_chimney", "pivot": [0,0,0], "cubes": [ { "origin": [18,60,8], "size": [10,30,10] } ] },
+      { "name": "dark_chimney_top", "pivot": [0,0,0], "cubes": [ { "origin": [17,90,7], "size": [12,3,12] } ] }
+    ]
+  }]
+}

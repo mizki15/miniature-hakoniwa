@@ -24,7 +24,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 if (cmd === 'hold') { await send('Emulation.setDeviceMetricsOverride', { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false }); setInterval(() => {}, 1e9); await new Promise(() => {}); }
 const mouse = (type, x, y, button = 'left', extra = {}) => send('Input.dispatchMouseEvent', { type, x, y, button, buttons: type === 'mouseReleased' ? 0 : (button === 'left' ? 1 : button === 'right' ? 2 : 4), ...extra });
 
-if (cmd === 'clear') { await send('Storage.clearDataForOrigin', { origin: a[0], storageTypes: 'all' }); console.log('cleared', a[0]); }
+if (cmd === 'navlog') { await send('Runtime.enable'); await send('Log.enable'); listeners.push((d) => { if (d.method === 'Runtime.exceptionThrown') console.log('EXC', JSON.stringify(d.params.exceptionDetails).slice(0, 600)); if (d.method === 'Runtime.consoleAPICalled' && /error|warn/.test(d.params.type)) console.log(d.params.type, d.params.args.map(x => x.value ?? x.description).join(' ').slice(0, 400)); if (d.method === 'Log.entryAdded' && d.params.entry.level === 'error') console.log('LOG', d.params.entry.text.slice(0, 300)); }); await send('Page.navigate', { url: a[0] }); await sleep(Number(a[1] ?? 10000)); }
+else if (cmd === 'clear') { await send('Storage.clearDataForOrigin', { origin: a[0], storageTypes: 'all' }); console.log('cleared', a[0]); }
 else if (cmd === 'navwith') { await send('Page.enable'); await send('Page.addScriptToEvaluateOnNewDocument', { source: fs.readFileSync(a[0], 'utf8') }); await send('Page.navigate', { url: a[1] }); await sleep(Number(a[2] ?? 6000)); }
 else if (cmd === 'nav') { await send('Page.navigate', { url: a[0] }); await sleep(Number(a[1] ?? 6000)); }
 else if (cmd === 'eval') {
@@ -54,8 +55,8 @@ else if (cmd === 'click') {
 else if (cmd === 'move') { await mouse('mouseMoved', Number(a[0]), Number(a[1]), 'none'); await sleep(300); }
 else if (cmd === 'key') {
   // key <key> : e.g. 2, Escape, Tab
-  const k = a[0]; const code = /^[0-9]$/.test(k) ? 'Digit' + k : /^[a-z]$/i.test(k) ? 'Key' + k.toUpperCase() : k;
-  const kc = { Escape: 27, Tab: 9, Enter: 13 }[k] ?? k.toUpperCase().charCodeAt(0);
+  const k = a[0]; const code = (k === 'Space' || k === 'ShiftLeft') ? k : /^[0-9]$/.test(k) ? 'Digit' + k : /^[a-z]$/i.test(k) ? 'Key' + k.toUpperCase() : k;
+  const kc = { Escape: 27, Tab: 9, Enter: 13, Space: 32, ShiftLeft: 16 }[k] ?? k.toUpperCase().charCodeAt(0);
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: kc, text: k.length === 1 ? k : undefined });
   await sleep(Number(a[1] ?? 50));
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: kc });
