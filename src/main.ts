@@ -1044,7 +1044,7 @@ async function main() {
   });
 
   // 図鑑
-  const refreshDex = () => { hoverTip.hide(); renderDex($('dexGrid'), eco.dex, eco.animals, eco.visitors, (card, html) => hoverTip.attach(card, html, 'left', true, $('right'))); };
+  const refreshDex = () => { hoverTip.hide(); renderDex($('dexGrid'), eco.dex, eco.animals, eco.visitors, eco.env(), (card, html) => hoverTip.attach(card, html, 'left', true, $('right'))); };
 
   // 魚がはねる・虫が落ちる：ときどき勝手に波紋
   let nextAmbient = 1;

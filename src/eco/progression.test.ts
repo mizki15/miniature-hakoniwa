@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { createWorld, generatePlot, DEFAULT_PARAMS, type World } from '../world/terrain';
-import { FRAME, START_PLOT, openable, countOpen } from '../world/plots';
-import { countEnvironment, habitatCols, type EnvInput } from './environment';
-import { DEX_ORDER, RARITY_POINTS, RESIDENT_ORDER, RESIDENT_RULES, VISITORS, isVisitorId, rarityOf, type DexId, type Moment } from './species';
+import { createWorld, generatePlot, DEFAULT_PARAMS } from '../world/terrain';
+import { FRAME, START_PLOT } from '../world/plots';
+import { countEnvironment, emptyEnv, type EnvCounts, type Land } from './environment';
+import { RESIDENT_NEEDS, RESIDENT_ORDER, RESIDENT_RULES, VISITORS, meetsNeeds, type Moment, type Needs } from './species';
 import { residentCap } from './ecosystem';
 
 /**
- * 全部の進捗をたどれるか：最初の区画から、観察で入るポイントだけで土地を広げていき、
- * 16 区画すべてが開いて、図鑑の 19 種すべてに会えるかを確かめる。
- * 季節・時刻・天気は、いつかはそろうものとする（季節がひと巡りする）。
+ * 割合と上限の条件（設計メモ 1・10 章）：
+ *   ・どの生き物にも、会える箱庭がある
+ *   ・取り合いになる生き物は、1 つの箱庭で同時には条件を満たせない
+ *   ・始めたばかりの自然な箱庭でも、何種類かには会える（観察のポイントで土地を広げられる）
  */
 const HOURS = Array.from({ length: 48 }, (_, i) => i / 2);
-/** その訪問者に会える季節（季節・時刻・天気・季節の中の進み具合のどれかの組み合わせで when が true） */
 function seasonsOf(def: (typeof VISITORS)[number]): number[] {
   const out: number[] = [];
   for (let season = 0; season < 4; season++) {
@@ -21,76 +21,89 @@ function seasonsOf(def: (typeof VISITORS)[number]): number[] {
   return out;
 }
 
-function inputOf(w: World, farming: boolean): EnvInput {
-  const treeCols = new Set(w.trees.map((t) => Math.floor(t.x) + Math.floor(t.z) * FRAME));
-  const flowerCols = w.flowers.map((f) => Math.floor(f.x) + Math.floor(f.z) * FRAME);
-  // 畑をする場合：最初の区画の草地を 10 マス耕して、5 マスに種をまいたことにする
-  const farmland = new Set<number>();
-  if (farming) for (let i = 0; i < 10; i++) farmland.add(90 + i + 100 * FRAME);
-  return { world: w, flowerCols, treeCols, farmland, crops: farming ? 5 : 0 };
-}
-
-function simulate(seed: number, farming: boolean) {
-  const w = createWorld(64);
-  generatePlot(w, START_PLOT, seed, DEFAULT_PARAMS);
-  const met = new Set<DexId>(['rabbit']);
-  const seasonsMet = new Map<DexId, Set<number>>();
-  let points = 0, rightsUsed = 0;
-  const award = (id: DexId) => {
-    if (!met.has(id) || seasonsMet.has(id)) return;
-    seasonsMet.set(id, new Set());
-    points += RARITY_POINTS[rarityOf(id)];
-  };
-  for (let round = 0; round < 40; round++) {
-    const i = inputOf(w, farming);
-    const e = countEnvironment(i);
-    // 住人：うさぎ 2 匹がいる時の空き枠ぶんだけ、条件を満たす種類が来る（いちばん少ない種類から＝まず 1 匹ずつ）
-    const slots = residentCap(countOpen(w.plots)) - 2;
-    const eligible = RESIDENT_ORDER.filter((sp) => sp !== 'rabbit' && RESIDENT_RULES[sp](e));
-    for (const sp of eligible.slice(0, Math.max(0, slots))) met.add(sp);
-    // 訪問者：必要な環境があり、現れる場所があり、会える季節があれば、いつかは来る
-    for (const def of VISITORS) {
-      if (!def.needs(e) || habitatCols(i, def.habitat).length === 0 || seasonsOf(def).length === 0) continue;
-      if (def.id === 'kingfisher' && !met.has('fish')) continue;
-      met.add(def.id);
-    }
-    for (const id of met) award(id);
-    // 訪問者は、会える季節ごとに 1 ポイント（1 季節目は初めての観察に含む）
-    for (const id of met) {
-      if (!isVisitorId(id)) continue;
-      const def = VISITORS.find((v) => v.id === id)!;
-      const s = seasonsMet.get(id)!;
-      for (const season of seasonsOf(def)) if (!s.has(season)) { if (s.size > 0) points += 1; s.add(season); }
-    }
-    // 権利があるだけ区画を開く
-    let opened = false;
-    while (Math.floor(points / 3) - rightsUsed > 0) {
-      const next = openable(w.plots);
-      if (next.length === 0) break;
-      generatePlot(w, next[0], seed, DEFAULT_PARAMS);
-      rightsUsed++;
-      opened = true;
-    }
-    if (!opened && round > 0) break;
+/** その条件をちょうど満たす箱庭（下限ぴったり・ほかは 0。地面 100 列なので列の数＝%） */
+function envFor(n: Needs): EnvCounts {
+  const e = { ...emptyEnv(), ground: 100, crops: n.crops ? 1 : 0, wild: n.wild?.min ?? n.wild?.max ?? 5 };
+  for (const l of n.land ?? []) {
+    const want = l.min ?? 0;
+    // 合計で見る条件（花畑か畑）は、はじめの土地の型に寄せる
+    e[l.lands[0] as Land] = Math.max(e[l.lands[0] as Land], want - l.lands.slice(1).reduce((a, k) => a + e[k as Land], 0));
   }
-  return { plots: countOpen(w.plots), met, missing: DEX_ORDER.filter((id) => !met.has(id)), points };
+  return e;
 }
 
-describe('progression', () => {
-  for (const seed of [1234, 1, 42, 777, 2027]) {
-    it(`seed ${seed}: with a little farming, all 16 plots open and all 19 creatures can be met`, () => {
-      const r = simulate(seed, true);
-      expect(r.missing).toEqual([]);
-      expect(r.plots).toBe(16);
+/** 割合を 5% 刻みで動かした箱庭を全部（森・草原・花畑・畑・水辺・深い水）。野生度は畑から決まる */
+function* allEnvs(): Generator<EnvCounts> {
+  const steps = [0, 5, 10, 15, 20, 25, 30, 40];
+  for (const forest of steps) for (const meadow of steps) for (const flowerField of [0, 5, 10, 15])
+    for (const farm of [0, 1, 5, 10]) for (const waterside of [0, 5, 10]) for (const deepWater of [0, 5]) {
+      if (forest + meadow + flowerField + farm + waterside + deepWater > 100) continue;
+      for (const human of [0, 5]) {
+        const share = farm + human;
+        const wild = share < 2 ? 5 : share < 5 ? 4 : share < 10 ? 3 : share < 20 ? 2 : 1;
+        yield { ...emptyEnv(), ground: 100, forest, meadow, flowerField, farm, waterside, deepWater, human, crops: farm ? 1 : 0, wild };
+      }
+    }
+}
+
+describe('every creature can be met somewhere', () => {
+  for (const sp of RESIDENT_ORDER) {
+    it(`resident ${sp}`, () => { expect(meetsNeeds(RESIDENT_NEEDS[sp], envFor(RESIDENT_NEEDS[sp]))).toBe(true); });
+  }
+  for (const v of VISITORS) {
+    it(`visitor ${v.id}`, () => {
+      expect(v.needs(envFor(v.need))).toBe(true);
+      expect(seasonsOf(v).length).toBeGreaterThan(0);
     });
   }
-  it('at full progress every resident species fits under the cap of 24 (7 species × up to 4)', () => {
-    expect(residentCap(16)).toBe(24);
-    expect(RESIDENT_ORDER.length).toBeLessThanOrEqual(24);
+});
+
+describe('some creatures compete for the same land', () => {
+  const together = (a: (e: EnvCounts) => boolean, b: (e: EnvCounts) => boolean) => {
+    for (const e of allEnvs()) if (a(e) && b(e)) return true;
+    return false;
+  };
+  const visitor = (id: string) => VISITORS.find((v) => v.id === id)!.needs;
+  it('deer (open meadow) never with tanuki or the owl (wide forest)', () => {
+    expect(together(RESIDENT_RULES.deer, RESIDENT_RULES.tanuki)).toBe(false);
+    expect(together(RESIDENT_RULES.deer, visitor('owl'))).toBe(false);
+    expect(together(RESIDENT_RULES.deer, visitor('woodpecker'))).toBe(false);
   });
-  it('without farming, only the farm-bound visitors stay missing', () => {
-    const r = simulate(1234, false);
-    // スズメ（畑）とミツバチ（作物）は畑をしないと来ない
-    expect(r.missing.filter((id) => id !== 'sparrow' && id !== 'bee')).toEqual([]);
+  it('fox never with the owl', () => {
+    expect(together(RESIDENT_RULES.fox, visitor('owl'))).toBe(false);
+  });
+  it('a sparrow-sized farm keeps the kingfisher away', () => {
+    expect(together(visitor('sparrow'), visitor('kingfisher'))).toBe(false);
+  });
+  it('compatible ones can share a diorama', () => {
+    expect(together(RESIDENT_RULES.duck, visitor('kingfisher'))).toBe(true);
+    expect(together(RESIDENT_RULES.squirrel, visitor('longtailedTit'))).toBe(true);
+  });
+});
+
+describe('a fresh natural diorama', () => {
+  for (const seed of [1234, 1, 42, 777, 2027]) {
+    it(`seed ${seed}: some residents and visitors can come without changing the land`, () => {
+      const w = createWorld(64);
+      generatePlot(w, START_PLOT, seed, DEFAULT_PARAMS);
+      const e = countEnvironment({
+        world: w, crops: 0, farmland: new Set(),
+        flowerCols: w.flowers.map((f) => Math.floor(f.x) + Math.floor(f.z) * FRAME),
+        treeCols: new Set(w.trees.map((t) => Math.floor(t.x) + Math.floor(t.z) * FRAME)),
+      });
+      const visitors = VISITORS.filter((v) => v.needs(e)).map((v) => v.id);
+      const residents = RESIDENT_ORDER.filter((sp) => RESIDENT_RULES[sp](e));
+      // 水辺の生き物（あひる・カエル・トンボ）は自然な地形でも来る。森や草原の生き物は、木を植える・整地するなどして呼ぶ
+      expect(residents).toContain('duck');
+      expect(visitors).toEqual(expect.arrayContaining(['frog', 'dragonfly']));
+      expect(e.wild).toBe(5);
+    });
+  }
+});
+
+describe('resident cap', () => {
+  it('stays at plots × 3, up to 24', () => {
+    expect(residentCap(1)).toBe(3);
+    expect(residentCap(16)).toBe(24);
   });
 });

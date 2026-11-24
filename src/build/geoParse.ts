@@ -82,6 +82,24 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_ABS;
 const isVec3 = (v: unknown): v is Vec3 => Array.isArray(v) && v.length === 3 && v.every(isNum);
 
+/**
+ * 問題のメッセージに入れてよい形の名前（設計メモ 3 章）：NFKC で正規化し、英数字と _ だけを残して 32 文字まで。
+ * メッセージは「AI に直してもらう文」にそのまま入るので、共有された建物の名前に指示文を書かれても届かないようにする。
+ */
+export const NAME_IN_MESSAGE_MAX = 32;
+export const safeName = (name: string) => name.normalize('NFKC').replace(/[^A-Za-z0-9_]/g, '').slice(0, NAME_IN_MESSAGE_MAX);
+/** グループは番号で指す。名前は安全な形だけ、かっこで添える */
+const groupLabel = (name: string | undefined, i: number) => {
+  const s = name ? safeName(name) : '';
+  return s ? `${i + 1} 番目のグループ（${s}）` : `${i + 1} 番目のグループ`;
+};
+
+/** JSON の読み間違いの場所（何文字目か）だけを返す。エラー文は元の文を引用するので、そのまま入れない */
+const jsonErrorWhere = (e: unknown) => {
+  const m = /position (\d+)/.exec(String((e as Error)?.message ?? ''));
+  return m ? `（${Number(m[1]) + 1} 文字目のあたり）` : '';
+};
+
 /** JSON を読み、グループの親子と色まで決める。問題は issues に足す */
 export function resolveBones(json: unknown, issues: ParseIssue[]): { name: string; bones: ResolvedBone[] } | null {
   const list = isObj(json) ? json['minecraft:geometry'] : undefined;
@@ -101,24 +119,28 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
 
   const bones: ResolvedBone[] = [];
   const parents: (string | undefined)[] = [];
+  const labels: string[] = [];
   let cubeCount = 0;
   raw.forEach((b, i) => {
-    const bname = isObj(b) && typeof b.name === 'string' && b.name ? b.name : `（名前なし・${i + 1} 番目）`;
+    const given = isObj(b) && typeof b.name === 'string' && b.name ? b.name : undefined;
+    const bname = given ?? `（名前なし・${i + 1} 番目）`;
+    const label = groupLabel(given, i);
+    labels.push(label);
     const bone: ResolvedBone = { name: bname, parent: -1, pivot: [0, 0, 0], rotation: [0, 0, 0], cubes: [], color: null };
     bones.push(bone);
     parents.push(isObj(b) && typeof b.parent === 'string' ? b.parent : undefined);
     if (!isObj(b)) return;
-    if (b.poly_mesh !== undefined) issues.push({ code: 'poly_mesh', message: `グループ「${bname}」に poly_mesh（自由な多角形）があります。直方体（cubes）だけで作ってください。` });
+    if (b.poly_mesh !== undefined) issues.push({ code: 'poly_mesh', message: `${label}に poly_mesh（自由な多角形）があります。直方体（cubes）だけで作ってください。` });
     for (const key of ['pivot', 'rotation'] as const) {
       if (b[key] === undefined) continue;
       if (isVec3(b[key])) bone[key] = b[key] as Vec3;
-      else issues.push({ code: 'bad_number', message: `グループ「${bname}」の ${key} が数 3 つの並び（それぞれ ±100000 以内）になっていません。` });
+      else issues.push({ code: 'bad_number', message: `${label}の ${key} が数 3 つの並び（それぞれ ±100000 以内）になっていません。` });
     }
     if (b.cubes === undefined) return;
-    if (!Array.isArray(b.cubes)) { issues.push({ code: 'bad_number', message: `グループ「${bname}」の cubes が一覧（[ ]）になっていません。` }); return; }
+    if (!Array.isArray(b.cubes)) { issues.push({ code: 'bad_number', message: `${label}の cubes が一覧（[ ]）になっていません。` }); return; }
     b.cubes.forEach((c, j) => {
       cubeCount++;
-      const where = `グループ「${bname}」の ${j + 1} 番目の直方体`;
+      const where = `${label}の ${j + 1} 番目の直方体`;
       if (!isObj(c)) { issues.push({ code: 'bad_number', message: `${where}が { } の形になっていません。` }); return; }
       let good = true;
       for (const key of ['origin', 'size'] as const) {
@@ -148,7 +170,7 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
     const p = parents[i];
     if (p === undefined) return;
     const pi = byName.get(p);
-    if (pi === undefined) issues.push({ code: 'parent_missing', message: `グループ「${b.name}」の親「${p}」が見つかりません。` });
+    if (pi === undefined) issues.push({ code: 'parent_missing', message: `${labels[i]}の親${safeName(p) ? `（${safeName(p)}）` : ''}が見つかりません。` });
     else b.parent = pi;
   });
   let chainOk = true;
@@ -157,7 +179,7 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
     let depth = 1;
     for (let p = b.parent; p >= 0; p = bones[p].parent) {
       if (seen.has(p)) {
-        issues.push({ code: 'parent_cycle', message: `グループ「${b.name}」の親をたどると、元に戻ってきます（親子が輪になっています）。` });
+        issues.push({ code: 'parent_cycle', message: `${labels[i]}の親をたどると、元に戻ってきます（親子が輪になっています）。` });
         chainOk = false;
         return;
       }
@@ -165,20 +187,20 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
       depth++;
     }
     if (depth > LIMITS.depth) {
-      issues.push({ code: 'too_deep', message: `グループ「${b.name}」の入れ子が ${depth} 段あります。${LIMITS.depth} 段以下にしてください。` });
+      issues.push({ code: 'too_deep', message: `${labels[i]}の入れ子が ${depth} 段あります。${LIMITS.depth} 段以下にしてください。` });
       chainOk = false;
     }
   });
   if (!chainOk) return null;
 
   // 色：自分の名前 → 親の名前、の順に決める
-  for (const b of bones) {
+  for (const [bi, b] of bones.entries()) {
     for (let p: ResolvedBone | undefined = b; p; p = p.parent >= 0 ? bones[p.parent] : undefined) {
       const c = colorOfName(p.name);
       if (c) { b.color = c; break; }
     }
     if (!b.color && b.cubes.length) {
-      issues.push({ code: 'no_color', message: `グループ「${b.name}」の色が決まりません。wood などパレットの名前を付けるか、色のあるグループの中に入れてください。` });
+      issues.push({ code: 'no_color', message: `${labels[bi]}の色が決まりません。wood などパレットの名前を付けるか、色のあるグループの中に入れてください。` });
     }
   }
   return { name, bones };
@@ -271,7 +293,7 @@ export function parseBuilding(text: string): ParseResult {
   try {
     json = JSON.parse(extractJson(text));
   } catch (e) {
-    return { ok: false, issues: [{ code: 'json', message: `JSON として読めません（${(e as Error).message}）。途中で切れていないか、「…」で省略していないか確かめてください。` }] };
+    return { ok: false, issues: [{ code: 'json', message: `JSON として読めません${jsonErrorWhere(e)}。途中で切れていないか、「…」で省略していないか確かめてください。` }] };
   }
   const issues: ParseIssue[] = [];
   const r = resolveBones(json, issues);

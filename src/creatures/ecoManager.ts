@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import type { WorldData } from '../world/terrain';
 import type { SaveData } from '../save/format';
 import { countOpen } from '../world/plots';
-import { countEnvironment, fitsHabitat, habitatCols, type EnvCounts, type EnvInput } from '../eco/environment';
+import { countEnvironment, emptyEnv, fitsHabitat, habitatCols, type EnvCounts, type EnvInput } from '../eco/environment';
 import { checkEcosystem, dueChecks, needsStarterRabbits, stayMs, type EcoState } from '../eco/ecosystem';
 import { VISITOR, type DexId, type Moment, type VisitorId } from '../eco/species';
 import { markSeen, observe, type Dex } from '../eco/dexState';
@@ -147,7 +147,7 @@ export class EcoManager {
   envDirty() { this.envCache = null; }
   env(): EnvCounts {
     if (!this.envCache && this.world) this.envCache = countEnvironment({ world: this.world, ...this.deps.envInput() });
-    return this.envCache ?? { flowers: 0, trees: 0, grass: 0, waterside: 0, deepWater: 0, farmland: 0, crops: 0 };
+    return this.envCache ?? emptyEnv();
   }
 
   private put(sp: Species, at: [number, number], name?: string) {

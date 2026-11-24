@@ -390,7 +390,7 @@ export class GameController {
       if (d.kind !== 'flower') continue;
       for (let i = 0; i < d.placements.length; i += 5) flowerCols.push(Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * N);
     }
-    return { flowerCols, treeCols: this.treeCols as ReadonlySet<number>, farmland: this.farmland as ReadonlySet<number>, crops: this.farm.crops.size };
+    return { flowerCols, treeCols: this.treeCols as ReadonlySet<number>, farmland: this.farmland as ReadonlySet<number>, crops: this.farm.crops.size, buildingCols: this.buildingCols as ReadonlySet<number> };
   }
 
   /**

@@ -303,6 +303,11 @@ body.night #tooltip .bar { background: rgba(255, 255, 255, 0.15); }
 
 /* 図鑑：見出し・見かけただけ（シルエット）・観察した季節 */
 .dex-head { grid-column: 1 / -1; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.dex-env { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 1px 10px; font-size: 11px; margin-bottom: 4px; }
+.dex-env .dex-head { margin-top: 0; }
+.dex-env-item { display: flex; justify-content: space-between; gap: 6px; }
+.dex-env-name { color: var(--muted); }
+.dex-env-stars { color: #e8b84a; letter-spacing: -1px; white-space: nowrap; }
 .dex-card.seen .dex-emoji { filter: brightness(0) opacity(0.55); }
 .dex-season { display: inline-block; padding: 0 4px; margin-right: 2px; border-radius: 4px; color: var(--muted); opacity: 0.45; }
 .dex-season.on { opacity: 1; color: var(--ink); background: rgba(224,181,74,0.35); }

@@ -1,8 +1,17 @@
 import { ACTIVITY_NAMES, SPECIES, type Animal, type Species } from './animals';
 import type { Visitor } from './visitors';
-import { DEX_ORDER, RARITY_STARS, RESIDENT_TEXT, VISITOR, isVisitorId, rarityOf, type DexId } from '../eco/species';
+import { DEX_ORDER, RARITY_STARS, RESIDENT_TEXT, VISITOR, isVisitorId, visitorLikes, rarityOf, type DexId } from '../eco/species';
 import { dexStage, type Dex } from '../eco/dexState';
 import { SEASON_NAMES } from '../calendar';
+import { LAND_NAMES, sharePct, type EnvCounts, type Land } from '../eco/environment';
+import { shareStars, starText } from '../eco/species';
+
+/** 図鑑の上に出す「いまの箱庭」：土地の型の割合と野生度を、星で大まかに */
+const SUMMARY_LANDS: Land[] = ['forest', 'meadow', 'flowerField', 'farm', 'waterside', 'deepWater'];
+export function envSummaryHtml(e: EnvCounts): string {
+  const row = (name: string, stars: number) => `<span class="dex-env-item"><span class="dex-env-name">${name}</span><span class="dex-env-stars">${starText(stars)}</span></span>`;
+  return SUMMARY_LANDS.map((l) => row(LAND_NAMES[l], shareStars(sharePct(e, l)))).join('') + row('野生度', e.wild);
+}
 
 /**
  * 生き物図鑑：住人 7 種と訪問者 12 種。
@@ -15,8 +24,12 @@ const hintOf = (id: DexId) => (isVisitorId(id) ? VISITOR[id].hint : RESIDENT_TEX
 /**
  * 図鑑のカードを並べる。説明はカードにしばらくカーソルを合わせた時だけ出す（tip で、カードと説明の HTML を渡す）
  */
-export function renderDex(grid: HTMLElement, dex: Dex, animals: Animal[], visitors: Visitor[], tip: (card: HTMLElement, html: () => string) => void) {
+export function renderDex(grid: HTMLElement, dex: Dex, animals: Animal[], visitors: Visitor[], env: EnvCounts, tip: (card: HTMLElement, html: () => string) => void) {
   grid.innerHTML = '';
+  const summary = document.createElement('div');
+  summary.className = 'dex-env';
+  summary.innerHTML = `<div class="dex-head">いまの箱庭</div>${envSummaryHtml(env)}`;
+  grid.appendChild(summary);
   const observed = DEX_ORDER.filter((id) => dexStage(dex, id) === 'observed').length;
   const head = (text: string) => { const h = document.createElement('div'); h.className = 'dex-head'; h.textContent = text; grid.appendChild(h); };
   head(`観察 ${observed} / ${DEX_ORDER.length}　・　住人`);
@@ -32,7 +45,7 @@ export function renderDex(grid: HTMLElement, dex: Dex, animals: Animal[], visito
     if (isVisitorId(id)) {
       const v = VISITOR[id];
       const here = visitors.some((x) => x.def.id === id) ? '<br>いま箱庭にいる' : '';
-      return `<b>${v.icon} ${v.name}</b>　${RARITY_STARS[v.rarity]}<br>${v.note}<br>好きな環境：${v.likes}<br>観察した季節：${seasons}${here}`;
+      return `<b>${v.icon} ${v.name}</b>　${RARITY_STARS[v.rarity]}<br>${v.note}<br>好きな環境：${visitorLikes(v)}<br>観察した季節：${seasons}${here}`;
     } else {
       const sp = id as Species, info = SPECIES[sp];
       const members = animals.filter((a) => a.species === sp).map((a) => `${a.name}（${ACTIVITY_NAMES[a.activity]}）`).join('、') || 'いまはいない';
