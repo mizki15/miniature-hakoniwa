@@ -63,7 +63,7 @@ describe('CloudSync（PC）', () => {
     expect(t.drive.download).toHaveBeenCalledWith('f1');
     expect(t.deps.applyRemote).toHaveBeenCalled();
     expect(t.drive.upload).not.toHaveBeenCalled();
-    expect(t.state.marker()).toBe('7');
+    expect(t.state.marker()).toBe('s:900');
     expect(t.last().kind).toBe('ok');
   });
 
@@ -72,7 +72,7 @@ describe('CloudSync（PC）', () => {
     await t.cloud.start();
     expect(t.deps.askConflict).toHaveBeenCalledWith(900, t.state.changeStamp() || expect.any(Number));
     expect(t.drive.upload).toHaveBeenCalledWith(expect.any(Uint8Array), expect.any(Number), 'f1');
-    expect(t.state.marker()).toBe('8');
+    expect(t.state.marker()).toBe('s:1000000');
     expect(t.state.changed()).toBe(false);
   });
 
@@ -138,7 +138,7 @@ describe('CloudSync（PC）', () => {
     t.cloud.onVisible();
     await t.cloud.idle();
     expect(t.deps.applyRemote).toHaveBeenCalledTimes(1);
-    expect(t.state.marker()).toBe('9');
+    expect(t.state.marker()).toBe('s:900');
     expect(t.deps.askConflict).not.toHaveBeenCalled();
   });
 
@@ -181,7 +181,7 @@ describe('CloudSync（PC）', () => {
     const t = setup({ marker: '5', changed: true });
     t.drive.upload.mockImplementationOnce(async () => { t.state.markChanged(); return { id: 'f1', version: '6' }; });
     await t.cloud.start();
-    expect(t.state.marker()).toBe('6');
+    expect(t.state.marker()).toBe('s:1000000');
     expect(t.state.changed()).toBe(true);
   });
 
@@ -274,6 +274,73 @@ describe('CloudSync（PC）', () => {
   });
 });
 
+describe('CloudSync：Drive の版が勝手に進んでも読み込まない（v0.14.1）', () => {
+  it('a version bump with the same save time is not a change (no download, no conflict)', async () => {
+    // 前に送った時の印（保存した時刻 500）。Drive 側の処理で版だけ 5 → 6 に進んだ
+    const t = setup({ remote: { id: 'f1', version: '6', savedAt: 500 }, marker: 's:500', changed: false });
+    t.cloud.onVisible();
+    await t.cloud.idle();
+    expect(t.drive.download).not.toHaveBeenCalled();
+    // その後に手を加えても「両方で変わっています」は出ず、そのまま送る
+    t.state.markChanged();
+    await t.cloud.syncNow();
+    expect(t.deps.askConflict).not.toHaveBeenCalled();
+    expect(t.drive.upload).toHaveBeenCalledTimes(1);
+  });
+  it('after an upload, a later version bump on Drive is ignored', async () => {
+    const t = setup({ marker: '5', changed: true });
+    await t.cloud.syncNow();
+    expect(t.drive.upload).toHaveBeenCalledTimes(1);
+    const r = await t.drive.remoteInfo();
+    t.drive.remoteInfo.mockResolvedValue({ ...r!, version: String(Number(r!.version) + 3) });
+    t.cloud.onVisible();
+    await t.cloud.idle();
+    expect(t.drive.download).not.toHaveBeenCalled();
+  });
+  it('a marker from before v0.14.1 (a version number) still matches once', async () => {
+    const t = setup({ remote: { id: 'f1', version: '5', savedAt: 500 }, marker: '5', changed: false });
+    await t.cloud.start();
+    expect(t.drive.download).not.toHaveBeenCalled();
+  });
+  it('another device really saved (different save time): downloads as before', async () => {
+    const t = setup({ remote: { id: 'f1', version: '9', savedAt: 777 }, marker: 's:500', changed: false });
+    await t.cloud.start();
+    expect(t.deps.applyRemote).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CloudSync：作り直し・読み込みの間は待つ（v0.14.1）', () => {
+  it('does nothing while busy, and tries again shortly after', async () => {
+    vi.useFakeTimers();
+    try {
+      let busy = true;
+      const t = setup({ remote: { id: 'f1', version: '9', savedAt: 777 }, marker: 's:500', changed: false, conflict: async () => 'local' });
+      t.deps.busy = () => busy;
+      t.cloud.onVisible();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(t.drive.remoteInfo).not.toHaveBeenCalled();
+      // 新しい箱庭を作っている間に、変更の印が立った
+      t.state.markChanged();
+      busy = false;
+      await vi.advanceTimersByTimeAsync(1000);
+      await t.cloud.idle();
+      // 作った箱庭は消さない：Drive も進んでいたので聞く（黙って読み込まない）
+      expect(t.deps.applyRemote).not.toHaveBeenCalled();
+      expect(t.deps.askConflict).toHaveBeenCalledTimes(1);
+      expect(t.drive.upload).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it('an edit made while downloading is not thrown away', async () => {
+    const t = setup({ remote: { id: 'f1', version: '9', savedAt: 777 }, marker: 's:500', changed: false, conflict: async () => 'local' });
+    t.drive.download.mockImplementationOnce(async () => { t.state.markChanged(); return new Uint8Array([1]); });
+    await t.cloud.start();
+    await t.cloud.idle();
+    expect(t.deps.applyRemote).not.toHaveBeenCalled();
+    expect(t.deps.askConflict).toHaveBeenCalledTimes(1);
+    expect(t.drive.upload).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('CloudSync（スマホ）', () => {
   it('viewerNeverUploads', async () => {
     const t = setup({ viewer: true, changed: true, remote: null });
@@ -295,7 +362,7 @@ describe('CloudSync（スマホ）', () => {
     const t = setup({ viewer: true, marker: null, progress: true, remote: { id: 'f1', version: '6', savedAt: 900 } });
     await t.cloud.start();
     expect(t.deps.applyRemote).toHaveBeenCalled();
-    expect(t.state.marker()).toBe('6');
+    expect(t.state.marker()).toBe('s:900');
   });
 
   it('viewerOnVisibleReloadsNewVersion', async () => {

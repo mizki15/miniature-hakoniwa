@@ -1351,7 +1351,8 @@ async function main() {
   const fmtHours = (h: number) => (h >= 24 ? `${Math.floor(h / 24)}日${Math.round(h % 24)}時間` : h >= 1 ? `${Math.floor(h)}時間${Math.round((h % 1) * 60)}分` : `${Math.round(h * 60)}分`);
 
   /** セーブデータから箱庭を作り直す。catchUp なら閉じていた間の時間を進める */
-  const loadFrom = async (save: SaveData, catchUp: boolean) => {
+  const loadFrom = (save: SaveData, catchUp: boolean) => whileBusy(() => loadFromInner(save, catchUp));
+  const loadFromInner = async (save: SaveData, catchUp: boolean) => {
     settingsToUI(save.world);
     const s = save.world;
     progress = { ...save.progress };
@@ -1376,8 +1377,15 @@ async function main() {
     eco.resetClock(game.farm.simMs);
   };
 
+  /** 箱庭を作り直している・読み込んでいる最中（入れ子になるので数で持つ。Google 同期を待たせる） */
+  let regenerating = 0;
+  const whileBusy = async <T>(f: () => Promise<T>): Promise<T> => {
+    regenerating++;
+    try { return await f(); } finally { regenerating--; }
+  };
   /** keep = true：今の状態（編集・畑）を保ったまま作り直す（小物の細かさ・花・画質の変更） */
-  const doRegen = async (keep = true) => {
+  const doRegen = (keep = true) => whileBusy(() => doRegenInner(keep));
+  const doRegenInner = async (keep: boolean) => {
     if (openingDone) await openingDone;
     if (keep && world && worldSettings) {
       const s = buildSave();
@@ -1404,6 +1412,9 @@ async function main() {
       if (worldSettings) settingsToUI(worldSettings);
       return;
     }
+    // 作り始める前に「この端末で手を加えた」印を立てる。作っている数秒の間に同期が走っても、
+    // Drive の古い箱庭で黙って上書きしないように（同期は作り終わるまで待つ。cloud の busy）
+    syncState.markChanged();
     await doRegen(false);
     await saveNow();
   };
@@ -1604,6 +1615,8 @@ async function main() {
       },
       askReplace: async () => confirm('Drive の箱庭に入れ替えますか？（今の箱庭は書き出しで控えを取れます）'),
       onStatus: renderCloud,
+      // 箱庭を作り直している・読み込んでいる間は同期しない（作りかけの箱庭を送ったり、上から読み込んだりしない）
+      busy: () => game.locked || regenerating > 0,
     });
     prepareSignIn();
     const c = cloud;

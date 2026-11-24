@@ -5,6 +5,11 @@
  * - スマホ（viewer）：Drive を読むだけで、決して送らない
  * - 同時に走る同期は 1 本だけ。走っている間に頼まれたら、終わった後にもう 1 回だけ走る
  *   どちらを残すか聞いている間も「走っている」に含める
+ * - Drive が進んだかは、Drive の版の番号ではなく「保存した時刻」（ファイルの appProperties.savedAt）で見る。
+ *   Drive の版はサーバー側の処理でも勝手に進むので、それで判断すると、何も変わっていないのに読み込み直したり
+ *   「両方で変わっています」と聞いたりしてしまう（v0.14.1）
+ * - 箱庭を作り直している・読み込んでいる間（busy）は同期しない。少し待ってからやり直す
+ * - 読み込んでいる間に手を加えたら、読み込んだ箱庭で上書きせず、もう一度決め直す
  * 設計書：docs/superpowers/specs/2026-11-21-google-sync-design.md
  */
 import { decideSync, decideViewer } from './syncDecision';
@@ -13,6 +18,14 @@ import type { Account, SyncState } from './syncState';
 
 /** 編集が止まってから送るまで（筆でなぞる間に何度も送らないように） */
 export const EDIT_DELAY_MS = 3000;
+/** 作り直している間に頼まれた同期を、やり直すまで */
+export const BUSY_RETRY_MS = 1000;
+
+/** 同期の印：最後に同期した箱庭の保存時刻（v0.14.1〜）。前の版の印は Drive の版の番号 */
+export const markerOf = (savedAt: number) => `s:${savedAt}`;
+/** 印が、Drive の今のファイルと同じ箱庭を指しているか（前の版の印＝版の番号も、一度だけ受け付ける） */
+export const sameAsMarker = (marker: string | null, remote: { version: string; savedAt: number }) =>
+  marker !== null && (marker === markerOf(remote.savedAt) || marker === remote.version);
 
 export type CloudStatus =
   | { kind: 'signedOut' }
@@ -48,12 +61,15 @@ export interface CloudDeps {
   /** スマホの初回：手の入った箱庭を Drive のものに入れ替えてよいか */
   askReplace(): Promise<boolean>;
   onStatus(s: CloudStatus): void;
+  /** 箱庭を作り直している・読み込んでいる最中か（その間は同期しない） */
+  busy?(): boolean;
 }
 
 export class CloudSync {
   private running: Promise<void> | null = null;
   private again = false;
   private editTimer: ReturnType<typeof setTimeout> | null = null;
+  private busyTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private d: CloudDeps) {}
 
@@ -126,16 +142,20 @@ export class CloudSync {
     const acc = this.d.state.account();
     if (!acc) { this.d.onStatus({ kind: 'signedOut' }); return; }
     if (!this.d.drive.hasToken()) { this.d.onStatus({ kind: 'needsLogin', email: acc.email }); return; }
+    // 箱庭を作り直している・読み込んでいる間は、少し待ってからやり直す
+    if (this.d.busy?.()) { this.retryLater(); return; }
     this.d.onStatus({ kind: 'busy', email: acc.email });
     try {
       const remote = await this.d.drive.remoteInfo();
       const marker = this.d.state.marker();
+      // 印と同じ箱庭なら印をそのまま、違えば保存時刻の印を、Drive の「版」として決め方に渡す
+      const remoteVersion = remote ? (sameAsMarker(marker, remote) ? marker : markerOf(remote.savedAt)) : null;
       if (this.d.viewer) {
-        const a = decideViewer({ remoteVersion: remote?.version ?? null, markerVersion: marker, localHasProgress: this.d.localHasProgress() });
+        const a = decideViewer({ remoteVersion, markerVersion: marker, localHasProgress: this.d.localHasProgress() });
         if (a === 'askReplace' && !(await this.d.askReplace())) { await this.signOut(); return; }
         if (a !== 'none' && remote) await this.download(remote, acc.email);
       } else {
-        let a = decideSync({ remoteVersion: remote?.version ?? null, markerVersion: marker, localChanged: this.d.state.changed(), localHasProgress: this.d.localHasProgress() });
+        let a = decideSync({ remoteVersion, markerVersion: marker, localChanged: this.d.state.changed(), localHasProgress: this.d.localHasProgress() });
         if (a === 'ask' && remote) a = (await this.d.askConflict(remote.savedAt, this.d.state.changeStamp())) === 'remote' ? 'download' : 'upload';
         if (a === 'upload') await this.upload(remote?.id, acc.email);
         else if (a === 'download' && remote) await this.download(remote, acc.email);
@@ -143,6 +163,7 @@ export class CloudSync {
       if (!this.same(acc.email)) return; // 途中でログアウト・別のアカウントになった
       this.d.onStatus({ kind: 'ok', email: acc.email, lastSyncAt: this.d.state.lastSyncAt() });
     } catch (err) {
+      if (err instanceof LocalChangedMeanwhile) { this.again = true; return; } // 決め直す
       if (err instanceof AccountChanged || !this.same(acc.email)) return;
       if (err instanceof NeedsLoginError) this.d.onStatus({ kind: 'needsLogin', email: acc.email });
       else this.d.onStatus({ kind: 'error', email: acc.email, message: messageOf(err) });
@@ -151,22 +172,31 @@ export class CloudSync {
 
   private same(email: string) { return this.d.state.account()?.email === email; }
 
+  private retryLater() {
+    if (this.busyTimer) return;
+    this.busyTimer = setTimeout(() => { this.busyTimer = null; void this.syncOnce(); }, BUSY_RETRY_MS);
+  }
+
   private async upload(existingId: string | undefined, email: string) {
     // 印は送れた後に下ろす（タブを閉じて途中で終わっても残る）。送っている間に変えていたら残す
     const seen = this.d.state.changeStamp();
     const { data, savedAt } = await this.d.buildEncoded();
     const r = await this.d.drive.upload(data, savedAt, existingId);
     if (!this.same(email)) throw new AccountChanged();
-    this.d.state.setMarker(r.version);
+    void r;
+    this.d.state.setMarker(markerOf(savedAt));
     this.d.state.clearChangedIf(seen);
     this.d.state.setLastSyncAt(this.d.now());
   }
 
   private async download(remote: RemoteInfo, email: string) {
+    // 読み込みを決めた時の変更の印。読んでいる間に手を加えたら（新しい箱庭を作った時も）、上書きしないで決め直す
+    const seen = this.d.state.changeStamp();
     const data = await this.d.drive.download(remote.id);
     if (!this.same(email)) throw new AccountChanged();
+    if (!this.d.viewer && (this.d.state.changeStamp() !== seen || this.d.busy?.())) throw new LocalChangedMeanwhile();
     await this.d.applyRemote(data); // 端末内に保存できなかったら投げる（印は進めない）
-    this.d.state.setMarker(remote.version);
+    this.d.state.setMarker(markerOf(remote.savedAt));
     this.d.state.clearChanged();
     this.d.state.setLastSyncAt(this.d.now());
   }
@@ -174,5 +204,7 @@ export class CloudSync {
 
 /** 同期の途中でログアウト・別のアカウントになった：結果を捨てる */
 class AccountChanged extends Error {}
+/** 読み込んでいる間に、この端末で手を加えた：読み込んだ箱庭で上書きせず、決め直す */
+class LocalChangedMeanwhile extends Error {}
 
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : '同期できませんでした');
