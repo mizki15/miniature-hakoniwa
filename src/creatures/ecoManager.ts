@@ -6,7 +6,7 @@ import { countEnvironment, emptyEnv, fitsHabitat, habitatCols, type EnvCounts, t
 import { checkEcosystem, dueChecks, needsStarterRabbits, stayMs, type EcoState } from '../eco/ecosystem';
 import { VISITOR, type DexId, type Moment, type VisitorId, VISITOR_POINTS } from '../eco/species';
 import { markSeen, observe, type Dex } from '../eco/dexState';
-import { SPECIES, NAMES, makeResident, type Animal, type Species } from './animals';
+import { SPECIES, SPECIES_LIST, NAMES, makeResident, type Animal, type Species } from './animals';
 import { pickName, placeResident, restorePlace } from './place';
 import { Visitor, type TreeShape } from './visitors';
 import type { Fireflies } from './fireflies';
@@ -245,6 +245,27 @@ export class EcoManager {
     const ok = this.addVisitor(id, performance.now() + 30 * 60_000);
     if (ok) this.deps.onChanged();
     return ok;
+  }
+
+  /**
+   * デバッグ：全種類の生き物を条件を見ずに一気に出す。住人は種類ごとに 1 匹ずつ引っ越してくる（保存される）。
+   * 訪問者は 1 匹ずつ（いれば出し直す。滞在 30 分）。居場所が無い種類は出ない。出なかった種類の名前を返す
+   */
+  spawnAll(): { residents: number; visitors: number; missed: string[] } {
+    if (!this.world) return { residents: 0, visitors: 0, missed: [] };
+    let residents = 0, visitors = 0;
+    const missed: string[] = [];
+    for (const sp of SPECIES_LIST) {
+      if (this.addResident(sp)) residents++;
+      else missed.push(SPECIES[sp].name);
+    }
+    for (const id of Object.keys(VISITOR) as VisitorId[]) {
+      this.removeVisitor(id);
+      if (this.addVisitor(id, performance.now() + 30 * 60_000)) visitors++;
+      else missed.push(VISITOR[id].name);
+    }
+    this.deps.onChanged();
+    return { residents, visitors, missed };
   }
 
   /** 建物の足元（歩けなくなった列）にいる住人を、近くの歩ける列へ移す。めり込んだままにしないため */

@@ -1537,6 +1537,12 @@ async function main() {
     $('ecoAbundanceLabel').textContent = `×${k}`;
     if (up) eco.check(lastMoment, performance.now(), Math.random);
   });
+  $('spawnAll').addEventListener('click', () => {
+    if (!world || game.locked) return;
+    const r = eco.spawnAll();
+    toast(`住人 ${r.residents} 匹・訪問者 ${r.visitors} 匹を出しました${r.missed.length ? `（居場所が無くて出ない：${r.missed.join('・')}）` : ''}`, 6000);
+    refreshDex();
+  });
   $<HTMLInputElement>('ecoAbundance').addEventListener('input', (e) => { $('ecoAbundanceLabel').textContent = `×${(e.target as HTMLInputElement).value}`; });
   $('openAll').addEventListener('click', async () => {
     if (!world || opening) return;
@@ -2001,7 +2007,7 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { shadows, setAntialias, setRenderStyle, uLine, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { spawnAll: () => eco.spawnAll(), shadows, setAntialias, setRenderStyle, uLine, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {
