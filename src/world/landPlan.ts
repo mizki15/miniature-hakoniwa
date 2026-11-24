@@ -1,6 +1,6 @@
 /**
  * 区画ごとの土地の型（設計メモ 0 章「岩場・湿地・砂浜の出方：区画ごとにシードで決まる」）。
- * 最初の区画はふつう（森・草原・水）。残りの 15 区画に、岩場 4・湿地 4・砂浜 3・ふつう 4 をシードで並べる。
+ * 最初の区画はふつう（森・草原・水）。残りの 24 区画に、岩場 6・湿地 6・砂浜 5・ふつう 7（標準）をシードで並べる。
  * three.js に頼らない（地形の生成とテストと画面から使う）。
  */
 import { hash2 } from './noise';
@@ -17,14 +17,24 @@ export const PLOT_LAND_INFO: Record<PlotLand, { icon: string; text: string }> = 
   beach: { icon: '🏖', text: '砂浜がある' },
 };
 
-const BAG: PlotLand[] = ['rock', 'rock', 'rock', 'rock', 'wetland', 'wetland', 'wetland', 'wetland', 'beach', 'beach', 'beach', 'plain', 'plain', 'plain', 'plain'];
+/** 最初の区画のほかの 24 区画に並べる数（残りはふつう）。デバッグの「地形のパラメータ」で変えられる */
+export const DEFAULT_LAND_COUNTS = { rock: 6, wetland: 6, beach: 5 };
+export type LandCounts = typeof DEFAULT_LAND_COUNTS;
 
-const cache = new Map<number, PlotLand[]>();
-/** 16 区画の土地の型（番号は plots.ts の区画番号） */
-export function plotLands(seed: number): PlotLand[] {
-  const hit = cache.get(seed);
+const cache = new Map<string, PlotLand[]>();
+/** 25 区画の土地の型（番号は plots.ts の区画番号） */
+export function plotLands(seed: number, counts: LandCounts = DEFAULT_LAND_COUNTS): PlotLand[] {
+  const key = `${seed}|${counts.rock}|${counts.wetland}|${counts.beach}`;
+  const hit = cache.get(key);
   if (hit) return hit;
-  const bag = [...BAG];
+  // 合わせて 24 を超えたら、岩場 → 湿地 → 砂浜の順に入るだけ入れる
+  const others = PLOTS_PER_SIDE * PLOTS_PER_SIDE - 1;
+  const bag: PlotLand[] = [];
+  for (const k of ['rock', 'wetland', 'beach'] as const) {
+    const n = Math.max(0, Math.min(Math.round(counts[k]), others - bag.length));
+    for (let i = 0; i < n; i++) bag.push(k);
+  }
+  while (bag.length < others) bag.push('plain');
   // シードで決まる並べ替え（Fisher–Yates）
   for (let i = bag.length - 1; i > 0; i--) {
     const j = Math.floor(hash2(seed, i, 7, 31) * (i + 1));
@@ -33,7 +43,7 @@ export function plotLands(seed: number): PlotLand[] {
   const out: PlotLand[] = [];
   for (let p = 0, k = 0; p < PLOTS_PER_SIDE * PLOTS_PER_SIDE; p++) out.push(p === START_PLOT ? 'plain' : bag[k++]);
   if (cache.size > 8) cache.clear();
-  cache.set(seed, out);
+  cache.set(key, out);
   return out;
 }
 

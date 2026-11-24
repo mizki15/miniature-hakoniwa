@@ -1,28 +1,37 @@
 /**
- * 区画：256×256 の枠を 64×64 の区画 4×4 に分ける。開いた区画は 16 ビットのマスクで持つ。
- * 区画の番号は px + pz*4（px, pz は 0〜3）。座標はすべて枠の座標（0〜255）。
+ * 区画：320×320 の枠を 64×64 の区画 5×5 に分ける（v0.14〜。それまでは 256×256 の 4×4）。開いた区画は 25 ビットのマスクで持つ。
+ * 区画の番号は px + pz*5（px, pz は 0〜4）。座標はすべて枠の座標（0〜319）。
+ * 最初の区画は真ん中 (2,2)。開ける土地は、最初の区画を中心にした 5×5 まで。
  */
 import { CHUNK } from './mesher';
 
-export const FRAME = 256;
+export const FRAME = 320;
 export const PLOT = 64;
 export const PLOTS_PER_SIDE = FRAME / PLOT;
-/** 最初に開いている区画 (1,1)：4 方向どこへでも広げられる */
-export const START_PLOT = 1 + 1 * PLOTS_PER_SIDE;
-export const ALL_PLOTS = 0xffff;
+export const PLOT_COUNT = PLOTS_PER_SIDE * PLOTS_PER_SIDE;
+/** 最初に開いている区画 (2,2)：真ん中から 4 方向へ 2 区画ずつ広げられる */
+export const START_PLOT = 2 + 2 * PLOTS_PER_SIDE;
+export const ALL_PLOTS = 2 ** PLOT_COUNT - 1;
+/**
+ * 地形の「場」の座標と枠の座標のずれ（列）。v0.13 までの枠（最初の区画が (1,1)）と同じ地形になるよう、
+ * 場の座標 = 枠の座標 − FIELD_SHIFT にする
+ */
+export const FIELD_SHIFT = PLOT;
+/** v0.13 までの枠の大きさ（保存データの移し替えと、版 1 の地形の境目に使う） */
+export const OLD_FRAME = 256;
 
 export interface Rect { x0: number; z0: number; x1: number; z1: number }
 
 export const plotOfCol = (x: number, z: number) =>
   x < 0 || z < 0 || x >= FRAME || z >= FRAME ? -1 : Math.floor(x / PLOT) + Math.floor(z / PLOT) * PLOTS_PER_SIDE;
 
-export const isOpen = (mask: number, plot: number) => plot >= 0 && plot < 16 && (mask & (1 << plot)) !== 0;
+export const isOpen = (mask: number, plot: number) => plot >= 0 && plot < PLOT_COUNT && (mask & (1 << plot)) !== 0;
 
 export const isOpenCol = (mask: number, x: number, z: number) => isOpen(mask, plotOfCol(x, z));
 
 export function countOpen(mask: number) {
   let n = 0;
-  for (let p = 0; p < 16; p++) if (mask & (1 << p)) n++;
+  for (let p = 0; p < PLOT_COUNT; p++) if (mask & (1 << p)) n++;
   return n;
 }
 
@@ -40,7 +49,7 @@ function neighbours(plot: number) {
 /** 開いた区画に接していて、まだ開いていない区画（昇順） */
 export function openable(mask: number): number[] {
   const out: number[] = [];
-  for (let p = 0; p < 16; p++) if (!isOpen(mask, p) && neighbours(p).some((q) => isOpen(mask, q))) out.push(p);
+  for (let p = 0; p < PLOT_COUNT; p++) if (!isOpen(mask, p) && neighbours(p).some((q) => isOpen(mask, q))) out.push(p);
   return out;
 }
 
@@ -54,7 +63,7 @@ export function plotRect(plot: number): Rect {
 /** 開いた区画を囲む四角（枠の座標）。何も開いていなければ枠全体 */
 export function boundsOf(mask: number) {
   let x0 = FRAME, z0 = FRAME, x1 = 0, z1 = 0;
-  for (let p = 0; p < 16; p++) {
+  for (let p = 0; p < PLOT_COUNT; p++) {
     if (!isOpen(mask, p)) continue;
     const r = plotRect(p);
     x0 = Math.min(x0, r.x0); z0 = Math.min(z0, r.z0); x1 = Math.max(x1, r.x1); z1 = Math.max(z1, r.z1);

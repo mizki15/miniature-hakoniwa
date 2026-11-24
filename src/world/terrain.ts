@@ -1,7 +1,7 @@
 import { hash2, makeNoise2D } from './noise';
 import { DIRT, GRASS, MUD, SAND, STONE, WATER, isWalkableTop } from './blocks';
-import { landWeight, plotLands } from './landPlan';
-import { FRAME, isOpenCol, plotRect } from './plots';
+import { DEFAULT_LAND_COUNTS, landWeight, plotLands } from './landPlan';
+import { FIELD_SHIFT, FRAME, OLD_FRAME, isOpenCol, plotRect } from './plots';
 
 /** 小物（木・花）の配置。地面のボクセル座標で持つ */
 export interface Placement {
@@ -42,6 +42,20 @@ export interface TerrainParams {
   rocks: number; // 岩場の多さ
   forest: number; // 森の密度
   flowers: number; // 花の密度
+  // ---- v0.14 で足した地形のファクター（無い時は標準 = 今までと同じ地形） ----
+  lakes?: number; // 湖の多さ
+  river?: number; // 川の幅（0 で川なし）
+  bare?: number; // 土のむき出しの多さ
+  shoreSand?: number; // 岸の砂の多さ
+  conifer?: number; // 針葉樹の割合
+  // ---- バイオーム（地形の作り方の版 2 の箱庭だけ） ----
+  rockPlots?: number; // 岩場の区画の数
+  wetPlots?: number; // 湿地の区画の数
+  beachPlots?: number; // 砂浜の区画の数
+  cliffs?: number; // 岩場の崖の高さ
+  wetland?: number; // 湿地の広さ（ならす高さの幅）
+  pools?: number; // 湿地の水たまりの多さ
+  beachWidth?: number; // 砂浜の広さ
   /**
    * 地形の作り方の版。1（無い時も）：v0.12 までの作り方。2：区画ごとに岩場・湿地・砂浜が出る（v0.13〜）。
    * 保存した箱庭は、作った時の版のまま作り直す（差分がずれないように）
@@ -53,7 +67,18 @@ export interface TerrainParams {
 export const LAND_VERSION = 2;
 
 /** 地形のパラメータの初期値（「標準に戻す」もこの値） */
-export const DEFAULT_PARAMS: TerrainParams = { relief: 0.4, mountains: 0.8, water: 1, rocks: 0.8, forest: 0.5, flowers: 1.6, land: LAND_VERSION };
+export const DEFAULT_PARAMS: TerrainParams = {
+  relief: 0.4, mountains: 0.8, water: 1, rocks: 0.8, forest: 0.5, flowers: 1.6,
+  lakes: 1, river: 1, bare: 1, shoreSand: 1, conifer: 1,
+  rockPlots: DEFAULT_LAND_COUNTS.rock, wetPlots: DEFAULT_LAND_COUNTS.wetland, beachPlots: DEFAULT_LAND_COUNTS.beach,
+  cliffs: 1, wetland: 1, pools: 1, beachWidth: 1,
+  land: LAND_VERSION,
+};
+
+/** パラメータから区画の土地の型の数（無ければ標準） */
+export const landCountsOf = (P: TerrainParams) => ({
+  rock: P.rockPlots ?? DEFAULT_LAND_COUNTS.rock, wetland: P.wetPlots ?? DEFAULT_LAND_COUNTS.wetland, beach: P.beachPlots ?? DEFAULT_LAND_COUNTS.beach,
+});
 
 /** 枠のぶんの空の世界（まだどの区画も開いていない） */
 export function createWorld(height: number): World {
@@ -80,7 +105,10 @@ function makeField(seed: number, height: number, P: TerrainParams) {
   const n4 = makeNoise2D(seed + 3041);
   const riverPhase = hash2(seed, 0, 0, 1) * Math.PI * 2;
   const v2 = (P.land ?? 1) >= 2;
-  const lands = plotLands(seed);
+  const lands = plotLands(seed, landCountsOf(P));
+  // v0.14 のファクター（無い時は標準の 1。標準なら今までとまったく同じ式になる）
+  const lakes = P.lakes ?? 1, river = P.river ?? 1, bareK = P.bare ?? 1, shoreSand = P.shoreSand ?? 1, coniferK = P.conifer ?? 1;
+  const cliffs = P.cliffs ?? 1, wetK = P.wetland ?? 1, pools = P.pools ?? 1, bw = P.beachWidth ?? 1;
   const n5 = makeNoise2D(seed + 4057);
   const fbm = (x: number, z: number) => {
     let a = 0, amp = 1, f = 1, sum = 0;
@@ -96,32 +124,35 @@ function makeField(seed: number, height: number, P: TerrainParams) {
     // 湖：低周波ノイズの窪地（水が多いほど広く）
     const lake = n3(x / 70 + 40, z / 70 - 20);
     // 区画の土地の型の強さ（版 2 だけ）
-    const wr = v2 ? landWeight(lands, 'rock', x, z) : 0;
-    const ww = v2 ? landWeight(lands, 'wetland', x, z) : 0;
-    const wb = v2 ? landWeight(lands, 'beach', x, z) : 0;
+    // 区画の土地の型は枠の座標で決まる（x, z は場の座標）
+    const wr = v2 ? landWeight(lands, 'rock', x + FIELD_SHIFT, z + FIELD_SHIFT) : 0;
+    const ww = v2 ? landWeight(lands, 'wetland', x + FIELD_SHIFT, z + FIELD_SHIFT) : 0;
+    const wb = v2 ? landWeight(lands, 'beach', x + FIELD_SHIFT, z + FIELD_SHIFT) : 0;
     // 砂浜の区画は入り江ができやすい
-    const lakeT = 0.35 + (1 - P.water) * 0.25 - wb * 0.3;
+    const lakeT = 0.35 + (1 - P.water) * 0.25 + (1 - lakes) * 0.2 - wb * 0.3 * bw;
     if (lake > lakeT) h -= (lake - lakeT) * 30;
     // 岩場の区画は岩が突き出て崖になる
-    if (wr > 0) h += wr * Math.max(0, n5(x / 16, z / 16)) ** 0.8 * 16;
+    if (wr > 0) h += wr * Math.max(0, n5(x / 16, z / 16)) ** 0.8 * 16 * cliffs;
     // 川：X 方向に蛇行しながら流れる。中心は最初の区画 (1,1) の真ん中の z = 96（水がほぼ無い設定では作らない）
-    if (P.water > 0.15) {
+    if (P.water > 0.15 && river > 0) {
       const cz = 96 + Math.sin(x * 0.07 + riverPhase) * 96 * 0.15 + n2(x * 0.03, 5.3) * 128 * 0.08;
       const d = Math.abs(z - cz);
-      const rw = Math.max(0.8, 2.2 + 0.8 * Math.sin(x * 0.13 + riverPhase) + 1 + (P.water - 1) * 1.5);
+      const rw = Math.max(0.8, (2.2 + 0.8 * Math.sin(x * 0.13 + riverPhase) + 1 + (P.water - 1) * 1.5) * river);
       if (d < rw + 7) h = WL - 2.2 + (h - (WL - 2.2)) * smoothstep(rw, rw + 7, d);
     }
     // 湿地の区画：低い所を水面すれすれにならし、ところどころ浅い水たまり（深さ 1）にする
     let wet = false;
-    if (ww > 0 && h < WL + 6) {
-      const pool = n5(x / 9 + 70, z / 9) > 0.25;
+    const wetTop = WL + 2 + 4 * wetK;
+    if (ww > 0 && wetK > 0 && h < wetTop) {
+      const pool = n5(x / 9 + 70, z / 9) > 0.25 + (1 - pools) * 0.4;
       const target = pool ? WL - 1 : WL;
-      const k = ww * smoothstep(WL + 6, WL + 2, h);
+      const k = ww * smoothstep(wetTop, WL + 2, h);
       h = h * (1 - k) + target * k;
       wet = k > 0.5;
     }
     // 砂浜の区画：水辺の近くを低く平らに（波打ち際が広がる）
-    if (wb > 0 && h > WL - 2 && h < WL + 6) h = h * (1 - wb * 0.6) + (WL + 0.6) * wb * 0.6;
+    const flat = Math.min(0.9, wb * 0.6 * bw);
+    if (wb > 0 && h > WL - 2 && h < WL + 6) h = h * (1 - flat) + (WL + 0.6) * flat;
     h = Math.max(3, Math.min(H - 6, Math.round(h)));
     // 地表の種類：同じ高さでも場所によって砂・土・岩・草が入り混じるようにする
     const beach = n2(x / 12 + 50, z / 12);
@@ -130,22 +161,25 @@ function makeField(seed: number, height: number, P: TerrainParams) {
     let top: number;
     if (wet && h >= WL - 1 && h <= WL + 1) top = MUD; // 湿地の泥（水たまりの底も）
     else if (h - 1 <= WL) top = SAND;
-    else if (h - 1 <= WL + 2 + Math.round(wb * 2) && beach > -0.1 - wb * 0.7) top = SAND; // 砂浜が内陸に入り込む
+    else if (h - 1 <= WL + 2 + Math.round(wb * 2 * bw) && beach > -0.1 + (1 - shoreSand) * 0.5 - wb * 0.7 * bw) top = SAND; // 砂浜が内陸に入り込む
     else if (h > 34 || rocky > 0.5 + (1 - P.rocks) * 0.3 - wr * 0.75) top = STONE; // 岩場（高い所は岩山）
-    else if (bare > 0.55) top = DIRT; // 土がむき出しの所
+    else if (bare > 0.55 + (1 - bareK) * 0.3) top = DIRT; // 土がむき出しの所
     else top = GRASS;
     return { h, top };
   };
 
   // 木の候補（森の中ほど多い）。実際に置くのは、5×5 の範囲の候補でいちばん大きなハッシュ値の列だけ
+  // x, z は場の座標。枠の端 2 列には置かない。版 1 は v0.13 までの枠（場の座標 0〜255）の端 2 列にも置かない（同じ地形のまま）
   const candidate = (x: number, z: number, c: Column) => {
-    if (x < 2 || z < 2 || x >= FRAME - 2 || z >= FRAME - 2) return false;
+    const fx = x + FIELD_SHIFT, fz = z + FIELD_SHIFT;
+    if (fx < 2 || fz < 2 || fx >= FRAME - 2 || fz >= FRAME - 2) return false;
+    if (!v2 && (x === 0 || x === 1 || z === 0 || z === 1 || x === OLD_FRAME - 2 || x === OLD_FRAME - 1 || z === OLD_FRAME - 2 || z === OLD_FRAME - 1)) return false;
     if (c.top !== GRASS || c.h - 1 <= WL + 1) return false;
     const forest = n3(x / 22, z / 22);
     return hash2(seed, x, z, 10) < (forest > 0.15 ? 0.07 : 0.008) * P.forest;
   };
 
-  return { column, candidate, n1, n2 };
+  return { column, candidate, n1, n2, v2, coniferK };
 }
 
 const fieldCache = new Map<string, ReturnType<typeof makeField>>();
@@ -176,16 +210,18 @@ function fillColumn(world: World, x: number, z: number, h: number, top: number) 
  */
 export function generatePlot(world: World, plot: number, seed: number, params: TerrainParams = DEFAULT_PARAMS) {
   const N = FRAME;
-  const { column, candidate, n1, n2 } = fieldFor(seed, world.height, params);
+  const { column, candidate, n1, n2, v2, coniferK } = fieldFor(seed, world.height, params);
   const r = plotRect(plot);
+  // ノイズとハッシュは場の座標（枠の座標 − FIELD_SHIFT）で引く。置く位置は枠の座標
+  const S = FIELD_SHIFT;
   // 木の判定は 2 列外側まで見るので、少し広い範囲の列を先に計算しておく
   const M = 2, ex0 = r.x0 - M, ez0 = r.z0 - M, ew = r.x1 - r.x0 + M * 2;
   const cols: Column[] = new Array(ew * ew);
   const cand = new Uint8Array(ew * ew);
   for (let z = 0; z < ew; z++) for (let x = 0; x < ew; x++) {
-    const c = column(ex0 + x, ez0 + z);
+    const c = column(ex0 + x - S, ez0 + z - S);
     cols[x + z * ew] = c;
-    cand[x + z * ew] = candidate(ex0 + x, ez0 + z, c) ? 1 : 0;
+    cand[x + z * ew] = candidate(ex0 + x - S, ez0 + z - S, c) ? 1 : 0;
   }
 
   const trees: Placement[] = [];
@@ -196,33 +232,35 @@ export function generatePlot(world: World, plot: number, seed: number, params: T
       const { h, top } = cols[li];
       fillColumn(world, x, z, h, top);
 
+      const fx = x - S, fz = z - S;
       // 木：まわりの候補より大きなハッシュ値を持つ候補だけ（同じ値なら番号の小さい列を優先）
       let isTree = cand[li] === 1;
       if (isTree) {
-        const mine = hash2(seed, x, z, 11);
+        const mine = hash2(seed, fx, fz, 11);
         for (let dz = -2; dz <= 2 && isTree; dz++) for (let dx = -2; dx <= 2; dx++) {
           if ((!dx && !dz) || !cand[li + dx + dz * ew]) continue;
-          const other = hash2(seed, x + dx, z + dz, 11);
+          const other = hash2(seed, fx + dx, fz + dz, 11);
           if (other > mine || (other === mine && dx + dz * N < 0)) { isTree = false; break; }
         }
       }
       if (isTree) {
         // 高い所ほど針葉樹
-        const conifer = hash2(seed, x, z, 12) < (h > 19 ? 0.75 : 0.15);
-        const variant = conifer ? 4 + Math.floor(hash2(seed, x, z, 13) * 2) : Math.floor(hash2(seed, x, z, 13) * 4);
-        trees.push({ variant, x: x + 0.5, y: h, z: z + 0.5, rot: Math.floor(hash2(seed, x, z, 14) * 4) * (Math.PI / 2), scale: 0.85 + hash2(seed, x, z, 15) * 0.35 });
+        const conifer = hash2(seed, fx, fz, 12) < (h > 19 ? 0.75 : 0.15) * coniferK;
+        const variant = conifer ? 4 + Math.floor(hash2(seed, fx, fz, 13) * 2) : Math.floor(hash2(seed, fx, fz, 13) * 4);
+        trees.push({ variant, x: x + 0.5, y: h, z: z + 0.5, rot: Math.floor(hash2(seed, fx, fz, 14) * 4) * (Math.PI / 2), scale: 0.85 + hash2(seed, fx, fz, 15) * 0.35 });
       }
       // 水面より下の列（湖や川の底）は歩けない
       world.walkable[x + z * N] = isWalkableTop(top) && !isTree && h >= world.waterLevel ? 1 : 0;
 
       // 花（草地に散らばせる。木の根元は避ける）
       if (top !== GRASS || isTree || x < 1 || z < 1 || x >= N - 1 || z >= N - 1) continue;
-      const meadow = n1(x / 15 + 100, z / 15);
-      if (hash2(seed, x, z, 20) > (meadow > 0.2 ? 0.12 : 0.015) * params.flowers) continue;
-      const variant = Math.floor((n2(x / 9, z / 9) * 0.5 + 0.5) * FLOWER_VARIANTS * 0.999 + hash2(seed, x, z, 21) * 0.6) % FLOWER_VARIANTS;
+      if (!v2 && (fx < 1 || fz < 1 || fx >= OLD_FRAME - 1 || fz >= OLD_FRAME - 1)) continue; // 版 1：v0.13 までの枠の端と同じ
+      const meadow = n1(fx / 15 + 100, fz / 15);
+      if (hash2(seed, fx, fz, 20) > (meadow > 0.2 ? 0.12 : 0.015) * params.flowers) continue;
+      const variant = Math.floor((n2(fx / 9, fz / 9) * 0.5 + 0.5) * FLOWER_VARIANTS * 0.999 + hash2(seed, fx, fz, 21) * 0.6) % FLOWER_VARIANTS;
       flowers.push({
-        variant, x: x + 0.2 + hash2(seed, x, z, 22) * 0.6, y: h, z: z + 0.2 + hash2(seed, x, z, 23) * 0.6,
-        rot: hash2(seed, x, z, 24) * Math.PI * 2, scale: 0.8 + hash2(seed, x, z, 25) * 0.4,
+        variant, x: x + 0.2 + hash2(seed, fx, fz, 22) * 0.6, y: h, z: z + 0.2 + hash2(seed, fx, fz, 23) * 0.6,
+        rot: hash2(seed, fx, fz, 24) * Math.PI * 2, scale: 0.8 + hash2(seed, fx, fz, 25) * 0.4,
       });
     }
   }

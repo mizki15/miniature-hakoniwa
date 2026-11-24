@@ -2,13 +2,14 @@ import type { TerrainParams } from '../world/terrain';
 import type { CropKind } from '../game/farm';
 import type { BuildingDesign } from '../build/geoParse';
 import type { Rot } from '../build/placement';
+import { FIELD_SHIFT, FRAME, OLD_FRAME, PLOT, PLOTS_PER_SIDE } from '../world/plots';
 
 /**
  * セーブデータの形式。
  * 地形はシード値から毎回同じものを作れるので、「生成の設定＋変えた所（差分）」だけを保存する。
  * 形式を変えた時は SAVE_VERSION を上げ、migrate() で古い形式を読めるようにする。
  */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 export interface SaveData {
   version: number;
@@ -22,7 +23,7 @@ export interface SaveData {
   };
   /** 開いた区画のマスク（world/plots.ts） */
   plots: number;
-  /** 地形の差分：[ボクセルの番号, 種類, 番号, 種類, ...]。番号は 256 の枠の座標 */
+  /** 地形の差分：[ボクセルの番号, 種類, 番号, 種類, ...]。番号は枠の座標（v4〜は 320 の枠、v3 までは 256 の枠） */
   edits: number[];
   /** 進み具合（発見ポイントと土地の権利。権利の残り = floor(points / 3) - rightsUsed） */
   progress: { points: number; rightsUsed: number; unlocks: string[]; firsts: string[]; newMarks: string[] };
@@ -61,7 +62,39 @@ function migrate(d: SaveData): SaveData {
   if (d.version < 2) throw new OldSaveError();
   // v2 → v3：建物の棚を空で足す
   if (d.version < 3) d = { ...d, version: 3, buildings: { designs: [], placed: [] } };
+  // v3 → v4：枠を 256×256（4×4 区画）から 320×320（5×5 区画、最初の区画が真ん中）に広げた。座標を 1 区画ぶんずらす
+  if (d.version < 4) d = toFrame5(d);
   return d;
+}
+
+/**
+ * v3 までの保存（256 の枠）を、v4 の枠（320、1 区画ぶん右下へずらす）に移す。
+ * 地形は場の座標（枠の座標 − FIELD_SHIFT）で作るので、ずらした所に前と同じ地形ができる
+ */
+export function toFrame5(d: SaveData): SaveData {
+  const O = OLD_FRAME, N = FRAME, S = FIELD_SHIFT;
+  const col = (c: number) => (c % O) + S + (Math.floor(c / O) + S) * N;
+  const vox = (i: number) => { const x = i % O, z = Math.floor(i / O) % O, y = Math.floor(i / (O * O)); return x + S + (z + S) * N + y * N * N; };
+  const oldSide = O / PLOT, shift = S / PLOT;
+  let plots = 0;
+  for (let p = 0; p < oldSide * oldSide; p++) if (d.plots & (1 << p)) plots |= 1 << ((p % oldSide) + shift + (Math.floor(p / oldSide) + shift) * PLOTS_PER_SIDE);
+  const edits: number[] = [];
+  for (let i = 0; i + 1 < d.edits.length; i += 2) edits.push(vox(d.edits[i]), d.edits[i + 1]);
+  const f = d.farm;
+  return {
+    ...d, version: 4, plots, edits,
+    residents: d.residents.map(([sp, x, z, name]) => [sp, x + S, z + S, name]),
+    farm: {
+      ...f,
+      crops: f.crops.map(([c, k, p]) => [col(c), k, p]),
+      saplings: f.saplings.map(([c, v, r, p]) => [col(c), v, r, p]),
+      wet: f.wet.map(([c, u]) => [col(c), u]),
+      ...(f.flowers ? { flowers: f.flowers.map(([c, v]) => [col(c), v] as [number, number]) } : {}),
+      ...(f.bare ? { bare: f.bare.map(([c, t]) => [col(c), t] as [number, number]) } : {}),
+      ...(f.faded ? { faded: f.faded.map(col) } : {}),
+    },
+    buildings: { ...d.buildings, placed: d.buildings.placed.map(([id, x, z, rot, pr]) => (pr === undefined ? [id, x + S, z + S, rot] : [id, x + S, z + S, rot, pr])) },
+  };
 }
 
 /** JSON → gzip 圧縮したバイト列 */

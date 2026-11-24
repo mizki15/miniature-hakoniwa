@@ -19,14 +19,14 @@ describe('generatePlot', () => {
     expect(a.flowers.map(key).sort()).toEqual(b.flowers.map(key).sort());
   });
   it('leaves closed plots as air', () => {
-    const w = gen([5]);
-    // 区画 5（x, z = 64〜127）の外の列は、高さ 0・全部空気・歩けない
-    for (const [x, z] of [[0, 0], [63, 64], [128, 100], [100, 128], [255, 255]]) {
+    const w = gen([6]);
+    // 区画 6（x, z = 64〜127）の外の列は、高さ 0・全部空気・歩けない
+    for (const [x, z] of [[0, 0], [63, 64], [128, 100], [100, 128], [319, 319]]) {
       expect(w.heights[x + z * FRAME]).toBe(0);
       expect(w.walkable[x + z * FRAME]).toBe(0);
       for (let y = 0; y < 64; y++) expect(w.voxels[x + z * FRAME + y * FRAME * FRAME]).toBe(0);
     }
-    expect(w.plots).toBe(1 << 5);
+    expect(w.plots).toBe(1 << 6);
   });
   it('trees keep spacing across plot seams', () => {
     const w = gen([5, 6]);

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { encodeSave, decodeSave, OldSaveError, SAVE_VERSION, type SaveData } from './format';
+import { START_PLOT } from '../world/plots';
 
 const v3 = (): SaveData => ({
   version: SAVE_VERSION, savedAt: 1,
@@ -10,9 +11,9 @@ const v3 = (): SaveData => ({
   buildings: { designs: [], placed: [] },
 });
 
-describe('save v3', () => {
-  it('versionIs3', () => {
-    expect(SAVE_VERSION).toBe(3);
+describe('save v4', () => {
+  it('versionIs4', () => {
+    expect(SAVE_VERSION).toBe(4);
   });
   it('roundtrips', async () => {
     const d = v3();
@@ -29,11 +30,33 @@ describe('save v3', () => {
   it('migratesV2', async () => {
     const { buildings: _, ...old } = v3();
     const loaded = await decodeSave(await encodeSave({ ...old, version: 2 } as SaveData));
-    expect(loaded.version).toBe(3);
+    expect(loaded.version).toBe(4);
     expect(loaded.buildings).toEqual({ designs: [], placed: [] });
   });
   it('rejects v1 with OldSaveError', async () => {
     const old = { ...v3(), version: 1 } as SaveData;
     await expect(decodeSave(await encodeSave(old))).rejects.toBeInstanceOf(OldSaveError);
+  });
+});
+
+describe('v3 → v4: the 4×4 frame becomes 5×5 with the start in the middle', () => {
+  it('moves plots, edits, farm, residents and buildings by one plot', async () => {
+    const old: SaveData = {
+      ...v3(), version: 3,
+      plots: (1 << 5) | (1 << 6) | (1 << 0), // (1,1)・(2,1)・(0,0)
+      edits: [100 + 90 * 256 + 12 * 256 * 256, 2],
+      residents: [['rabbit', 70.5, 90.25, 'こむぎ']],
+      farm: { simMs: 0, inventory: {}, crops: [[100 + 90 * 256, 'wheat', 0.5]], saplings: [[80 + 70 * 256, 1, 0, 1]], wet: [[81 + 70 * 256, 9]], flowers: [[82 + 70 * 256, 2]], bare: [[83 + 70 * 256, 5]], faded: [84 + 70 * 256] },
+      buildings: { designs: [], placed: [['abcd', 90, 100, 1], ['efgh', 91, 101, 0, 0.5]] },
+    };
+    const d = await decodeSave(await encodeSave(old));
+    expect(d.version).toBe(4);
+    expect(d.plots).toBe((1 << START_PLOT) | (1 << 13) | (1 << 6));
+    expect(d.edits).toEqual([164 + 154 * 320 + 12 * 320 * 320, 2]);
+    expect(d.residents).toEqual([['rabbit', 134.5, 154.25, 'こむぎ']]);
+    expect(d.farm.crops).toEqual([[164 + 154 * 320, 'wheat', 0.5]]);
+    expect(d.farm.saplings[0][0]).toBe(144 + 134 * 320);
+    expect([d.farm.wet[0][0], d.farm.flowers![0][0], d.farm.bare![0][0], d.farm.faded![0]]).toEqual([145, 146, 147, 148].map((x) => x + 134 * 320));
+    expect(d.buildings.placed).toEqual([['abcd', 154, 164, 1], ['efgh', 155, 165, 0, 0.5]]);
   });
 });

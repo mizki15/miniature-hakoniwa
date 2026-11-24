@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { canSetCol, floodAllowed } from './edgeRules';
 
 describe('edge edits stay inside open plots', () => {
-  const m = 1 << 5;
+  const m = 1 << 6; // x, z = 64〜127 の区画
   it('canSetCol', () => {
     expect(canSetCol(m, 64, 64)).toBe(true);
     expect(canSetCol(m, 63, 64)).toBe(false);

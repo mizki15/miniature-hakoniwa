@@ -196,6 +196,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .viewer-info { padding: 10px 16px 14px; border-top: 1px solid #eef1f4; }
 .viewer-name { font-weight: 700; font-size: 15px; overflow-wrap: anywhere; }
 .viewer-stats { font-size: 12px; color: #4a5560; margin-top: 2px; }
+.params .param-head { font-size: 11px; color: var(--muted); margin: 8px 0 2px; }
 .viewer-hint { font-size: 11px; color: #7a8590; margin-top: 2px; }
 /* 建物の性格（3D 表示の右上） */
 .viewer-traits[hidden] { display: none; }

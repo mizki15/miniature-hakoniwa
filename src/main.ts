@@ -35,7 +35,7 @@ import { CloudSync, type CloudStatus } from './save/cloudSync';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
 import { PLOT_LAND_INFO, plotLands, type PlotLand } from './world/landPlan';
-import { DEFAULT_PARAMS, LAND_VERSION, type TerrainParams, type WorldData } from './world/terrain';
+import { DEFAULT_PARAMS, LAND_VERSION, landCountsOf, type TerrainParams, type WorldData } from './world/terrain';
 import type { InitResult, PlotResult, RemeshResult } from './world/worker';
 import { FRAME, PLOT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect, rightsLeft } from './world/plots';
 import { buildBase, disposeBase } from './render/base';
@@ -302,7 +302,7 @@ async function main() {
   const startWorld = (seed: number, detail: number, params: TerrainParams, flowerStyle: string, plots: number, edits?: number[]) =>
     new Promise<void>((resolve) => {
       busy.style.display = 'grid';
-      worldLands = (params.land ?? 1) >= 2 ? plotLands(seed) : null;
+      worldLands = (params.land ?? 1) >= 2 ? plotLands(seed, landCountsOf(params)) : null;
       gen++;
       game.locked = true;
       // 開いている途中だった区画は、古い箱庭あてなので取りやめる（権利は使っていない）
@@ -1237,11 +1237,16 @@ async function main() {
   $('meteor').addEventListener('click', launchMeteor);
 
   // 地形のパラメータ
-  const PARAM_KEYS: (keyof TerrainParams)[] = ['relief', 'mountains', 'water', 'rocks', 'forest', 'flowers'];
+  const PARAM_KEYS: (keyof TerrainParams)[] = [
+    'relief', 'mountains', 'water', 'rocks', 'forest', 'flowers', 'lakes', 'river', 'bare', 'shoreSand', 'conifer',
+    'rockPlots', 'wetPlots', 'beachPlots', 'cliffs', 'wetland', 'pools', 'beachWidth',
+  ];
+  /** 区画の数（整数で見せる） */
+  const COUNT_KEYS = new Set<keyof TerrainParams>(['rockPlots', 'wetPlots', 'beachPlots']);
   const paramInput = (k: keyof TerrainParams) => $<HTMLInputElement>(`p-${k}`);
   const showParam = (k: keyof TerrainParams) => {
     const el = paramInput(k);
-    (el.nextElementSibling as HTMLOutputElement).value = parseFloat(el.value).toFixed(1);
+    (el.nextElementSibling as HTMLOutputElement).value = parseFloat(el.value).toFixed(COUNT_KEYS.has(k) ? 0 : 1);
   };
   PARAM_KEYS.forEach((k) => { paramInput(k).addEventListener('input', () => showParam(k)); showParam(k); });
   $('paramsReset').addEventListener('click', () => PARAM_KEYS.forEach((k) => { paramInput(k).value = String(DEFAULT_PARAMS[k]); showParam(k); }));
@@ -1288,7 +1293,8 @@ async function main() {
     $<HTMLInputElement>('seed').value = String(s.seed);
     $<HTMLSelectElement>('detail').value = String(s.detail);
     $<HTMLSelectElement>('flowerStyle').value = s.flowerStyle;
-    PARAM_KEYS.forEach((k) => { paramInput(k).value = String(s.params[k] ?? 1); showParam(k); });
+    // 保存に無いファクター（古い箱庭）は標準の値を見せる（地形も標準で作る）
+    PARAM_KEYS.forEach((k) => { paramInput(k).value = String(s.params[k] ?? DEFAULT_PARAMS[k] ?? 1); showParam(k); });
   };
   const buildSave = (): SaveData => ({
     version: SAVE_VERSION, savedAt: Date.now(), world: worldSettings!, plots: world!.plots,
