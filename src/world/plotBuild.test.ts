@@ -3,7 +3,7 @@ import { initWorld, addPlot, applyDelta } from './plotBuild';
 import { DEFAULT_PARAMS } from './terrain';
 import { FRAME } from './plots';
 
-const init = (gen = 1) => initWorld({ type: 'init', gen, height: 64, seed: 7, detail: 3, params: DEFAULT_PARAMS, plots: 1 << 6 });
+const init = (gen = 1) => initWorld({ type: 'init', gen, height: 64, seed: 7, detail: 3, params: { ...DEFAULT_PARAMS, land: 2 }, plots: 1 << 6 });
 
 describe('plotBuild', () => {
   it('init meshes only open plots', () => {

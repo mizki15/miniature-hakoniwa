@@ -2,10 +2,10 @@
  * ワーカーの中身：世界の状態を持ち続け、区画の追加と編集の差分だけを受け取ってメッシュを作る。
  * three.js に頼らない純粋な関数なので、テストから直接呼べる。
  */
-import { FLOWER_VARIANTS, TREE_VARIANTS, applyEdits, createWorld, generatePlot, type Placement, type TerrainParams, type World, type WorldData } from './terrain';
+import { FLOWER_VARIANTS, TREE_VARIANTS, applyEdits, createWorld, generatePlot, refillAround, type Placement, type TerrainParams, type World, type WorldData } from './terrain';
 import { buildChunk, buildMesh, transformMesh, type MeshData } from './mesher';
 import { buildFlowerModel, buildTreeModel } from './details';
-import { FRAME, PLOT, borderChunks, chunksOfPlot, plotOfCol, plotRect } from './plots';
+import { FRAME, PLOT, PLOTS_PER_SIDE, PLOT_COUNT, borderChunks, chunksOfPlot, isOpen, plotOfCol, plotRect, type Rect } from './plots';
 
 export interface ChunkMesh { cx: number; cz: number; terrain: MeshData; water: MeshData; }
 
@@ -36,7 +36,9 @@ export interface PlotResult {
   type: 'plot';
   gen: number;
   plot: number;
-  /** 区画の範囲のボクセル。番号は lx + lz*64 + y*64*64 */
+  /** 書き戻す範囲（枠の座標）。版 1・2 は区画だけ、版 3 は隣の縁も作り直すので区画 ±1 区画 */
+  rect: Rect;
+  /** 範囲のボクセル。番号は lx + lz*W + y*W*D（W, D は範囲の幅と奥行き） */
   voxels: Uint8Array;
   heights: Int16Array;
   walkable: Uint8Array;
@@ -61,7 +63,10 @@ const pack = (list: Placement[], variant: number) => {
 const inPlot = (plot: number) => (p: Placement) => plotOfCol(Math.floor(p.x), Math.floor(p.z)) === plot;
 
 function placementsOf(w: World, plot: number): PlotPlacements {
-  const trees = w.trees.filter(inPlot(plot)), flowers = w.flowers.filter(inPlot(plot));
+  return packPlacements(plot, w.trees.filter(inPlot(plot)), w.flowers.filter(inPlot(plot)));
+}
+
+function packPlacements(plot: number, trees: Placement[], flowers: Placement[]): PlotPlacements {
   return {
     plot,
     trees: Array.from({ length: TREE_VARIANTS }, (_, v) => pack(trees, v)),
@@ -72,8 +77,10 @@ function placementsOf(w: World, plot: number): PlotPlacements {
 export function initWorld(req: InitRequest): { state: BuildState; result: InitResult } {
   const t0 = performance.now();
   const world = createWorld(req.height);
+  // 空島（版 3）の縁は開いた区画のマスクで決まる。作る順番によらないよう、先に全部の区画のビットを立てる
+  world.plots = req.plots;
   const open: number[] = [];
-  for (let p = 0; p < 16; p++) if (req.plots & (1 << p)) { generatePlot(world, p, req.seed, req.params); open.push(p); }
+  for (let p = 0; p < PLOT_COUNT; p++) if (req.plots & (1 << p)) { generatePlot(world, p, req.seed, req.params); open.push(p); }
   if (req.edits?.length) applyEdits(world, req.edits);
   const t1 = performance.now();
   const chunks = meshChunks(world, open.flatMap(chunksOfPlot));
@@ -113,20 +120,43 @@ export function addPlot(state: BuildState, plot: number, edits: number[], gen: n
   const w = state.world;
   if (gen !== state.gen || (w.plots & (1 << plot)) !== 0) return null;
   const before = w.plots;
-  generatePlot(w, plot, state.seed, state.params);
+  const own = generatePlot(w, plot, state.seed, state.params);
+  // 空島（版 3）：隣の区画の縁を作り直す（新しい区画の方へ地面がつながる）
+  const around = refillAround(w, plot, state.seed, state.params, before);
   if (edits.length) applyEdits(w, edits);
-  const chunks = meshChunks(w, [...chunksOfPlot(plot), ...borderChunks(before, plot)]);
-  const r = plotRect(plot), H = w.height, NN = FRAME * FRAME;
-  const voxels = new Uint8Array(PLOT * PLOT * H);
-  const heights = new Int16Array(PLOT * PLOT);
-  const walkable = new Uint8Array(PLOT * PLOT);
-  for (let lz = 0; lz < PLOT; lz++) {
-    const row = r.x0 + (r.z0 + lz) * FRAME;
-    heights.set(w.heights.subarray(row, row + PLOT), lz * PLOT);
-    walkable.set(w.walkable.subarray(row, row + PLOT), lz * PLOT);
-    for (let y = 0; y < H; y++) voxels.set(w.voxels.subarray(row + y * NN, row + y * NN + PLOT), lz * PLOT + y * PLOT * PLOT);
+  const v3 = (state.params.land ?? 1) >= 3;
+  let chunkList: [number, number][];
+  let r: Rect;
+  if (v3) {
+    // 新しい区画と、開いている 8 近傍の区画のチャンク。書き戻す範囲は区画 ±1 区画
+    const px = plot % PLOTS_PER_SIDE, pz = Math.floor(plot / PLOTS_PER_SIDE);
+    chunkList = [...chunksOfPlot(plot)];
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      const qx = px + dx, qz = pz + dz;
+      if ((!dx && !dz) || qx < 0 || qz < 0 || qx >= PLOTS_PER_SIDE || qz >= PLOTS_PER_SIDE || !isOpen(before, qx + qz * PLOTS_PER_SIDE)) continue;
+      chunkList.push(...chunksOfPlot(qx + qz * PLOTS_PER_SIDE));
+    }
+    const pr = plotRect(plot);
+    r = { x0: Math.max(0, pr.x0 - PLOT), z0: Math.max(0, pr.z0 - PLOT), x1: Math.min(FRAME, pr.x1 + PLOT), z1: Math.min(FRAME, pr.z1 + PLOT) };
+  } else {
+    chunkList = [...chunksOfPlot(plot), ...borderChunks(before, plot)];
+    r = plotRect(plot);
   }
-  return { type: 'plot', gen, plot, voxels, heights, walkable, chunks, placements: placementsOf(w, plot) };
+  const chunks = meshChunks(w, chunkList);
+  const H = w.height, NN = FRAME * FRAME, W = r.x1 - r.x0, D = r.z1 - r.z0;
+  const voxels = new Uint8Array(W * D * H);
+  const heights = new Int16Array(W * D);
+  const walkable = new Uint8Array(W * D);
+  for (let lz = 0; lz < D; lz++) {
+    const row = r.x0 + (r.z0 + lz) * FRAME;
+    heights.set(w.heights.subarray(row, row + W), lz * W);
+    walkable.set(w.walkable.subarray(row, row + W), lz * W);
+    for (let y = 0; y < H; y++) voxels.set(w.voxels.subarray(row + y * NN, row + y * NN + W), lz * W + y * W * D);
+  }
+  // 小物：新しい区画のぶん（編集で消えたものを除く）と、隣の縁で空だった列に出たぶん
+  const alive = new Set([...w.trees, ...w.flowers]);
+  const placements = packPlacements(plot, [...own.trees, ...around.trees].filter((p) => alive.has(p)), [...own.flowers, ...around.flowers].filter((p) => alive.has(p)));
+  return { type: 'plot', gen, plot, rect: r, voxels, heights, walkable, chunks, placements };
 }
 
 /** 編集の差分（[番号, 種類, ...]）をワーカーの世界に当て、指定したチャンクを作り直す。古い箱庭あてなら何もしない（null） */

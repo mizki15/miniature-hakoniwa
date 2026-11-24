@@ -4,7 +4,7 @@ import { FRAME } from './plots';
 
 const gen = (order: number[]) => {
   const w = createWorld(64);
-  for (const p of order) generatePlot(w, p, 1234, DEFAULT_PARAMS);
+  for (const p of order) generatePlot(w, p, 1234, { ...DEFAULT_PARAMS, land: 2 });
   return w;
 };
 const key = (p: { x: number; z: number; variant: number }) => `${p.x.toFixed(3)},${p.z.toFixed(3)},${p.variant}`;

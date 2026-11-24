@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { landWeight, plotLands } from './landPlan';
-import { createWorld, generatePlot, DEFAULT_PARAMS, LAND_VERSION } from './terrain';
+import { createWorld, generatePlot, DEFAULT_PARAMS } from './terrain';
 import { FIELD_SHIFT, FRAME, PLOT, PLOT_COUNT, START_PLOT, plotRect } from './plots';
 import { MUD, SAND, STONE } from './blocks';
 
@@ -27,7 +27,7 @@ describe('plotLands', () => {
 });
 
 /** 区画の中の、地表の種類ごとの割合 */
-function tops(seed: number, plot: number, land = LAND_VERSION) {
+function tops(seed: number, plot: number, land = 2) {
   const w = createWorld(64);
   generatePlot(w, plot, seed, { ...DEFAULT_PARAMS, land });
   const r = plotRect(plot);
@@ -86,7 +86,7 @@ describe('terrain factors (debug window)', () => {
     const lands = plotLands(42);
     const sig = (extra: Record<string, number>, plot = START_PLOT) => {
       const w = createWorld(64);
-      generatePlot(w, plot, 42, { ...DEFAULT_PARAMS, ...extra });
+      generatePlot(w, plot, 42, { ...DEFAULT_PARAMS, land: 2, ...extra });
       let h = 0;
       for (let i = 0; i < w.voxels.length; i += 7) h = (h * 31 + w.voxels[i]) >>> 0;
       return h + ':' + w.trees.map((t) => t.variant).join('');

@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { FRAME, PLOT, PLOTS_PER_SIDE, isOpen, plotRect } from '../world/plots';
+import { FRAME, PLOT, PLOTS_PER_SIDE, PLOT_COUNT, isOpen, plotRect } from '../world/plots';
 
 /** 台座の縁：隣の区画が開いていない側だけ、地形より少しはみ出させる */
 const RIM = 1.5;
@@ -16,7 +16,7 @@ export function buildBase(mask: number): THREE.Group {
   const g = new THREE.Group();
   const half = FRAME / 2;
   const boxes: THREE.BufferGeometry[] = [];
-  for (let p = 0; p < 16; p++) {
+  for (let p = 0; p < PLOT_COUNT; p++) {
     if (!isOpen(mask, p)) continue;
     const px = p % PLOTS_PER_SIDE, pz = Math.floor(p / PLOTS_PER_SIDE);
     const open = (dx: number, dz: number) => {

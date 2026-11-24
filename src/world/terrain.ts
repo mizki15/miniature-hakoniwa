@@ -1,7 +1,7 @@
 import { hash2, makeNoise2D } from './noise';
 import { DIRT, GRASS, MUD, SAND, STONE, WATER, isWalkableTop } from './blocks';
 import { DEFAULT_LAND_COUNTS, landWeight, plotLands } from './landPlan';
-import { FIELD_SHIFT, FRAME, OLD_FRAME, isOpenCol, plotRect } from './plots';
+import { FIELD_SHIFT, FRAME, OLD_FRAME, PLOT, PLOTS_PER_SIDE, isOpen, isOpenCol, plotRect, type Rect } from './plots';
 
 /** 小物（木・花）の配置。地面のボクセル座標で持つ */
 export interface Placement {
@@ -56,15 +56,45 @@ export interface TerrainParams {
   wetland?: number; // 湿地の広さ（ならす高さの幅）
   pools?: number; // 湿地の水たまりの多さ
   beachWidth?: number; // 砂浜の広さ
+  // ---- 空島（地形の作り方の版 3 の箱庭だけ） ----
+  islandEdge?: number; // 縁の削れ方（大きいほど深く削れて、形が揺れる）
+  islandDetail?: number; // 縁の細かさ（大きいほど細かく入り組む）
+  islandDepth?: number; // 島の底の厚さ
+  biomeSize?: number; // 岩場・湿地・砂浜の広がりの大きさ
   /**
    * 地形の作り方の版。1（無い時も）：v0.12 までの作り方。2：区画ごとに岩場・湿地・砂浜が出る（v0.13〜）。
+   * 3：空島（開いた土地の縁が削れて宙に浮く。岩場・湿地・砂浜は区画でなくノイズで広がる。試作）。
    * 保存した箱庭は、作った時の版のまま作り直す（差分がずれないように）
    */
   land?: number;
 }
 
 /** 新しく作る箱庭の、地形の作り方の版 */
-export const LAND_VERSION = 2;
+export const LAND_VERSION = 3;
+
+/** 空島の縁までの距離を数える上限（列）。これより内側の列は、隣の区画を開いても変わらない */
+export const ISLAND_DMAX = 40;
+/** 縁の内側の、水がこぼれないように砂で高くする幅（列） */
+const LIP = 4;
+
+/**
+ * 列 (x, z)（枠の座標）の中心から、いちばん近い開いていない区画（枠の外も含む）までの距離。上限 ISLAND_DMAX。
+ * 開いていない区画の列なら 0
+ */
+export function islandDist(mask: number, x: number, z: number): number {
+  const px = Math.floor(x / PLOT), pz = Math.floor(z / PLOT);
+  const cx = x + 0.5, cz = z + 0.5;
+  let best = ISLAND_DMAX;
+  for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+    const qx = px + dx, qz = pz + dz;
+    const open = qx >= 0 && qz >= 0 && qx < PLOTS_PER_SIDE && qz < PLOTS_PER_SIDE && isOpen(mask, qx + qz * PLOTS_PER_SIDE);
+    if (open) continue;
+    const x0 = qx * PLOT, z0 = qz * PLOT;
+    const ddx = Math.max(x0 - cx, 0, cx - (x0 + PLOT)), ddz = Math.max(z0 - cz, 0, cz - (z0 + PLOT));
+    best = Math.min(best, Math.hypot(ddx, ddz));
+  }
+  return best;
+}
 
 /** 地形のパラメータの初期値（「標準に戻す」もこの値） */
 export const DEFAULT_PARAMS: TerrainParams = {
@@ -72,6 +102,7 @@ export const DEFAULT_PARAMS: TerrainParams = {
   lakes: 1, river: 1, bare: 1, shoreSand: 1, conifer: 1,
   rockPlots: DEFAULT_LAND_COUNTS.rock, wetPlots: DEFAULT_LAND_COUNTS.wetland, beachPlots: DEFAULT_LAND_COUNTS.beach,
   cliffs: 1, wetland: 1, pools: 1, beachWidth: 1,
+  islandEdge: 1, islandDetail: 1, islandDepth: 1, biomeSize: 1,
   land: LAND_VERSION,
 };
 
@@ -105,7 +136,17 @@ function makeField(seed: number, height: number, P: TerrainParams) {
   const n4 = makeNoise2D(seed + 3041);
   const riverPhase = hash2(seed, 0, 0, 1) * Math.PI * 2;
   const v2 = (P.land ?? 1) >= 2;
+  const v3 = (P.land ?? 1) >= 3;
   const lands = plotLands(seed, landCountsOf(P));
+  const counts = landCountsOf(P);
+  // 版 3：岩場・湿地・砂浜は、区画でなく低い周波数のノイズで広がる（数が多いほど、しきい値が下がって広くなる）
+  const nb1 = makeNoise2D(seed + 5101), nb2 = makeNoise2D(seed + 6113), nb3 = makeNoise2D(seed + 7127);
+  const bs = 110 * (P.biomeSize ?? 1);
+  const biome = (n: (x: number, z: number) => number, count: number, x: number, z: number) => {
+    if (count <= 0) return 0;
+    const t = 0.6 - (count / 24) * 1.2;
+    return smoothstep(t, t + 0.3, n(x / bs, z / bs));
+  };
   // v0.14 のファクター（無い時は標準の 1。標準なら今までとまったく同じ式になる）
   const lakes = P.lakes ?? 1, river = P.river ?? 1, bareK = P.bare ?? 1, shoreSand = P.shoreSand ?? 1, coniferK = P.conifer ?? 1;
   const cliffs = P.cliffs ?? 1, wetK = P.wetland ?? 1, pools = P.pools ?? 1, bw = P.beachWidth ?? 1;
@@ -125,9 +166,9 @@ function makeField(seed: number, height: number, P: TerrainParams) {
     const lake = n3(x / 70 + 40, z / 70 - 20);
     // 区画の土地の型の強さ（版 2 だけ）
     // 区画の土地の型は枠の座標で決まる（x, z は場の座標）
-    const wr = v2 ? landWeight(lands, 'rock', x + FIELD_SHIFT, z + FIELD_SHIFT) : 0;
-    const ww = v2 ? landWeight(lands, 'wetland', x + FIELD_SHIFT, z + FIELD_SHIFT) : 0;
-    const wb = v2 ? landWeight(lands, 'beach', x + FIELD_SHIFT, z + FIELD_SHIFT) : 0;
+    const wr = v3 ? biome(nb1, counts.rock, x, z) : v2 ? landWeight(lands, 'rock', x + FIELD_SHIFT, z + FIELD_SHIFT) : 0;
+    const ww = v3 ? biome(nb2, counts.wetland, x, z) : v2 ? landWeight(lands, 'wetland', x + FIELD_SHIFT, z + FIELD_SHIFT) : 0;
+    const wb = v3 ? biome(nb3, counts.beach, x, z) : v2 ? landWeight(lands, 'beach', x + FIELD_SHIFT, z + FIELD_SHIFT) : 0;
     // 砂浜の区画は入り江ができやすい
     const lakeT = 0.35 + (1 - P.water) * 0.25 + (1 - lakes) * 0.2 - wb * 0.3 * bw;
     if (lake > lakeT) h -= (lake - lakeT) * 30;
@@ -179,7 +220,26 @@ function makeField(seed: number, height: number, P: TerrainParams) {
     return hash2(seed, x, z, 10) < (forest > 0.15 ? 0.07 : 0.008) * P.forest;
   };
 
-  return { column, candidate, n1, n2, v2, coniferK };
+  // 空島の縁（版 3）：縁までの距離 d が edge より小さい列は空。縁の近くほど底が高い（薄い）
+  const ne = makeNoise2D(seed + 8147), nd = makeNoise2D(seed + 9161);
+  const edgeK = P.islandEdge ?? 1, es = 28 / Math.max(0.2, P.islandDetail ?? 1), depthK = P.islandDepth ?? 1;
+  const edgeFbm = (x: number, z: number) => {
+    let a = 0, amp = 1, f = 1, sum = 0;
+    for (let o = 0; o < 3; o++) { a += ne((x / es) * f, (z / es) * f) * amp; sum += amp; amp *= 0.5; f *= 2; }
+    return a / sum;
+  };
+  /** 削った後の列（null なら空）。b は底の高さ（これより下は空） */
+  const carve = (c: Column, d: number, x: number, z: number): (Column & { b: number }) | null => {
+    const edge = Math.min(ISLAND_DMAX - LIP - 2, edgeK * (4 + 10 * (edgeFbm(x, z) * 0.5 + 0.5)));
+    if (d < edge) return null;
+    let { h, top } = c;
+    if (d < edge + LIP && h < WL + 1) { h = WL + 1; top = SAND; }
+    const thick = Math.max(2, depthK * (3 + (Math.min(d, ISLAND_DMAX) - edge) * 1.1 + (nd(x / 7, z / 7) * 0.5 + 0.5) * 3));
+    const b = Math.max(0, Math.min(h - 2, Math.floor(h - thick)));
+    return { h, top, b };
+  };
+
+  return { column, candidate, carve, n1, n2, v2, v3, coniferK };
 }
 
 const fieldCache = new Map<string, ReturnType<typeof makeField>>();
@@ -190,11 +250,13 @@ function fieldFor(seed: number, height: number, params: TerrainParams) {
   return f;
 }
 
-/** 列にボクセルを積む（下から岩・土・地表、水面の高さまでは水） */
-function fillColumn(world: World, x: number, z: number, h: number, top: number) {
+/** 列にボクセルを積む（下から岩・土・地表、水面の高さまでは水）。b より下は空（空島の底） */
+function fillColumn(world: World, x: number, z: number, h: number, top: number, b = 0) {
   const NN = FRAME * FRAME, base = x + z * FRAME;
   world.heights[base] = h;
-  for (let y = 0; y < h; y++) {
+  for (let y = 0; y < b; y++) world.voxels[base + y * NN] = 0;
+  for (let y = Math.max(h, world.waterLevel); y < world.height; y++) world.voxels[base + y * NN] = 0;
+  for (let y = b; y < h; y++) {
     let t: number;
     if (y < h - 4) t = STONE;
     else if (y < h - 1) t = top === STONE ? STONE : DIRT;
@@ -204,14 +266,53 @@ function fillColumn(world: World, x: number, z: number, h: number, top: number) 
   for (let y = h; y < world.waterLevel; y++) world.voxels[base + y * NN] = WATER;
 }
 
+/** 列を空にする（空島の縁の外） */
+function clearColumn(world: World, x: number, z: number) {
+  const NN = FRAME * FRAME, base = x + z * FRAME;
+  world.heights[base] = 0;
+  world.walkable[base] = 0;
+  for (let y = 0; y < world.height; y++) world.voxels[base + y * NN] = 0;
+}
+
 /**
  * 区画を 1 つ作る：その区画の 64×64 列のボクセル・高さ・歩けるかを書き込み、区画のビットを立てる。
  * その区画の木と花を world.trees / world.flowers に足し、同じものを返す。
+ * 版 3 では、開いた区画のマスク（world.plots）で縁を削る
  */
 export function generatePlot(world: World, plot: number, seed: number, params: TerrainParams = DEFAULT_PARAMS) {
+  world.plots |= 1 << plot;
+  return fillArea(world, plotRect(plot), seed, params);
+}
+
+/**
+ * 区画を開いた後、版 3 の空島で、隣の開いた区画の縁を作り直す（before：開く前のマスク）。
+ * 縁が新しい区画の方へ動く列（開く前の縁までの距離が ISLAND_DMAX 未満の列）だけを作り直し、
+ * 空だった列に出た木と花だけを足して返す。cols：作り直した列。
+ * 版 1・2 では何もしない
+ */
+export function refillAround(world: World, plot: number, seed: number, params: TerrainParams, before: number) {
+  const out = { trees: [] as Placement[], flowers: [] as Placement[], cols: [] as number[] };
+  if ((params.land ?? 1) < 3) return out;
+  const px = plot % PLOTS_PER_SIDE, pz = Math.floor(plot / PLOTS_PER_SIDE);
+  for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+    const qx = px + dx, qz = pz + dz;
+    if ((!dx && !dz) || qx < 0 || qz < 0 || qx >= PLOTS_PER_SIDE || qz >= PLOTS_PER_SIDE) continue;
+    const q = qx + qz * PLOTS_PER_SIDE;
+    if (!isOpen(world.plots, q)) continue;
+    const r = fillArea(world, plotRect(q), seed, params, (x, z) => islandDist(before, x, z) < ISLAND_DMAX, out.cols);
+    out.trees.push(...r.trees);
+    out.flowers.push(...r.flowers);
+  }
+  return out;
+}
+
+/**
+ * 四角の範囲の列を作る。only：作る列（無ければ全部）。版 3 では、空だった列にだけ木と花を足す
+ * （空でなかった列の木と花はもうあり、削る前の列で決まるので変わらない）
+ */
+function fillArea(world: World, r: Rect, seed: number, params: TerrainParams, only?: (x: number, z: number) => boolean, touched?: number[]) {
   const N = FRAME;
-  const { column, candidate, n1, n2, v2, coniferK } = fieldFor(seed, world.height, params);
-  const r = plotRect(plot);
+  const { column, candidate, carve, n1, n2, v2, v3, coniferK } = fieldFor(seed, world.height, params);
   // ノイズとハッシュは場の座標（枠の座標 − FIELD_SHIFT）で引く。置く位置は枠の座標
   const S = FIELD_SHIFT;
   // 木の判定は 2 列外側まで見るので、少し広い範囲の列を先に計算しておく
@@ -228,9 +329,18 @@ export function generatePlot(world: World, plot: number, seed: number, params: T
   const flowers: Placement[] = [];
   for (let z = r.z0; z < r.z1; z++) {
     for (let x = r.x0; x < r.x1; x++) {
+      if (only && !only(x, z)) continue;
       const li = x - ex0 + (z - ez0) * ew;
-      const { h, top } = cols[li];
-      fillColumn(world, x, z, h, top);
+      let { h, top } = cols[li];
+      // 作り直しの時、もう地面だった列の木と花はそのまま（足さない）
+      const wasGround = only !== undefined && world.heights[x + z * N] > 0;
+      touched?.push(x + z * N);
+      if (v3) {
+        const c = carve(cols[li], islandDist(world.plots, x, z), x - S, z - S);
+        if (!c) { clearColumn(world, x, z); continue; }
+        ({ h, top } = c);
+        fillColumn(world, x, z, h, top, c.b);
+      } else fillColumn(world, x, z, h, top);
 
       const fx = x - S, fz = z - S;
       // 木：まわりの候補より大きなハッシュ値を持つ候補だけ（同じ値なら番号の小さい列を優先）
@@ -243,7 +353,7 @@ export function generatePlot(world: World, plot: number, seed: number, params: T
           if (other > mine || (other === mine && dx + dz * N < 0)) { isTree = false; break; }
         }
       }
-      if (isTree) {
+      if (isTree && !wasGround) {
         // 高い所ほど針葉樹
         const conifer = hash2(seed, fx, fz, 12) < (h > 19 ? 0.75 : 0.15) * coniferK;
         const variant = conifer ? 4 + Math.floor(hash2(seed, fx, fz, 13) * 2) : Math.floor(hash2(seed, fx, fz, 13) * 4);
@@ -253,7 +363,7 @@ export function generatePlot(world: World, plot: number, seed: number, params: T
       world.walkable[x + z * N] = isWalkableTop(top) && !isTree && h >= world.waterLevel ? 1 : 0;
 
       // 花（草地に散らばせる。木の根元は避ける）
-      if (top !== GRASS || isTree || x < 1 || z < 1 || x >= N - 1 || z >= N - 1) continue;
+      if (wasGround || top !== GRASS || isTree || x < 1 || z < 1 || x >= N - 1 || z >= N - 1) continue;
       if (!v2 && (fx < 1 || fz < 1 || fx >= OLD_FRAME - 1 || fz >= OLD_FRAME - 1)) continue; // 版 1：v0.13 までの枠の端と同じ
       const meadow = n1(fx / 15 + 100, fz / 15);
       if (hash2(seed, fx, fz, 20) > (meadow > 0.2 ? 0.12 : 0.015) * params.flowers) continue;
@@ -264,7 +374,6 @@ export function generatePlot(world: World, plot: number, seed: number, params: T
       });
     }
   }
-  world.plots |= 1 << plot;
   world.trees.push(...trees);
   world.flowers.push(...flowers);
   return { trees, flowers };

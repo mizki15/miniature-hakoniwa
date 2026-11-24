@@ -275,6 +275,8 @@ async function main() {
   };
   /** いまの箱庭の、区画ごとの土地の型（地形の作り方の版 2 だけ。版 1 の箱庭は区画で地形が変わらないので出さない） */
   let worldLands: PlotLand[] | null = null;
+  /** いまの箱庭の、地形の作り方の版 */
+  let worldLand = 1;
   const refreshGhosts = () => { if (world) ghosts.update(world.plots, points() >= OPEN_PLOT_POINTS ? 1 : 0, groundOf, worldLands); };
   let plotResolve: (() => void) | null = null;
   /** 開いている途中の区画（作り直す前に、開き終わるのを待つ） */
@@ -289,8 +291,13 @@ async function main() {
     opening = true;
     // 先に、まだ送っていない編集をワーカーに渡してから区画を足す（境目のチャンクが古い地形で作られないように）
     game.sendDeltaNow();
+    // 区画の編集と、版 3 では作り直す隣の区画の編集も（作り直した列に当て直す。同じ値を書くだけなので、ほかの列は変わらない）
     const edits: number[] = [];
-    for (const [i, t] of game.edits) { const c = i % (FRAME * FRAME); if (plotOfCol(c % FRAME, Math.floor(c / FRAME)) === plot) edits.push(i, t); }
+    const px = plot % PLOTS_PER_SIDE, pz = Math.floor(plot / PLOTS_PER_SIDE);
+    for (const [i, t] of game.edits) {
+      const c = i % (FRAME * FRAME), q = plotOfCol(c % FRAME, Math.floor(c / FRAME));
+      if (q === plot || (worldLand >= 3 && Math.abs((q % PLOTS_PER_SIDE) - px) <= 1 && Math.abs(Math.floor(q / PLOTS_PER_SIDE) - pz) <= 1)) edits.push(i, t);
+    }
     worker.postMessage({ type: 'addPlot', gen, plot, edits });
     openingDone = new Promise<void>((res) => { plotResolve = res; });
     return openingDone;
@@ -309,7 +316,9 @@ async function main() {
   const startWorld = (seed: number, detail: number, params: TerrainParams, flowerStyle: string, plots: number, edits?: number[]) =>
     new Promise<void>((resolve) => {
       busy.style.display = 'grid';
-      worldLands = (params.land ?? 1) >= 2 ? plotLands(seed, landCountsOf(params)) : null;
+      // 区画ごとの土地の型は版 2 だけ（版 3 の空島はノイズで広がるので、区画のアイコンを出さない）
+      worldLands = (params.land ?? 1) === 2 ? plotLands(seed, landCountsOf(params)) : null;
+      worldLand = params.land ?? 1;
       gen++;
       game.locked = true;
       // 開いている途中だった区画は、古い箱庭あてなので取りやめる（権利は使っていない）
@@ -371,8 +380,9 @@ async function main() {
     const cx = bounds.cx - FRAME / 2, cz = bounds.cz - FRAME / 2;
 
     if (base) disposeBase(base);
-    base = buildBase(w.plots);
-    diorama.add(base);
+    base = null;
+    // 空島（版 3）には台座を出さない
+    if (worldLand < 3) { base = buildBase(w.plots); diorama.add(base); }
 
     // 雨・雪（開いた範囲の上だけに降らせる）
     if (precip) {
@@ -1281,6 +1291,7 @@ async function main() {
   const PARAM_KEYS: (keyof TerrainParams)[] = [
     'relief', 'mountains', 'water', 'rocks', 'forest', 'flowers', 'lakes', 'river', 'bare', 'shoreSand', 'conifer',
     'rockPlots', 'wetPlots', 'beachPlots', 'cliffs', 'wetland', 'pools', 'beachWidth',
+    'islandEdge', 'islandDetail', 'islandDepth', 'biomeSize',
   ];
   /** 区画の数（整数で見せる） */
   const COUNT_KEYS = new Set<keyof TerrainParams>(['rockPlots', 'wetPlots', 'beachPlots']);

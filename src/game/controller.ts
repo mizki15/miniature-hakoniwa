@@ -349,12 +349,12 @@ export class GameController {
    */
   addPlot(r: PlotResult) {
     const w = this.world!;
-    const rect = plotRect(r.plot), H = w.height, NN = FRAME * FRAME;
-    for (let lz = 0; lz < PLOT; lz++) {
+    const rect = r.rect, H = w.height, NN = FRAME * FRAME, W = rect.x1 - rect.x0, D = rect.z1 - rect.z0;
+    for (let lz = 0; lz < D; lz++) {
       const row = rect.x0 + (rect.z0 + lz) * FRAME;
-      w.heights.set(r.heights.subarray(lz * PLOT, lz * PLOT + PLOT), row);
-      w.walkable.set(r.walkable.subarray(lz * PLOT, lz * PLOT + PLOT), row);
-      for (let y = 0; y < H; y++) w.voxels.set(r.voxels.subarray(lz * PLOT + y * PLOT * PLOT, lz * PLOT + y * PLOT * PLOT + PLOT), row + y * NN);
+      w.heights.set(r.heights.subarray(lz * W, lz * W + W), row);
+      w.walkable.set(r.walkable.subarray(lz * W, lz * W + W), row);
+      for (let y = 0; y < H; y++) w.voxels.set(r.voxels.subarray(lz * W + y * W * D, lz * W + y * W * D + W), row + y * NN);
     }
     w.plots |= 1 << r.plot;
     this.typeTex!.needsUpdate = true;
