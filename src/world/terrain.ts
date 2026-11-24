@@ -1,5 +1,6 @@
 import { hash2, makeNoise2D } from './noise';
-import { DIRT, GRASS, SAND, STONE, WATER, isWalkableTop } from './blocks';
+import { DIRT, GRASS, MUD, SAND, STONE, WATER, isWalkableTop } from './blocks';
+import { landWeight, plotLands } from './landPlan';
 import { FRAME, isOpenCol, plotRect } from './plots';
 
 /** 小物（木・花）の配置。地面のボクセル座標で持つ */
@@ -41,10 +42,18 @@ export interface TerrainParams {
   rocks: number; // 岩場の多さ
   forest: number; // 森の密度
   flowers: number; // 花の密度
+  /**
+   * 地形の作り方の版。1（無い時も）：v0.12 までの作り方。2：区画ごとに岩場・湿地・砂浜が出る（v0.13〜）。
+   * 保存した箱庭は、作った時の版のまま作り直す（差分がずれないように）
+   */
+  land?: number;
 }
 
+/** 新しく作る箱庭の、地形の作り方の版 */
+export const LAND_VERSION = 2;
+
 /** 地形のパラメータの初期値（「標準に戻す」もこの値） */
-export const DEFAULT_PARAMS: TerrainParams = { relief: 0.4, mountains: 0.8, water: 1, rocks: 0.8, forest: 0.5, flowers: 1.6 };
+export const DEFAULT_PARAMS: TerrainParams = { relief: 0.4, mountains: 0.8, water: 1, rocks: 0.8, forest: 0.5, flowers: 1.6, land: LAND_VERSION };
 
 /** 枠のぶんの空の世界（まだどの区画も開いていない） */
 export function createWorld(height: number): World {
@@ -70,6 +79,9 @@ function makeField(seed: number, height: number, P: TerrainParams) {
   const n3 = makeNoise2D(seed + 2027);
   const n4 = makeNoise2D(seed + 3041);
   const riverPhase = hash2(seed, 0, 0, 1) * Math.PI * 2;
+  const v2 = (P.land ?? 1) >= 2;
+  const lands = plotLands(seed);
+  const n5 = makeNoise2D(seed + 4057);
   const fbm = (x: number, z: number) => {
     let a = 0, amp = 1, f = 1, sum = 0;
     for (let o = 0; o < 4; o++) { a += n1(x * f, z * f) * amp; sum += amp; amp *= 0.5; f *= 2; }
@@ -83,8 +95,15 @@ function makeField(seed: number, height: number, P: TerrainParams) {
     h += Math.max(0, n4(x / 90, z / 90)) ** 1.3 * 22 * P.mountains;
     // 湖：低周波ノイズの窪地（水が多いほど広く）
     const lake = n3(x / 70 + 40, z / 70 - 20);
-    const lakeT = 0.35 + (1 - P.water) * 0.25;
+    // 区画の土地の型の強さ（版 2 だけ）
+    const wr = v2 ? landWeight(lands, 'rock', x, z) : 0;
+    const ww = v2 ? landWeight(lands, 'wetland', x, z) : 0;
+    const wb = v2 ? landWeight(lands, 'beach', x, z) : 0;
+    // 砂浜の区画は入り江ができやすい
+    const lakeT = 0.35 + (1 - P.water) * 0.25 - wb * 0.3;
     if (lake > lakeT) h -= (lake - lakeT) * 30;
+    // 岩場の区画は岩が突き出て崖になる
+    if (wr > 0) h += wr * Math.max(0, n5(x / 16, z / 16)) ** 0.8 * 16;
     // 川：X 方向に蛇行しながら流れる。中心は最初の区画 (1,1) の真ん中の z = 96（水がほぼ無い設定では作らない）
     if (P.water > 0.15) {
       const cz = 96 + Math.sin(x * 0.07 + riverPhase) * 96 * 0.15 + n2(x * 0.03, 5.3) * 128 * 0.08;
@@ -92,15 +111,27 @@ function makeField(seed: number, height: number, P: TerrainParams) {
       const rw = Math.max(0.8, 2.2 + 0.8 * Math.sin(x * 0.13 + riverPhase) + 1 + (P.water - 1) * 1.5);
       if (d < rw + 7) h = WL - 2.2 + (h - (WL - 2.2)) * smoothstep(rw, rw + 7, d);
     }
+    // 湿地の区画：低い所を水面すれすれにならし、ところどころ浅い水たまり（深さ 1）にする
+    let wet = false;
+    if (ww > 0 && h < WL + 6) {
+      const pool = n5(x / 9 + 70, z / 9) > 0.25;
+      const target = pool ? WL - 1 : WL;
+      const k = ww * smoothstep(WL + 6, WL + 2, h);
+      h = h * (1 - k) + target * k;
+      wet = k > 0.5;
+    }
+    // 砂浜の区画：水辺の近くを低く平らに（波打ち際が広がる）
+    if (wb > 0 && h > WL - 2 && h < WL + 6) h = h * (1 - wb * 0.6) + (WL + 0.6) * wb * 0.6;
     h = Math.max(3, Math.min(H - 6, Math.round(h)));
     // 地表の種類：同じ高さでも場所によって砂・土・岩・草が入り混じるようにする
     const beach = n2(x / 12 + 50, z / 12);
     const rocky = n1(x / 18 + 300, z / 18);
     const bare = n3(x / 14 - 200, z / 14);
     let top: number;
-    if (h - 1 <= WL) top = SAND;
-    else if (h - 1 <= WL + 2 && beach > -0.1) top = SAND; // 砂浜が内陸に入り込む
-    else if (h > 34 || rocky > 0.5 + (1 - P.rocks) * 0.3) top = STONE; // 岩場（高い所は岩山）
+    if (wet && h >= WL - 1 && h <= WL + 1) top = MUD; // 湿地の泥（水たまりの底も）
+    else if (h - 1 <= WL) top = SAND;
+    else if (h - 1 <= WL + 2 + Math.round(wb * 2) && beach > -0.1 - wb * 0.7) top = SAND; // 砂浜が内陸に入り込む
+    else if (h > 34 || rocky > 0.5 + (1 - P.rocks) * 0.3 - wr * 0.75) top = STONE; // 岩場（高い所は岩山）
     else if (bare > 0.55) top = DIRT; // 土がむき出しの所
     else top = GRASS;
     return { h, top };
@@ -182,7 +213,7 @@ export function generatePlot(world: World, plot: number, seed: number, params: T
         trees.push({ variant, x: x + 0.5, y: h, z: z + 0.5, rot: Math.floor(hash2(seed, x, z, 14) * 4) * (Math.PI / 2), scale: 0.85 + hash2(seed, x, z, 15) * 0.35 });
       }
       // 水面より下の列（湖や川の底）は歩けない
-      world.walkable[x + z * N] = (top === GRASS || top === SAND || top === DIRT) && !isTree && h >= world.waterLevel ? 1 : 0;
+      world.walkable[x + z * N] = isWalkableTop(top) && !isTree && h >= world.waterLevel ? 1 : 0;
 
       // 花（草地に散らばせる。木の根元は避ける）
       if (top !== GRASS || isTree || x < 1 || z < 1 || x >= N - 1 || z >= N - 1) continue;

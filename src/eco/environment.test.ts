@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildingWildWeight, countEnvironment, habitatCols, fitsHabitat, lightReach, sharePct, wildness, type EnvInput } from './environment';
 import { testWorld } from './testWorld';
 import { FRAME } from '../world/plots';
+import { MUD, SAND, STONE } from '../world/blocks';
 
 const input = (): EnvInput => ({ world: testWorld(), flowerCols: [1, 2, 3], treeCols: new Set([5, 6]), farmland: new Set([7]), crops: 4 });
 
@@ -39,11 +40,22 @@ describe('countEnvironment', () => {
     // 128 / 4096 = 3.1% → ★4
     expect(e.wild).toBe(4);
   });
-  it('shore wins over farm, farm wins over forest', () => {
+  it('farm on the shore is farm (counts for wildness), farm wins over forest', () => {
     const i = input();
     const e = countEnvironment({ ...i, farmland: new Set([at(69, 100), at(100, 100)]), treeCols: new Set([at(100, 100)]) });
-    expect(e.farm).toBe(1);
+    expect(e.farm).toBe(2);
+    expect(e.waterside).toBe(8 * 64 - 1);
     expect(e.forest).toBe(24);
+  });
+  it('mud is wetland, sand away from water is beach, stone away from water is rock', () => {
+    const i = input();
+    const w = i.world;
+    const setTop = (x: number, z: number, t: number) => { const col = at(x, z); w.voxels[col + (w.heights[col] - 1) * FRAME * FRAME] = t; };
+    setTop(100, 100, MUD); setTop(101, 100, SAND); setTop(102, 100, STONE);
+    setTop(69, 100, SAND); // 水辺の砂は水辺
+    const e = countEnvironment(i);
+    expect([e.wetland, e.beach, e.rock]).toEqual([1, 1, 1]);
+    expect(e.waterside).toBe(8 * 64);
   });
   it('does not count closed plots as water', () => {
     const i = input();

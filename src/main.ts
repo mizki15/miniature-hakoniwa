@@ -34,7 +34,8 @@ import { DRIVE_CLIENT_ID, accountInfo, download, hasToken, prepareSignIn, remote
 import { CloudSync, type CloudStatus } from './save/cloudSync';
 import { buildLowPolyFlower } from './creatures/flowers';
 import { WATER, isOpaque } from './world/blocks';
-import { DEFAULT_PARAMS, type TerrainParams, type WorldData } from './world/terrain';
+import { PLOT_LAND_INFO, plotLands, type PlotLand } from './world/landPlan';
+import { DEFAULT_PARAMS, LAND_VERSION, type TerrainParams, type WorldData } from './world/terrain';
 import type { InitResult, PlotResult, RemeshResult } from './world/worker';
 import { FRAME, PLOT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect, rightsLeft } from './world/plots';
 import { buildBase, disposeBase } from './render/base';
@@ -265,7 +266,9 @@ async function main() {
     }
     return n ? sum / n : w.waterLevel;
   };
-  const refreshGhosts = () => { if (world) ghosts.update(world.plots, rights(), groundOf); };
+  /** いまの箱庭の、区画ごとの土地の型（地形の作り方の版 2 だけ。版 1 の箱庭は区画で地形が変わらないので出さない） */
+  let worldLands: PlotLand[] | null = null;
+  const refreshGhosts = () => { if (world) ghosts.update(world.plots, rights(), groundOf, worldLands); };
   let plotResolve: (() => void) | null = null;
   /** 開いている途中の区画（作り直す前に、開き終わるのを待つ） */
   let openingDone: Promise<void> | null = null;
@@ -299,6 +302,7 @@ async function main() {
   const startWorld = (seed: number, detail: number, params: TerrainParams, flowerStyle: string, plots: number, edits?: number[]) =>
     new Promise<void>((resolve) => {
       busy.style.display = 'grid';
+      worldLands = (params.land ?? 1) >= 2 ? plotLands(seed) : null;
       gen++;
       game.locked = true;
       // 開いている途中だった区画は、古い箱庭あてなので取りやめる（権利は使っていない）
@@ -1241,7 +1245,8 @@ async function main() {
   };
   PARAM_KEYS.forEach((k) => { paramInput(k).addEventListener('input', () => showParam(k)); showParam(k); });
   $('paramsReset').addEventListener('click', () => PARAM_KEYS.forEach((k) => { paramInput(k).value = String(DEFAULT_PARAMS[k]); showParam(k); }));
-  const readParams = () => Object.fromEntries(PARAM_KEYS.map((k) => [k, parseFloat(paramInput(k).value)])) as unknown as TerrainParams;
+  // 新しく作る箱庭は、いまの地形の作り方（LAND_VERSION）。保存した箱庭は、保存した時の版のまま（worldSettings）
+  const readParams = () => ({ ...Object.fromEntries(PARAM_KEYS.map((k) => [k, parseFloat(paramInput(k).value)])), land: LAND_VERSION }) as unknown as TerrainParams;
   const fInput = $<HTMLInputElement>('fstop');
   const fNumber = () => F_STOPS[parseInt(fInput.value, 10)];
   const showF = () => { $('fLabel').textContent = `f/${fNumber()}`; };
@@ -1767,7 +1772,8 @@ async function main() {
       ghosts.setHover(gp);
       if (gp >= 0) {
         game.cursor.visible = false;
-        hintEl.textContent = rights() > 0 ? 'クリックでこの土地を開く（権利 1）' : '土地の権利が足りません';
+        const land = worldLands ? `${PLOT_LAND_INFO[worldLands[gp]].icon} ${PLOT_LAND_INFO[worldLands[gp]].text}・` : '';
+        hintEl.textContent = land + (rights() > 0 ? 'クリックでこの土地を開く（権利 1）' : '土地の権利が足りません');
       } else {
         const msg = game.updateCursor(hit, !!stroke);
         if (!stroke) hintEl.textContent = msg;

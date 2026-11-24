@@ -38,6 +38,12 @@ export interface SaveData {
     wet: [col: number, until: number][];
     /** 植えた花（列, 花の形）。無ければ無し */
     flowers?: [col: number, variant: number][];
+    /** むき出しの土の列と、むき出しになった時刻（1 日ほどで草地になる。v0.13） */
+    bare?: [col: number, since: number][];
+    /** 移り変わりで枯れた、生成された花の列（v0.13） */
+    faded?: number[];
+    /** 移り変わりを最後に進めた日（箱庭の時計の日数。v0.13） */
+    natureDay?: number;
   };
   /** 建物（v3）：棚に入れた建物と、置いた場所（x, z は枠のボクセル座標、rot は 90° 刻み）。
    *  progress は建設の進み具合（0〜1）。建ち終わった建物と古い記録には無い（＝完成） */

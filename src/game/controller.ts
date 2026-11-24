@@ -13,6 +13,7 @@ import { GRASS_VARIANTS, PEBBLE_VARIANTS, buildGrassTuft, buildPebble, placeGrou
 import type { SaveData } from '../save/format';
 import { sanitizeDesign, type BuildingDesign } from '../build/geoParse';
 import { buildBuildingMesh } from '../build/geoMesh';
+import { fadeFlowers, grassDue, natureDays, spreadTrees } from './nature';
 import type { BuildingCharacter } from '../build/character';
 import { buildingWildWeight, lightReach, type Light } from '../eco/environment';
 import { canPlace, footprintCols, rayHitPlaced, rayHitPlacedT, rotatedBounds, type Rot } from '../build/placement';
@@ -41,8 +42,7 @@ interface Site {
 
 /** 置けるブロック（「ブロックを置く」で選ぶ） */
 export const PLACE_BLOCKS: { id: number; name: string; icon: string }[] = [
-  { id: DIRT, name: '土', icon: '🟫' },
-  { id: GRASS, name: '草地', icon: '🟩' },
+  { id: DIRT, name: '土', icon: '🟫' }, // 草地のブロックは置けない。土から 1 日ほどで草が生える（v0.13）
   { id: STONE, name: '石', icon: '🪨' },
   { id: SAND, name: '砂', icon: '🟨' },
   { id: LOG, name: '丸太', icon: '🪵' },
@@ -194,6 +194,13 @@ export class GameController {
   private growingMeshes: THREE.InstancedMesh[] = [];
   private irrigatedCache = new Map<number, boolean>();
   private wetCheck = 0;
+  /** むき出しになった土の列 → むき出しになった時刻（箱庭の時計）。1 日ほどで草地になる */
+  private bareSince = new Map<number, number>();
+  /** 移り変わりで枯れた、生成された花の列（読み込んだ時に消し直す） */
+  private faded = new Set<number>();
+  /** 移り変わりを最後に進めた日（箱庭の時計の日数） */
+  private natureDay: number | undefined = undefined;
+  private natureCheck = 0;
   private flowerGeos: THREE.BufferGeometry[] = [];
   private flowerShared = false;
   /** ワーカーにまだ送っていない編集（[番号, 種類, ...]） */
@@ -241,6 +248,9 @@ export class GameController {
     this.decor = [];
     this.treeCols.clear();
     this.planted.clear();
+    this.bareSince.clear();
+    this.faded.clear();
+    this.natureDay = undefined;
     this.treeGeos = [];
     this.flowerGeos = [];
     this.delta = [];
@@ -524,6 +534,64 @@ export class GameController {
     this.planted.delete(x + z * this.world!.size);
   }
 
+  /** 生成された花を、その列から消す（植えた花の記録は変えない） */
+  private removeNaturalFlowers(col: number) {
+    const N = this.world!.size;
+    const planted = this.planted.get(col);
+    this.removeFlowersAt(col % N, Math.floor(col / N));
+    if (planted !== undefined) this.planted.set(col, planted);
+  }
+
+  /**
+   * 放っておくと変わる景色（game/nature.ts）：むき出しの土に草が生える、木のまわりに苗木が生える、花が枯れる。
+   * プレイヤーの操作ではないので、同期の「変更」の印は立てない（保存はする）
+   */
+  private runNature() {
+    const w = this.world;
+    if (!w || this.locked || this.isRising() || this.recording) return; // なぞっている間は待つ（取り消しの記録に混ぜない）
+    const N = w.size;
+    const f = this.farm;
+    let changed = false;
+    // 土 → 草地
+    for (const col of grassDue(this.bareSince, f.simMs)) {
+      const x = col % N, z = Math.floor(col / N), h = w.heights[col];
+      this.bareSince.delete(col);
+      if (h <= 0 || this.farmland.has(col) || this.buildingCols.has(col) || w.voxels[this.idx(x, h - 1, z)] !== DIRT) continue;
+      this.setVoxel(x, h - 1, z, GRASS);
+      changed = true;
+    }
+    // 森への移り変わり（1 日に 1 回）
+    const { days, today } = natureDays(this.natureDay, f.simMs);
+    this.natureDay = today;
+    const canGrow = (col: number) => {
+      const h = w.heights[col];
+      if (h <= w.waterLevel || !canSetCol(w.plots, col % N, Math.floor(col / N))) return false;
+      if (w.voxels[col + (h - 1) * N * N] !== GRASS || this.farmland.has(col) || f.crops.has(col) || this.buildingCols.has(col)) return false;
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (this.treeCols.has(col + dx + dz * N)) return false;
+      return true;
+    };
+    for (let d = 0; d < days; d++) {
+      for (const col of spreadTrees([...this.treeCols], N, canGrow, Math.random)) {
+        this.removeNaturalFlowers(col);
+        this.planted.delete(col);
+        const y = w.heights[col];
+        const variant = y > 19 ? 4 + Math.floor(Math.random() * 2) : Math.floor(Math.random() * 4);
+        f.plantSapling(col, variant, Math.floor(Math.random() * 4) * (Math.PI / 2));
+        this.treeCols.add(col);
+        w.walkable[col] = 0;
+        changed = true;
+      }
+      const flowerCols = new Set<number>();
+      for (const dd of this.decor) if (dd.kind === 'flower') for (let i = 0; i < dd.placements.length; i += 5) flowerCols.add(Math.floor(dd.placements[i]) + Math.floor(dd.placements[i + 2]) * N);
+      for (const col of fadeFlowers(flowerCols, Math.random)) {
+        if (!this.planted.has(col)) this.faded.add(col);
+        this.removeFlowersAt(col % N, Math.floor(col / N));
+        changed = true;
+      }
+    }
+    if (changed) { this.rebuildGrowing(); this.env(); this.unsaved = true; }
+  }
+
   /** 花を 1 本足す（列の中で少しずらし、向き・大きさはばらつかせる） */
   private addFlower(col: number, variant: number) {
     const w = this.world!;
@@ -745,6 +813,9 @@ export class GameController {
     const col = x + z * w.size;
     w.heights[col] = h;
     this.updateWalkable(col);
+    // 表面がむき出しの土になった列は、草が生えるまでの時計を回し始める（土でなくなったらやめる）
+    if (h > 0 && w.voxels[this.idx(x, h - 1, z)] === DIRT && h >= w.waterLevel) { if (!this.bareSince.has(col)) this.bareSince.set(col, this.farm.simMs); }
+    else this.bareSince.delete(col);
     this.typeTex!.needsUpdate = true;
     this.irrigatedCache.clear();
     // このチャンクと、縁なら隣のチャンクも作り直す
@@ -1494,6 +1565,9 @@ export class GameController {
         if (isFarm(this.get(x, y, z)) && this.get(x, y, z) !== want) this.setVoxel(x, y, z, want);
       }
     }
+    // 草が生える・森への移り変わり（2 秒に 1 回見る。移り変わりは箱庭の 1 日に 1 回）
+    this.natureCheck -= dtReal;
+    if (this.natureCheck <= 0) { this.natureCheck = 2; this.runNature(); }
     // 地面の小物：変わってから少し待って置き直す（なぞっている間に毎フレーム作り直さない）。せり上がり中は待つ
     this.groundTimer -= dtReal;
     if (this.groundDirty && this.groundTimer <= 0 && !this.isRising()) { this.rebuildGround(); this.groundTimer = 0.3; }
@@ -1562,6 +1636,9 @@ export class GameController {
         saplings: f.saplings.map((s) => [s.col, s.variant, s.rot, +s.progress.toFixed(5)]),
         wet: [...f.wetUntil.entries()].filter(([, u]) => u > f.simMs),
         flowers: [...this.planted.entries()],
+        bare: [...this.bareSince.entries()],
+        faded: [...this.faded],
+        natureDay: this.natureDay,
       },
       buildings: {
         designs: [...this.designs.values()],
@@ -1600,6 +1677,18 @@ export class GameController {
       }
       if (keep.length !== d.placements.length) { d.placements = new Float32Array(keep); this.buildDecor(d); }
     }
+    // 移り変わりで枯れた、生成された花
+    for (const col of save.farm.faded ?? []) { this.faded.add(col); this.removeNaturalFlowers(col); }
+    for (const [col, t] of save.farm.bare ?? []) this.bareSince.set(col, t);
+    // v0.12 までの保存：プレイヤーが変えた所で表面が土の列は、いまから草が生え始める
+    if (!save.farm.bare) {
+      const NN = w.size * w.size;
+      for (const i of this.edits.keys()) {
+        const col = i % NN, y = Math.floor(i / NN);
+        if (y === w.heights[col] - 1 && w.voxels[i] === DIRT && w.heights[col] >= w.waterLevel && !this.farmland.has(col)) this.bareSince.set(col, save.farm.simMs);
+      }
+    }
+    this.natureDay = save.farm.natureDay;
     // 植えた花（今の地面が草地の列だけ）
     for (const [col, variant] of save.farm.flowers ?? []) {
       const h = w.heights[col];
@@ -1645,6 +1734,7 @@ export class GameController {
     this.advanceBuildings(target - from);
     this.onBuildingDone = done;
     this.rebuildBuildings();
+    this.runNature();
     this.rebuildCrops();
     this.rebuildGrowing();
     this.wetCheck = 0;

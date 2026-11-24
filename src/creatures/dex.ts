@@ -7,7 +7,7 @@ import { LAND_NAMES, sharePct, type EnvCounts, type Land } from '../eco/environm
 import { shareStars, starText } from '../eco/species';
 
 /** 図鑑の上に出す「いまの箱庭」：土地の型の割合と野生度を、星で大まかに */
-const SUMMARY_LANDS: Land[] = ['forest', 'meadow', 'flowerField', 'farm', 'waterside', 'deepWater'];
+const SUMMARY_LANDS: Land[] = ['forest', 'meadow', 'flowerField', 'farm', 'waterside', 'deepWater', 'rock', 'wetland', 'beach'];
 export function envSummaryHtml(e: EnvCounts): string {
   const row = (name: string, stars: number) => `<span class="dex-env-item"><span class="dex-env-name">${name}</span><span class="dex-env-stars">${starText(stars)}</span></span>`;
   return SUMMARY_LANDS.map((l) => row(LAND_NAMES[l], shareStars(sharePct(e, l)))).join('') + row('野生度', e.wild);

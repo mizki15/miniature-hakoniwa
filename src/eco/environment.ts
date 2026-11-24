@@ -1,5 +1,5 @@
 import type { WorldData } from '../world/terrain';
-import { GRASS, isPathBlock } from '../world/blocks';
+import { GRASS, MUD, SAND, STONE, isPathBlock } from '../world/blocks';
 import { FRAME } from '../world/plots';
 
 /**
@@ -7,11 +7,13 @@ import { FRAME } from '../world/plots';
  * 毎フレームは数えない：地形を変えた時・区画を開いた時・作物が増減した時にだけ数え直す。
  *
  * 開いた区画の列（水面も含む）を、1 列ずつどれか 1 つの土地の型に分ける（設計メモ 10 章）。
- * 先に当てはまったものを取る：水面 → 水辺 → 畑 → 人の手 → 森 → 花畑 → 草原 → そのほか。
- *   水面：水の列（分母には入るが、条件には使わない。深い水だけは別に数える）
- *   水辺：水から 2 列以内（5×5）の、水でない列
- *   畑：耕した列
+ * 先に当てはまったものを取る：水面 → 人の手 → 畑 → 湿地 → 水辺 → 砂浜 → 岩場 → 森 → 花畑 → 草原 → そのほか。
+ *   水面：水の列（分母には入るが、条件には使わない。深い水だけは別に数える）。底が泥の水たまりは湿地
  *   人の手：道（土の道・石畳）と建物の足元
+ *   畑：耕した列
+ *   湿地：泥の列（v0.13）
+ *   水辺：水から 2 列以内（5×5）の、水でない列（岸の砂や岩も水辺）
+ *   砂浜：水辺より外の砂の列。岩場：水辺より外の岩の列
  *   森：木の根元から 2 列以内（5×5）
  *   花畑：草地で、まわり 3×3 に花のある列が 2 つ以上
  *   草原：残りの草地
@@ -50,10 +52,11 @@ export const litBy = (lights: readonly Light[] | undefined, col: number) => {
 };
 
 /** 割合と上限で条件にする土地の型 */
-export type Land = 'forest' | 'meadow' | 'flowerField' | 'farm' | 'waterside' | 'deepWater' | 'human' | 'darkWaterside' | 'darkForest';
-export const LANDS: Land[] = ['forest', 'meadow', 'flowerField', 'farm', 'waterside', 'deepWater', 'human', 'darkWaterside', 'darkForest'];
+export type Land = 'forest' | 'meadow' | 'flowerField' | 'farm' | 'waterside' | 'deepWater' | 'human' | 'rock' | 'wetland' | 'beach' | 'darkWaterside' | 'darkForest';
+export const LANDS: Land[] = ['forest', 'meadow', 'flowerField', 'farm', 'waterside', 'deepWater', 'human', 'rock', 'wetland', 'beach', 'darkWaterside', 'darkForest'];
 export const LAND_NAMES: Record<Land, string> = {
   forest: '森', meadow: '草原', flowerField: '花畑', farm: '畑', waterside: '水辺', deepWater: '深い水', human: '人の手',
+  rock: '岩場', wetland: '湿地', beach: '砂浜',
   darkWaterside: '灯りの届かない水辺', darkForest: '灯りの届かない森',
 };
 
@@ -65,7 +68,7 @@ export type EnvCounts = Record<Land, number> & {
   wild: number;
 };
 
-export const emptyEnv = (): EnvCounts => ({ ground: 0, forest: 0, meadow: 0, flowerField: 0, farm: 0, waterside: 0, deepWater: 0, human: 0, darkWaterside: 0, darkForest: 0, crops: 0, wild: 5 });
+export const emptyEnv = (): EnvCounts => ({ ground: 0, forest: 0, meadow: 0, flowerField: 0, farm: 0, waterside: 0, deepWater: 0, human: 0, rock: 0, wetland: 0, beach: 0, darkWaterside: 0, darkForest: 0, crops: 0, wild: 5 });
 
 /** その土地の型が、開いた地面に占める割合（%） */
 export const sharePct = (e: EnvCounts, land: Land) => (e.ground > 0 ? (e[land] / e.ground) * 100 : 0);
@@ -112,7 +115,7 @@ export const SHORE_REACH = 2;
 
 /** 列ごとの土地の型（0 そのほか・閉じた区画）。テストと、将来の表示に使う */
 export type ExclusiveLand = Exclude<Land, 'deepWater' | 'darkWaterside' | 'darkForest'>;
-export const LAND_CODE: Record<ExclusiveLand, number> = { waterside: 1, farm: 2, human: 3, forest: 4, flowerField: 5, meadow: 6 };
+export const LAND_CODE: Record<ExclusiveLand, number> = { waterside: 1, farm: 2, human: 3, forest: 4, flowerField: 5, meadow: 6, rock: 8, wetland: 9, beach: 10 };
 /** 水面の列の番号（土地の型には数えない） */
 export const WATER_CODE = 7;
 
@@ -150,10 +153,14 @@ export function classifyColumns(i: EnvInput): Uint8Array {
   for (let col = 0; col < N * N; col++) {
     if (w.heights[col] === 0) continue; // 開いていない区画
     let code = 0;
-    if (isWater(w, col)) code = WATER_CODE;
-    else if (shore[col]) code = LAND_CODE.waterside;
+    const top = topOf(w, col);
+    if (isWater(w, col)) code = top === MUD ? LAND_CODE.wetland : WATER_CODE;
+    else if (i.buildingCols?.has(col) || isPathBlock(top)) code = LAND_CODE.human;
     else if (i.farmland.has(col)) code = LAND_CODE.farm;
-    else if (i.buildingCols?.has(col) || isPathBlock(topOf(w, col))) code = LAND_CODE.human;
+    else if (top === MUD) code = LAND_CODE.wetland;
+    else if (shore[col]) code = LAND_CODE.waterside;
+    else if (top === SAND) code = LAND_CODE.beach;
+    else if (top === STONE) code = LAND_CODE.rock;
     else if (forest[col]) code = LAND_CODE.forest;
     else if (isGrass(w, col)) code = flowersAround(col) >= 2 ? LAND_CODE.flowerField : LAND_CODE.meadow;
     out[col] = code;
