@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countEnvironment, habitatCols, fitsHabitat, sharePct, wildness, type EnvInput } from './environment';
+import { buildingWildWeight, countEnvironment, habitatCols, fitsHabitat, lightReach, sharePct, wildness, type EnvInput } from './environment';
 import { testWorld } from './testWorld';
 import { FRAME } from '../world/plots';
 
@@ -99,5 +99,38 @@ describe('fitsHabitat', () => {
     expect(fitsHabitat(i, 'flower', col)).toBe(true);
     i.flowerCols = [];
     expect(fitsHabitat(i, 'flower', col)).toBe(false);
+  });
+});
+
+describe('buildings: weighted wildness and lights (v0.12)', () => {
+  const block = (x0: number, z0: number, n: number) => new Set(Array.from({ length: n * n }, (_, i) => at(x0 + (i % n), z0 + Math.floor(i / n))));
+  it('a natural building counts for less wildness than its footprint', () => {
+    const buildingCols = block(100, 100, 12); // 144 列 = 3.5%
+    expect(countEnvironment({ ...input(), buildingCols }).wild).toBe(4);
+    // かやぶき（★5）なら 2 割だけ数える：0.7% → ★5
+    expect(countEnvironment({ ...input(), buildingCols, buildingWildCols: 144 * buildingWildWeight(5) }).wild).toBe(5);
+    expect(buildingWildWeight(1)).toBe(1);
+  });
+  it('light reach grows with the light stars', () => {
+    expect([0, 1, 3, 5].map(lightReach)).toEqual([0, 4, 8, 12]);
+  });
+  it('waterside and forest under a light are not dark', () => {
+    const i = { ...input(), treeCols: new Set([at(100, 100)]) };
+    const dark = countEnvironment(i);
+    expect(dark.darkWaterside).toBe(dark.waterside);
+    expect(dark.darkForest).toBe(25);
+    const lit = countEnvironment({ ...i, lights: [{ x: 100, z: 100, r: 4 }, { x: 69, z: 90, r: 4 }] });
+    expect(lit.darkForest).toBe(0);
+    expect(lit.darkWaterside).toBeLessThan(lit.waterside);
+    expect(lit.waterside).toBe(dark.waterside);
+  });
+  it('fireflies and owls do not appear under a light', () => {
+    const i = { ...input(), treeCols: new Set([at(100, 100), at(120, 120)]), lights: [{ x: 100, z: 100, r: 4 }] };
+    expect(habitatCols(i, 'darkTree')).toEqual([at(120, 120)]);
+    expect(fitsHabitat(i, 'darkTree', at(100, 100))).toBe(false);
+    expect(fitsHabitat(i, 'tree', at(100, 100))).toBe(true);
+    const near = { ...input(), lights: [{ x: 69, z: 90, r: 4 }] };
+    expect(fitsHabitat(near, 'grassNearWater', at(68, 90))).toBe(false);
+    expect(fitsHabitat(near, 'grassNearWater', at(68, 120))).toBe(true);
   });
 });

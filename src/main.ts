@@ -13,7 +13,7 @@ import { Ambience } from './audio';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { denoise } from 'three/addons/tsl/display/DenoiseNode.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { FIREFLIES_ON, RIPPLES, RIPPLES_ON, U, createDetailMaterial, createTerrainMaterial, createWaterMaterial, fireflyData, rippleData } from './render/materials';
+import { FIREFLIES_ON, RIPPLES, RIPPLES_ON, U, createDetailMaterial, createTerrainMaterial, createWaterMaterial, fireflyData, rippleData, windowGlowAt } from './render/materials';
 import { SAMPLES as QUALITY_SAMPLES, nextQuality } from './render/autoQuality';
 import { createDaylight } from './render/daylight';
 import { createShadowSystem } from './render/shadows';
@@ -47,6 +47,8 @@ import { buildFixPrompt, buildPrompt } from './build/aiPrompt';
 import { LIMITS } from './build/limits';
 import { BuildingViewer } from './build/viewer';
 import { designStats } from './build/stats';
+import { CharacterStore } from './build/characterStore';
+import { buildingTraits } from './build/traits';
 import { CROPS, CROP_KINDS, type CropKind } from './game/farm';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -175,7 +177,7 @@ async function main() {
   const waterMat = createWaterMaterial();
   const detailMat = createDetailMaterial();
   const flowerMat = createDetailMaterial(0.12); // 花は背が低いので高さに比例して揺らす
-  const buildingMat = createDetailMaterial(0, { sway: false }); // 建物は風で揺らさない
+  const buildingMat = createDetailMaterial(0, { sway: false, windows: true }); // 建物は風で揺らさない。窓は夜に光る
   const lowPolyFlowers = [0, 1, 2].map((v) => buildLowPolyFlower(v));
   let precip: { rain: THREE.InstancedMesh; snow: THREE.InstancedMesh } | null = null;
   const rainAmount = uniform(0);
@@ -200,6 +202,11 @@ async function main() {
 
   // 触れる・育つ要素（道具・畑・植林・地形の編集）
   const game = new GameController({ diorama, worker, waterMat, detailMat, flowerMat, buildingMat });
+  // 建物の性格（形ごとに 1 回、別のワーカーで計算して覚えておく）
+  const characters = new CharacterStore(new Worker(new URL('./build/characterWorker.ts', import.meta.url), { type: 'module' }));
+  game.characterOf = (d) => characters.get(d);
+  let onCharacterReady: () => void = () => {};
+  characters.onReady = () => { game.characterReady(); onCharacterReady(); };
   /** 知らせを出す（toast を作るまでは何もしない） */
   let notify: (msg: string) => void = () => {};
   // Drive との同期：プレイヤーが手を加えたら印を立てる（生き物の発見や時間の経過では立てない）
@@ -591,6 +598,7 @@ async function main() {
     $('viewerEmpty').hidden = !!d;
     $('viewerName').textContent = d ? d.name : '';
     $('viewerStats').textContent = d ? `${designStats(d).label}・建てるのに約 ${buildMinutes(d)} 分` : '';
+    renderTraits(d);
     const add = $<HTMLButtonElement>('viewerAdd'), place = $<HTMLButtonElement>('viewerPlace'), del = $<HTMLButtonElement>('viewerDelete');
     add.hidden = vtab !== 'import';
     add.disabled = !d;
@@ -600,6 +608,21 @@ async function main() {
     // 同じ建物なら見本を作り直さない（回した向きを保つ）
     if (viewer && d !== viewerShown) { viewer.show(d); viewerShown = d; }
   };
+  /** 建物の性格（星 3 行と、遠のく生き物。まだ観察していない生き物は「？」） */
+  const renderTraits = (d: BuildingDesign | null) => {
+    const box = $('viewerTraits');
+    box.hidden = !d;
+    if (!d) return;
+    const c = characters.get(d);
+    if (!c) { box.textContent = '性格を計算しています…'; return; }
+    const t = buildingTraits(c);
+    const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
+    const name = (id: VisitorId) => (dexStage(eco.dex, id) === 'observed' ? VISITOR[id].name : '？');
+    const away = t.away.length ? t.away.map((a) => `${name(a.id)}（${a.why}）`).join('・') : 'なし';
+    box.innerHTML = t.rows.map((r) => `<div class="tr-row"><span class="tr-label">${esc(r.label)}</span><span class="tr-stars">${esc(r.stars)}</span><span class="tr-note">${esc(r.note)}</span></div>`).join('') +
+      `<div class="tr-away">遠のく生き物：${esc(away)}</div>`;
+  };
+  onCharacterReady = () => { if (viewerIsOpen()) renderViewer(); };
   const setViewer = async (open: boolean, tab?: 'import' | 'shelf') => {
     if (tab) vtab = tab;
     viewerEl.classList.toggle('open', open);
@@ -1708,6 +1731,7 @@ async function main() {
     // 影の範囲は箱庭全体ではなく、注目点のまわり（カメラとの距離で決める）。広くなっても影が粗くならない
     const shadowR = Math.min(160, Math.max(48, camera.position.distanceTo(controls.target) * 0.9));
     daylight.apply(hour, focusPoint, shadowR, weatherNow);
+    U.windowGlow.value = windowGlowAt(hour);
     shadows.update();
     // パネルの見た目を時間帯に合わせる（夜は暗いすりガラス）。明け方・夕方にちらつかないよう幅を持たせる
     const nightUI = document.body.classList.contains('night');

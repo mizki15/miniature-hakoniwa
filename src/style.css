@@ -197,6 +197,15 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .viewer-name { font-weight: 700; font-size: 15px; overflow-wrap: anywhere; }
 .viewer-stats { font-size: 12px; color: #4a5560; margin-top: 2px; }
 .viewer-hint { font-size: 11px; color: #7a8590; margin-top: 2px; }
+/* 建物の性格（3D 表示の右上） */
+.viewer-traits[hidden] { display: none; }
+.viewer-traits { position: absolute; top: 10px; right: 10px; width: 230px; padding: 8px 10px; border-radius: 12px; background: rgba(255, 255, 255, 0.86); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08); font-size: 12px; color: #1f2933; pointer-events: none; }
+.viewer-traits .tr-row { display: grid; grid-template-columns: 3.2em auto; column-gap: 6px; align-items: baseline; margin-top: 3px; }
+.viewer-traits .tr-row:first-child { margin-top: 0; }
+.viewer-traits .tr-label { color: #4a5560; }
+.viewer-traits .tr-stars { color: #d09a2a; letter-spacing: -1px; }
+.viewer-traits .tr-note { grid-column: 2; color: #6a7580; font-size: 11px; }
+.viewer-traits .tr-away { margin-top: 6px; padding-top: 5px; border-top: 1px solid #e6eaee; color: #4a5560; font-size: 11px; }
 .viewer-actions { display: flex; gap: 8px; margin-top: 8px; }
 .viewer-actions button { border: 1px solid #d5dbe1; background: #fff; border-radius: 10px; padding: 6px 12px; cursor: pointer; font-size: 13px; color: #1f2933; }
 .viewer-actions button.primary { background: rgba(91, 143, 58, 0.9); border-color: transparent; color: #fff; }

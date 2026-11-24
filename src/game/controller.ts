@@ -11,8 +11,10 @@ import { buildCropGeometry, buildSaplingGeometry } from './cropModels';
 import { raycastVoxels, type VoxelHit } from './picking';
 import { GRASS_VARIANTS, PEBBLE_VARIANTS, buildGrassTuft, buildPebble, placeGround } from '../creatures/groundDecor';
 import type { SaveData } from '../save/format';
-import type { BuildingDesign } from '../build/geoParse';
+import { sanitizeDesign, type BuildingDesign } from '../build/geoParse';
 import { buildBuildingMesh } from '../build/geoMesh';
+import type { BuildingCharacter } from '../build/character';
+import { buildingWildWeight, lightReach, type Light } from '../eco/environment';
 import { canPlace, footprintCols, rayHitPlaced, rayHitPlacedT, rotatedBounds, type Rot } from '../build/placement';
 import { advanceProgress, buildOrder, builtCount, cubeBox, minutesLeft } from '../build/construction';
 
@@ -390,8 +392,32 @@ export class GameController {
       if (d.kind !== 'flower') continue;
       for (let i = 0; i < d.placements.length; i += 5) flowerCols.push(Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * N);
     }
-    return { flowerCols, treeCols: this.treeCols as ReadonlySet<number>, farmland: this.farmland as ReadonlySet<number>, crops: this.farm.crops.size, buildingCols: this.buildingCols as ReadonlySet<number> };
+    // 建物：野生度は足元を自然の星で重み付けして数える。建ち終わった灯りのある建物は、まわりを照らす
+    // 性格がまだ計算できていない建物は、足元をそのまま数え、灯りは無いものとする（計算できたら数え直す）
+    let buildingWildCols = 0;
+    const lights: Light[] = [];
+    for (const p of this.placed) {
+      const d = this.designs.get(p.id);
+      if (!d) continue;
+      const cols = footprintCols(d, p.rot, p.x, p.z, N);
+      const c = this.characterOf?.(d);
+      buildingWildCols += cols.length * (c ? buildingWildWeight(c.nature) : 1);
+      if (c && c.light > 0 && p.progress >= 1 && cols.length) {
+        let sx = 0, sz = 0;
+        for (const col of cols) { sx += col % N; sz += Math.floor(col / N); }
+        lights.push({ x: sx / cols.length, z: sz / cols.length, r: lightReach(c.light) });
+      }
+    }
+    return {
+      flowerCols, treeCols: this.treeCols as ReadonlySet<number>, farmland: this.farmland as ReadonlySet<number>, crops: this.farm.crops.size,
+      buildingCols: this.buildingCols as ReadonlySet<number>, buildingWildCols, lights,
+    };
   }
+
+  /** 建物の性格（まだ計算できていなければ undefined）。main.ts が CharacterStore をつなぐ */
+  characterOf: ((d: BuildingDesign) => BuildingCharacter | undefined) | null = null;
+  /** 建物の性格が新しく計算できた（野生度と灯りを数え直す） */
+  characterReady() { this.env(); }
 
   /**
    * その列に立っている木の形（鳥がとまる位置に使う）。ground：根元の高さ、top：てっぺん、radius：葉の広がり、trunk：幹の太さ（半径）。
@@ -1582,7 +1608,8 @@ export class GameController {
     // 建物：棚は保存のものに置き換える
     for (const g of this.buildingGeos.values()) g.dispose();
     this.buildingGeos.clear();
-    this.designs = new Map(save.buildings.designs.map((d) => [d.id, d]));
+    // 保存データは書き換えられるので、色はパレットの名前だけ、行列は有限の数 12 個だけを受け付ける（設計メモ 8 章）
+    this.designs = new Map(save.buildings.designs.map(sanitizeDesign).filter((d): d is BuildingDesign => !!d).map((d) => [d.id, d]));
     // 進み具合のない古い記録は、建ち終わった建物として読む
     this.placed = save.buildings.placed.filter(([id]) => this.designs.has(id)).map(([id, x, z, rot, progress]) => ({ id, x, z, rot, progress: progress ?? 1 }));
     if (this.selectedDesign && !this.designs.has(this.selectedDesign)) this.selectedDesign = null;

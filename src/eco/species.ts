@@ -78,6 +78,8 @@ const M = (min?: number, max?: number): LandNeed => ({ lands: ['meadow'], min, m
 const FL = (min: number): LandNeed => ({ lands: ['flowerField'], min });
 const W = (min: number): LandNeed => ({ lands: ['waterside'], min });
 const D = (min: number): LandNeed => ({ lands: ['deepWater'], min });
+const DARK_W = (min: number): LandNeed => ({ lands: ['darkWaterside'], min });
+const DARK_F = (min: number): LandNeed => ({ lands: ['darkForest'], min });
 const FARM = (min: number): LandNeed => ({ lands: ['farm'], min });
 const FLFARM = (min: number): LandNeed => ({ lands: ['flowerField', 'farm'], min });
 
@@ -105,17 +107,17 @@ const VISITOR_SPECS: VisitorSpec[] = [
     need: { land: [F(25)] }, when: (m) => isDay(m.hour),
     hint: '森の奥から、木をたたく音がするらしい', note: '木の幹にとまって、こつこつたたく。', likesWhen: '昼' },
   { id: 'firefly', name: 'ホタル', icon: '✨', rarity: 'uncommon', habitat: 'grassNearWater', motion: 'glow',
-    need: { land: [W(5), M(5)], wild: { min: 3 } }, when: (m) => m.season === 1 && m.seasonProgress < 0.5 && isNight(m.hour),
-    hint: '初夏の夜、人の手の少ない水辺の草むらが光るらしい', note: '初夏の夜だけ、水辺の草むらで光る。畑や道が多いと来ない。', likesWhen: '初夏の夜' },
+    need: { land: [DARK_W(5), M(5)], wild: { min: 3 } }, when: (m) => m.season === 1 && m.seasonProgress < 0.5 && isNight(m.hour),
+    hint: '初夏の夜、人の手の少ない暗い水辺の草むらが光るらしい', note: '初夏の夜だけ、水辺の草むらで光る。畑や道が多い所や、家の灯りの近くには来ない。', likesWhen: '初夏の夜' },
   { id: 'snail', name: 'カタツムリ', icon: '🐌', rarity: 'uncommon', habitat: 'flowerOrFarm', motion: 'crawl',
     need: { land: [FLFARM(10)] }, when: (m) => m.raining && isNight(m.hour),
     hint: '雨の夜、花や畑のそばをはうものがいるらしい', note: '雨の夜だけ、花や畑のそばをゆっくりはう。', likesWhen: '雨の夜' },
   { id: 'longtailedTit', name: 'シマエナガ', icon: '🤍', rarity: 'rare', habitat: 'tree', motion: 'perch',
     need: { land: [F(15)] }, when: (m) => m.season === 3 && isDay(m.hour),
     hint: '冬の木の枝に、白くて丸いものがいるらしい', note: '冬の昼、木の枝にとまる小さな白い鳥。', likesWhen: '冬の昼' },
-  { id: 'owl', name: 'フクロウ', icon: '🦉', rarity: 'rare', habitat: 'tree', motion: 'perch',
-    need: { land: [F(40)] }, when: (m) => isNight(m.hour),
-    hint: 'とても深い森の夜、木の上から見ているものがいるらしい', note: '夜、深い森の木の上にとまっている。', likesWhen: '夜' },
+  { id: 'owl', name: 'フクロウ', icon: '🦉', rarity: 'rare', habitat: 'darkTree', motion: 'perch',
+    need: { land: [DARK_F(40)] }, when: (m) => isNight(m.hour),
+    hint: 'とても深くて暗い森の夜、木の上から見ているものがいるらしい', note: '夜、深い森の木の上にとまっている。家の灯りの近くには来ない。', likesWhen: '夜' },
   { id: 'kingfisher', name: 'カワセミ', icon: '💎', rarity: 'rare', habitat: 'waterside', motion: 'fly',
     need: { land: [W(5), D(5)], wild: { min: 4 } }, when: (m) => isMorning(m.hour),
     hint: '魚のいる、人の手の少ない水辺に、朝だけ青い鳥が来るらしい', note: '魚のいる水辺に朝だけ来る、青く光る鳥。畑や道が多いと来ない。', likesWhen: '朝・魚がいる' },

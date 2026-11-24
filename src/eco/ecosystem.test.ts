@@ -42,8 +42,10 @@ describe('visitors arrive', () => {
     expect(r.arrive).not.toContain('butterfly');
   });
   it('fireflyEarlySummerNight', () => {
-    const e = env({ waterside: 5, meadow: 5 });
+    const e = env({ waterside: 5, darkWaterside: 5, meadow: 5 });
     expect(checkEcosystem(state(), e, { season: 1, seasonProgress: 0.3, hour: 22, raining: false }, NOW, always(0)).arrive).toContain('firefly');
+    // 水辺が灯りに照らされていると来ない
+    expect(checkEcosystem(state(), env({ waterside: 5, darkWaterside: 4, meadow: 5 }), { season: 1, seasonProgress: 0.3, hour: 22, raining: false }, NOW, always(0)).arrive).not.toContain('firefly');
     expect(checkEcosystem(state(), e, { season: 1, seasonProgress: 0.7, hour: 22, raining: false }, NOW, always(0)).arrive).not.toContain('firefly');
   });
 });

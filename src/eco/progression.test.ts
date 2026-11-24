@@ -41,7 +41,7 @@ function* allEnvs(): Generator<EnvCounts> {
       for (const human of [0, 5]) {
         const share = farm + human;
         const wild = share < 2 ? 5 : share < 5 ? 4 : share < 10 ? 3 : share < 20 ? 2 : 1;
-        yield { ...emptyEnv(), ground: 100, forest, meadow, flowerField, farm, waterside, deepWater, human, crops: farm ? 1 : 0, wild };
+        yield { ...emptyEnv(), ground: 100, forest, meadow, flowerField, farm, waterside, deepWater, human, darkForest: forest, darkWaterside: waterside, crops: farm ? 1 : 0, wild };
       }
     }
 }

@@ -4,7 +4,7 @@
  * 規格：docs/superpowers/specs/2026-11-19-building-import-design.md
  */
 import { LIMITS, UNITS_PER_VOXEL } from './limits';
-import { colorOfName } from './palette';
+import { colorOfName, isPaletteName } from './palette';
 
 export type IssueCode =
   | 'json' | 'file_size' | 'no_geometry' | 'poly_mesh' | 'no_color' | 'too_many_cubes' | 'too_many_bones' | 'too_deep'
@@ -338,4 +338,21 @@ export function parseBuilding(text: string): ParseResult {
   };
   const key = out.map((c) => c.m.map((v) => (Math.round(v * 1e4) / 1e4).toString()).join(',') + ':' + c.color).join(';');
   return { ok: true, design: { id: fnv1a(key), name: r.name, cubes: out, bounds } };
+}
+
+/**
+ * 保存データから読んだ建物を確かめる（保存データは書き換えられるため）：
+ * 色がパレットの名前で、行列が有限の数 12 個の直方体だけを残す（上限 512 個）。外形と名前の形も確かめる。残らなければ null
+ */
+export function sanitizeDesign(d: unknown): BuildingDesign | null {
+  if (!isObj(d) || typeof d.id !== 'string' || !Array.isArray(d.cubes) || !isObj(d.bounds)) return null;
+  const b = d.bounds;
+  const okVec = (v: unknown) => Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= 1000);
+  if (!okVec(b.min) || !okVec(b.max)) return null;
+  const cubes = d.cubes
+    .filter((c): c is BuildingCube => isObj(c) && isPaletteName(c.color) && Array.isArray(c.m) && c.m.length === 12 && c.m.every((v) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 1000))
+    .slice(0, LIMITS.cubes)
+    .map((c) => ({ m: [...c.m], color: c.color }));
+  if (!cubes.length) return null;
+  return { id: d.id, name: typeof d.name === 'string' ? d.name : '名前のない建物', cubes, bounds: { min: [...(b.min as Vec3)] as Vec3, max: [...(b.max as Vec3)] as Vec3 } };
 }

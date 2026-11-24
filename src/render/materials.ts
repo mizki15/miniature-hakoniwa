@@ -32,7 +32,20 @@ export const U = {
   detail: uniform(4), // 小物のボクセルの細かさ
   wind: uniform(1),
   now: uniform(0), // 波紋用の時計（秒）
+  windowGlow: uniform(0), // 0..1 建物の窓の灯り（夜 19〜5 時に 1）
 };
+
+/** 窓の灯りの色（ブルームでにじむ明るさ） */
+const WINDOW_LIGHT = new THREE.Color(1.0, 0.72, 0.38).multiplyScalar(2.2);
+
+/** 窓の灯りの強さ：19〜5 時は 1、18〜19 時と 5〜6 時は少しずつ */
+export function windowGlowAt(hour: number): number {
+  const h = ((hour % 24) + 24) % 24;
+  if (h >= 19 || h < 5) return 1;
+  if (h >= 18) return h - 18;
+  if (h < 6) return 6 - h;
+  return 0;
+}
 
 /** 波紋：[x, z, 開始時刻, 強さ] × RIPPLES */
 export const RIPPLES = 12;
@@ -260,7 +273,7 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
  * 小物（木・花）：頂点カラー・季節の色・AO・風で揺れる。
  * swayLinear：背の低いもの（花）向けの揺れ。高さに比例して揺らす
  */
-export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean } = {}): THREE.MeshStandardNodeMaterial {
+export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean; windows?: boolean } = {}): THREE.MeshStandardNodeMaterial {
   const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
   const pL: N = positionLocal; // ※インスタンスの行列を適用した後の座標（箱庭全体の中での位置）
   const pG: N = positionGeometry; // モデル自身の座標（根元が y=0）
@@ -288,7 +301,9 @@ export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean } = 
   const micro = floor(pG.mul(U.detail).sub(nG.mul(0.5)));
   const jitter = hash3(micro).mul(0.12).add(0.94);
   const aoF = mix(float(0.5), float(1), attribute('ao', 'float'));
-  finishSurface(m, col.mul(jitter).mul(aoF));
+  // 建物の窓（veg 4）：夜に灯りがともる
+  const windows = opts.windows ? near(veg, 4).select(vec3(WINDOW_LIGHT.r, WINDOW_LIGHT.g, WINDOW_LIGHT.b).mul(U.windowGlow), vec3(0)) : null;
+  finishSurface(m, col.mul(jitter).mul(aoF), windows);
   return m;
 }
 

@@ -26,13 +26,35 @@ export interface EnvInput {
   crops: number;
   /** 建物の足元の列 */
   buildingCols?: ReadonlySet<number>;
+  /**
+   * 野生度に数える建物の足元（列の数を、建物の自然の星で重み付けしたもの）。
+   * 無ければ建物の足元の列の数そのもの
+   */
+  buildingWildCols?: number;
+  /** 建物の灯り：中心の列の座標と、届く距離（列） */
+  lights?: readonly Light[];
 }
 
+export interface Light { x: number; z: number; r: number }
+
+/** 灯りの届く距離：灯りの星 1 で 4 列、星 1 つごとに 2 列ずつ広がる */
+export const lightReach = (stars: number) => (stars > 0 ? 2 + stars * 2 : 0);
+
+/** 建物の自然の星 → 野生度に数える重み（★5 のかやぶきの家は足元の 2 割、★1 の鉄とガラスの家は全部） */
+export const buildingWildWeight = (nature: number) => (6 - nature) / 5;
+
+export const litBy = (lights: readonly Light[] | undefined, col: number) => {
+  if (!lights?.length) return false;
+  const x = col % FRAME, z = (col - x) / FRAME;
+  return lights.some((l) => (l.x - x) ** 2 + (l.z - z) ** 2 <= l.r * l.r);
+};
+
 /** 割合と上限で条件にする土地の型 */
-export type Land = 'forest' | 'meadow' | 'flowerField' | 'farm' | 'waterside' | 'deepWater' | 'human';
-export const LANDS: Land[] = ['forest', 'meadow', 'flowerField', 'farm', 'waterside', 'deepWater', 'human'];
+export type Land = 'forest' | 'meadow' | 'flowerField' | 'farm' | 'waterside' | 'deepWater' | 'human' | 'darkWaterside' | 'darkForest';
+export const LANDS: Land[] = ['forest', 'meadow', 'flowerField', 'farm', 'waterside', 'deepWater', 'human', 'darkWaterside', 'darkForest'];
 export const LAND_NAMES: Record<Land, string> = {
   forest: '森', meadow: '草原', flowerField: '花畑', farm: '畑', waterside: '水辺', deepWater: '深い水', human: '人の手',
+  darkWaterside: '灯りの届かない水辺', darkForest: '灯りの届かない森',
 };
 
 /** 列の数。ground は開いた区画の列の合計（割合の分母） */
@@ -43,14 +65,14 @@ export type EnvCounts = Record<Land, number> & {
   wild: number;
 };
 
-export const emptyEnv = (): EnvCounts => ({ ground: 0, forest: 0, meadow: 0, flowerField: 0, farm: 0, waterside: 0, deepWater: 0, human: 0, crops: 0, wild: 5 });
+export const emptyEnv = (): EnvCounts => ({ ground: 0, forest: 0, meadow: 0, flowerField: 0, farm: 0, waterside: 0, deepWater: 0, human: 0, darkWaterside: 0, darkForest: 0, crops: 0, wild: 5 });
 
 /** その土地の型が、開いた地面に占める割合（%） */
 export const sharePct = (e: EnvCounts, land: Land) => (e.ground > 0 ? (e[land] / e.ground) * 100 : 0);
 
 /**
  * 野生度（星 5 段階）：畑・道・建物の足元が占める割合から決める。
- * 建物の素材の自然らしさは、建物の性格を計算するようになってから足す（v0.12）。
+ * 建物の足元は、その建物の自然の星で重み付けする（buildingWildWeight）。
  */
 export const WILD_STEPS = [2, 5, 10, 20]; // この % 未満なら ★5・★4・★3・★2、それ以上は ★1
 export function wildness(humanPct: number): number {
@@ -58,7 +80,8 @@ export function wildness(humanPct: number): number {
   return i < 0 ? 1 : 5 - i;
 }
 
-export type Habitat = 'flower' | 'flowerCrop' | 'farm' | 'waterside' | 'deepWater' | 'tree' | 'grassNearWater' | 'flowerOrFarm';
+/** darkTree・grassNearWater は灯りの届かない所だけ（フクロウ・ホタル） */
+export type Habitat = 'flower' | 'flowerCrop' | 'farm' | 'waterside' | 'deepWater' | 'tree' | 'darkTree' | 'grassNearWater' | 'flowerOrFarm';
 
 const N = FRAME;
 const isWater = (w: WorldData, col: number) => w.heights[col] > 0 && w.heights[col] < w.waterLevel;
@@ -88,7 +111,7 @@ export const FOREST_REACH = 2;
 export const SHORE_REACH = 2;
 
 /** 列ごとの土地の型（0 そのほか・閉じた区画）。テストと、将来の表示に使う */
-export type ExclusiveLand = Exclude<Land, 'deepWater'>;
+export type ExclusiveLand = Exclude<Land, 'deepWater' | 'darkWaterside' | 'darkForest'>;
 export const LAND_CODE: Record<ExclusiveLand, number> = { waterside: 1, farm: 2, human: 3, forest: 4, flowerField: 5, meadow: 6 };
 /** 水面の列の番号（土地の型には数えない） */
 export const WATER_CODE = 7;
@@ -144,15 +167,21 @@ export function countEnvironment(i: EnvInput): EnvCounts {
   const codes = classifyColumns(i);
   const byCode: ExclusiveLand[] = [];
   for (const l of Object.keys(LAND_CODE) as ExclusiveLand[]) byCode[LAND_CODE[l]] = l;
+  let buildingCols = 0;
   for (let col = 0; col < N * N; col++) {
     if (w.heights[col] === 0) continue;
     e.ground++;
     const l = byCode[codes[col]];
     if (l) e[l]++;
+    if (l === 'human' && i.buildingCols?.has(col)) buildingCols++;
+    if ((l === 'waterside' || l === 'forest') && !litBy(i.lights, col)) e[l === 'waterside' ? 'darkWaterside' : 'darkForest']++;
     if (isDeep(w, col)) e.deepWater++;
   }
   e.crops = i.crops;
-  e.wild = wildness(e.ground ? ((e.farm + e.human) / e.ground) * 100 : 0);
+  // 道は、人の手の列から建物の足元を引いた分。建物は自然の星で重み付けした分だけ数える
+  const paths = e.human - buildingCols;
+  const built = i.buildingWildCols ?? buildingCols;
+  e.wild = wildness(e.ground ? ((e.farm + paths + built) / e.ground) * 100 : 0);
   return e;
 }
 
@@ -164,11 +193,12 @@ export function fitsHabitat(i: EnvInput, h: Habitat, col: number): boolean {
     case 'flower': return i.flowerCols.includes(col);
     case 'farm': return i.farmland.has(col);
     case 'tree': return i.treeCols.has(col);
+    case 'darkTree': return i.treeCols.has(col) && !litBy(i.lights, col);
     case 'flowerCrop':
     case 'flowerOrFarm': return i.flowerCols.includes(col) || i.farmland.has(col);
     case 'waterside': return isWaterside(w, col);
     case 'deepWater': return isDeep(w, col);
-    case 'grassNearWater': return isGrass(w, col) && nearWater(w, col);
+    case 'grassNearWater': return isGrass(w, col) && nearWater(w, col) && !litBy(i.lights, col);
   }
 }
 
@@ -180,13 +210,14 @@ export function habitatCols(i: EnvInput, h: Habitat): number[] {
     case 'flower': return uniq(i.flowerCols);
     case 'farm': return uniq(i.farmland);
     case 'tree': return uniq(i.treeCols);
+    case 'darkTree': return uniq(i.treeCols).filter((c) => !litBy(i.lights, c));
     case 'flowerCrop':
     case 'flowerOrFarm': return uniq([...i.flowerCols, ...i.farmland]);
     default: {
       const out: number[] = [];
       for (let col = 0; col < N * N; col++) {
         if (w.heights[col] === 0) continue;
-        if (h === 'waterside' ? isWaterside(w, col) : h === 'deepWater' ? isDeep(w, col) : isGrass(w, col) && col % 2 === 0 && nearWater(w, col)) out.push(col); // 水辺の草地は 1 列おき（半径 4 の水探しを半分に）
+        if (h === 'waterside' ? isWaterside(w, col) : h === 'deepWater' ? isDeep(w, col) : isGrass(w, col) && col % 2 === 0 && nearWater(w, col) && !litBy(i.lights, col)) out.push(col); // 水辺の草地は 1 列おき（半径 4 の水探しを半分に）
       }
       return out;
     }
