@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import {
-  abs, attribute, cameraFar, cameraNear, cameraPosition, clamp, dot, exp, float, floor, fract as fractT, instanceIndex,
+  abs, attribute, cameraFar, modelWorldMatrix, vec4, cameraNear, cameraPosition, clamp, dot, exp, float, floor, fract as fractT, instanceIndex,
   int, ivec3, length, max, mix, mx_noise_float as noiseT, mx_noise_vec3, normalize, normalGeometry, normalLocal, normalWorldGeometry, perspectiveDepthToViewZ,
   positionGeometry, positionLocal, positionView, positionWorld, pow, screenUV, sin, cos, smoothstep as smoothstepT, step, texture3DLoad, time,
   transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture, Fn, If, Loop,
@@ -95,8 +95,8 @@ export const toonGradient = (() => {
 })();
 
 /** 雲の影・ホタルの光・高い山の雪など、地形と小物に共通の仕上げ */
-function finishSurface(m: SurfaceMaterial, albedo: N, extraEmissive: N = null) {
-  const shade = float(1).sub(cloudShadowAt(positionWorld).mul(0.38));
+function finishSurface(m: SurfaceMaterial, albedo: N, extraEmissive: N = null, cloudOctaves = 3) {
+  const shade = float(1).sub(cloudShadowAt(positionWorld, cloudOctaves).mul(0.38));
   m.colorNode = albedo.mul(shade);
   const glow = (fireflyColor as N).mul(fireflyLight(positionWorld)).mul(albedo.add(0.08));
   m.emissiveNode = extraEmissive ? extraEmissive.add(glow) : glow;
@@ -175,7 +175,7 @@ function terrainBump(p: N, t: N, kind: N): N {
  * - 角丸は「平面が途切れる縁」だけに付ける（同じ平面の継ぎ目に溝を作らない）
  * - 頂点 AO、季節の色、水中のコースティクス
  */
-export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, height: number, lite = false, toon = false): SurfaceMaterial {
+export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, height: number, lite = false, toon = false, toonLite = false): SurfaceMaterial {
   // lite（低画質）：境界のなじませと角丸を省き、テクスチャ参照を 13 回 → 1 回に減らす
   // toon（試作）：lite と同じ軽さに加え、光を段に分け、質感の凹凸と水中のコースティクスも省く（線は後処理で描く）
   if (toon) lite = true;
@@ -285,7 +285,8 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   const c2: N = float(1).sub(abs(mx_noise_float(vec3(cp.mul(1.7).add(3.1), time.mul(0.7)))));
   const caustics = (U.sunColor as N).mul(pow(c1, 8).add(pow(c2, 10)).mul(under)).mul(U.daylight).mul(0.55);
 
-  finishSurface(m, albedo, toon ? null : caustics);
+  // トゥーン・軽：雲の影のノイズを 3 段 → 1 段に
+  finishSurface(m, albedo, toon ? null : caustics, toonLite ? 1 : 3);
   return m;
 }
 
@@ -293,7 +294,11 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
  * 小物（木・花）：頂点カラー・季節の色・AO・風で揺れる。
  * swayLinear：背の低いもの（花）向けの揺れ。高さに比例して揺らす
  */
-export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean; windows?: boolean; toon?: boolean } = {}): SurfaceMaterial {
+/**
+ * far（トゥーン・軽）：カメラからこの距離より遠い小物を、根元へ縮めて地面の下にしまう（遠くの形を描かない）。
+ * 0.75×far から縮み始める。根元の高さは、モデルの高さ（positionGeometry.y）から見積もる
+ */
+export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean; windows?: boolean; toon?: boolean; far?: number; cloudOctaves?: number } = {}): SurfaceMaterial {
   const m: SurfaceMaterial = opts.toon
     ? new THREE.MeshToonNodeMaterial({ gradientMap: toonGradient })
     : new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
@@ -309,7 +314,15 @@ export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean; win
   const gust = sin(time.mul(0.9).add(phase)).mul(0.7).add(sin(time.mul(2.3).add(phase.mul(2.1))).mul(0.3));
   const gust2 = cos(time.mul(0.7).add(phase.mul(1.7))).mul(0.6);
   // 建物など、風で揺らさないもの（sway: false）には付けない
-  if (opts.sway !== false) m.positionNode = pL.add(vec3(gust, 0, gust2).mul(sway));
+  let pos: N = opts.sway !== false ? pL.add(vec3(gust, 0, gust2).mul(sway)) : pL;
+  if (opts.far) {
+    const rootY = pL.y.sub(max(pG.y, 0));
+    const rootW = (modelWorldMatrix as N).mul(vec4(pL.x, rootY, pL.z, 1)).xyz;
+    const keep = float(1).sub(smoothstep(opts.far * 0.75, opts.far, length(rootW.sub(cameraPosition))));
+    pos = vec3(pos.x, mix(rootY.sub(1.5), pos.y, keep), pos.z);
+    if (opts.sway === false) pos = vec3(pL.x, mix(rootY.sub(1.5), pL.y, keep), pL.z);
+  }
+  if (opts.sway !== false || opts.far) m.positionNode = pos;
   m.receivedShadowPositionNode = positionWorld.add(normalWorldGeometry.mul(SHADOW_OFFSET));
   // カメラのすぐ近くの木は点描のように透かす（近づいた時に視界をふさがないように）
   m.alphaHash = true;
@@ -325,7 +338,7 @@ export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean; win
   const aoF = mix(float(0.5), float(1), attribute('ao', 'float'));
   // 建物の窓（veg 4）：夜に灯りがともる
   const windows = opts.windows ? near(veg, 4).select(vec3(WINDOW_LIGHT.r, WINDOW_LIGHT.g, WINDOW_LIGHT.b).mul(U.windowGlow), vec3(0)) : null;
-  finishSurface(m, col.mul(jitter).mul(aoF), windows);
+  finishSurface(m, col.mul(jitter).mul(aoF), windows, opts.cloudOctaves ?? 3);
   return m;
 }
 

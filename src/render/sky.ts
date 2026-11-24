@@ -37,8 +37,8 @@ function starLayer(dir: N, scale: number, density: number, size: number): N {
   return float(1).sub(smoothstep(0, size, d)).mul(on).mul(twinkle).mul(h.mul(0.6).add(0.4));
 }
 
-/** 背景（空）のノード */
-export function createSkyNode(): N {
+/** 背景（空）のノード。lite（トゥーン・軽）：雲のノイズを 4 → 2 段、星を 2 層 → 1 層に */
+export function createSkyNode(lite = false): N {
   const dir: N = normalize(positionWorldDirection);
   const elev = dir.y;
 
@@ -55,7 +55,7 @@ export function createSkyNode(): N {
 
   // 星（夜・晴れているほどよく見える）。水平線の下にも見える
   const starVis = SKY.night.mul(smoothstep(0.02, 0.25, ae)).mul(float(1).sub(SKY.cloudCover.mul(0.9)));
-  const stars = starLayer(dir, 90, 0.04, 0.09).add(starLayer(dir, 220, 0.05, 0.12).mul(0.6));
+  const stars = lite ? starLayer(dir, 90, 0.05, 0.1) : starLayer(dir, 90, 0.04, 0.09).add(starLayer(dir, 220, 0.05, 0.12).mul(0.6));
   col = col.add(vec3(0.95, 0.97, 1).mul(stars).mul(starVis).mul(1.6));
 
   // 流れ星：A → B を移動する明るい線
@@ -76,7 +76,7 @@ export function createSkyNode(): N {
   const uv = dir.xz.div(max(ae, 0.04)).mul(up.select(float(0.55), float(0.4)))
     .add(up.select(vec2(0, 0), vec2(37.1, -12.7)))
     .add(vec2(time.mul(0.012), time.mul(0.004)));
-  const n = mx_fractal_noise_float(vec3(uv, time.mul(0.01)), 4, 2.0, 0.5, 1).mul(0.5).add(0.5);
+  const n = mx_fractal_noise_float(vec3(uv, time.mul(0.01)), lite ? 2 : 4, 2.0, 0.5, 1).mul(0.5).add(0.5);
   const seaCover = cover.mul(0.6).add(0.35); // 雲海は晴れの日でもある程度広がる
   const cv = up.select(cover, seaCover);
   const cloud = smoothstep(float(0.74).sub(cv.mul(0.5)), float(0.9).sub(cv.mul(0.4)), n).mul(smoothstep(0.0, 0.18, ae));
@@ -94,11 +94,11 @@ export function createSkyNode(): N {
  * 雲の影：太陽の方向に沿って上空の雲の層まで投影し、同じようなノイズで影を作る。
  * 0 = 影なし, 1 = 濃い影。地形と小物のマテリアルで使う
  */
-export function cloudShadowAt(pw: N): N {
+export function cloudShadowAt(pw: N, octaves = 3): N {
   const sun: N = SKY.sunDir;
   const toCloud = float(60).sub(pw.y).div(max(sun.y, 0.15)); // 雲の層（高さ 60）までの距離
   const p = pw.xz.add(sun.xz.mul(toCloud)).mul(0.022).add(vec2(time.mul(0.012), time.mul(0.004)).mul(1.6));
-  const n = mx_fractal_noise_float(vec3(p, time.mul(0.01)), 3, 2.0, 0.5, 1).mul(0.5).add(0.5);
+  const n = mx_fractal_noise_float(vec3(p, time.mul(0.01)), octaves, 2.0, 0.5, 1).mul(0.5).add(0.5);
   const cover = SKY.cloudCover;
   const c = smoothstep(float(0.72).sub(cover.mul(0.5)), float(0.9).sub(cover.mul(0.4)), n);
   return c.mul(float(1).sub(SKY.night)).mul(smoothstep(0.0, 0.2, sun.y));

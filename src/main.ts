@@ -89,7 +89,21 @@ async function main() {
   // ---------- シーン・カメラ ----------
   const scene = new THREE.Scene();
   // 空：青空と雲、夜は星と流れ星（方向ベースなので見上げても破綻しない）
-  scene.backgroundNode = createSkyNode();
+  /**
+   * 描き方：ふつう（PBR と AO など）／トゥーン・高（試作。光を段に分け、線画を重ねる軽い描き方）／
+   * トゥーン・軽（さらに、影を小さく間引き、遠くの小物をしまい、描く解像度 75%、空と雲の影のノイズを減らす）
+   */
+  type RenderStyle = 'standard' | 'toon' | 'toonLite';
+  const isStyle = (v: string | null): v is RenderStyle => v === 'standard' || v === 'toon' || v === 'toonLite';
+  const storedStyle = localStorage.getItem('hakoniwa.renderStyle');
+  let renderStyle: RenderStyle = isStyle(storedStyle) ? storedStyle : 'standard';
+  const isToon = () => renderStyle !== 'standard';
+  /** トゥーン・軽で描く解像度 */
+  const TOON_LITE_SCALE = 0.75;
+  // 空（トゥーン・軽はノイズを減らした空。初めて使う時に作る）
+  const skyNodes: Partial<Record<'full' | 'lite', N>> = {};
+  const skyNodeOf = (s: RenderStyle) => (s === 'toonLite' ? (skyNodes.lite ??= createSkyNode(true)) : (skyNodes.full ??= createSkyNode()));
+  scene.backgroundNode = skyNodeOf(renderStyle);
   // 空気遠近法：遠くの地形ほど空の色にかすむ（近づいて見渡した時の奥行き感）
   const uFogNear = uniform(200), uFogFar = uniform(800);
   scene.fogNode = fog(SKY.horizon, rangeFogFactor(uFogNear, uFogFar).mul(0.55));
@@ -120,15 +134,12 @@ async function main() {
   let aaMode: AAMode = 'fxaa';
   let renderScale = 1;
   interface ScenePost { scenePass: ReturnType<typeof pass>; aoPass: ReturnType<typeof ao>; color: N; withAO: N; viewZ: N; isSky: N; depthTex: N; normalTex: N; temporal: { dispose(): void } | null }
-  /** 描き方：ふつう（PBR と AO など）／トゥーン（試作。光を段に分け、線画を重ねる軽い描き方） */
-  type RenderStyle = 'standard' | 'toon';
-  let renderStyle: RenderStyle = localStorage.getItem('hakoniwa.renderStyle') === 'toon' ? 'toon' : 'standard';
   let sp: ScenePost | null = null;
   const buildScenePost = (): ScenePost => {
     const spec = aaSpec(aaMode);
     const scenePass = pass(scene, camera, { samples: spec.samples });
     scenePass.setMRT(mrt(spec.velocity ? { output, normal: packNormalToRGB(normalView), velocity } : { output, normal: packNormalToRGB(normalView) }));
-    scenePass.setResolutionScale(renderScale);
+    scenePass.setResolutionScale(renderScale * (renderStyle === 'toonLite' ? TOON_LITE_SCALE : 1));
     const raw = scenePass.getTextureNode('output');
     const normalTex = scenePass.getTextureNode('normal');
     const depthTex = scenePass.getTextureNode('depth');
@@ -162,7 +173,7 @@ async function main() {
     }
     const { color, withAO, viewZ, isSky } = sp;
     // トゥーン：AO は使わず（GTAO の計算ごと飛ぶ）、深さと法線から線画を重ねる
-    const src: N = renderStyle === 'toon' ? toonOutline(color, sp.depthTex, sp.normalTex, camera) : aoOn ? withAO : color;
+    const src: N = isToon() ? toonOutline(color, sp.depthTex, sp.normalTex, camera) : aoOn ? withAO : color;
     // 空（背景）はぼかさない：星や雲がくっきり見えるように
     let out: N = dofOn ? isSky.select(src, dof(src, viewZ, uFocus, uFocal, uBokeh)) : src;
     // ブルーム：明るい所（ホタル・太陽の照り返し）がにじんで光る
@@ -183,14 +194,19 @@ async function main() {
 
   // ---------- 箱庭 ----------
   // 描き方ごとのマテリアル（トゥーンは初めて切り替えた時に作る）
-  const makeMats = (toon: boolean) => ({
-    waterMat: toon ? createToonWaterMaterial() : createWaterMaterial() as THREE.Material,
-    detailMat: createDetailMaterial(0, { toon }) as THREE.Material,
-    flowerMat: createDetailMaterial(0.12, { toon }) as THREE.Material, // 花は背が低いので高さに比例して揺らす
-    buildingMat: createDetailMaterial(0, { sway: false, windows: true, toon }) as THREE.Material, // 建物は風で揺らさない。窓は夜に光る
-  });
+  // トゥーン・軽：花・草・作物は 90 より遠いとしまう（木は箱庭の見た目の要なので残す）。雲の影のノイズは 1 段
+  const makeMats = (s: RenderStyle) => {
+    const toon = s !== 'standard', lite = s === 'toonLite';
+    const c = lite ? 1 : 3;
+    return {
+      waterMat: toon ? createToonWaterMaterial() : createWaterMaterial() as THREE.Material,
+      detailMat: createDetailMaterial(0, { toon, cloudOctaves: c }) as THREE.Material,
+      flowerMat: createDetailMaterial(0.12, { toon, far: lite ? 90 : 0, cloudOctaves: c }) as THREE.Material, // 花は背が低いので高さに比例して揺らす
+      buildingMat: createDetailMaterial(0, { sway: false, windows: true, toon, cloudOctaves: c }) as THREE.Material, // 建物は風で揺らさない。窓は夜に光る
+    };
+  };
   const styleMats: Partial<Record<RenderStyle, ReturnType<typeof makeMats>>> = {};
-  const matsOf = (s: RenderStyle) => (styleMats[s] ??= makeMats(s === 'toon'));
+  const matsOf = (s: RenderStyle) => (styleMats[s] ??= makeMats(s));
   const { waterMat, detailMat, flowerMat, buildingMat } = matsOf(renderStyle);
   const lowPolyFlowers = [0, 1, 2].map((v) => buildLowPolyFlower(v));
   let precip: { rain: THREE.InstancedMesh; snow: THREE.InstancedMesh } | null = null;
@@ -348,7 +364,7 @@ async function main() {
         typeTex.unpackAlignment = 1;
         typeTex.needsUpdate = true;
         terrainMat?.dispose();
-        terrainMat = createTerrainMaterial(typeTex, w.size, w.height, liteTerrain, renderStyle === 'toon');
+        terrainMat = createTerrainMaterial(typeTex, w.size, w.height, liteTerrain, isToon(), renderStyle === 'toonLite');
 
         // 地形（チャンクごと）・木・花。ローポリの花はボクセルの花が作れない 1/1 でも使う
         const hasVoxelFlowers = models.some((d) => d.kind === 'flower');
@@ -1187,25 +1203,31 @@ async function main() {
   aoInput.addEventListener('input', () => { uAO.value = parseFloat(aoInput.value); });
   $<HTMLInputElement>('bloom').addEventListener('change', (e) => { bloomOn = (e.target as HTMLInputElement).checked; updatePost(); });
 
-  // ---------- 描き方（ふつう／トゥーン） ----------
+  // ---------- 描き方（ふつう／トゥーン・高／トゥーン・軽） ----------
+  /** 影の地図の大きさ（トゥーン・軽は 1024 まで） */
+  function shadowSizeOf(size: number) { return renderStyle === 'toonLite' ? Math.min(1024, size) : size; }
   const styleSelect = $<HTMLSelectElement>('renderStyle');
   const lineInput = $<HTMLInputElement>('toonLine');
   const setRenderStyle = (s: RenderStyle) => {
     renderStyle = s;
     localStorage.setItem('hakoniwa.renderStyle', s);
     styleSelect.value = s;
-    $('toonLineRow').hidden = s !== 'toon';
+    $('toonLineRow').hidden = s === 'standard';
     // トゥーンでは、重い後処理（被写界深度・ブルーム）を切っておく（AO は使わない）。ふつうに戻したら画質のプリセットどおり
-    if (s === 'toon') { dofOn = false; bloomOn = false; setChecked('dof', false); setChecked('bloom', false); }
+    if (s !== 'standard') { dofOn = false; bloomOn = false; setChecked('dof', false); setChecked('bloom', false); }
     else { const p = QUALITY[quality]; aoOn = p.ao; dofOn = p.dof; bloomOn = p.bloom; setChecked('ssao', aoOn); setChecked('dof', dofOn); setChecked('bloom', bloomOn); }
     const old = terrainMat;
-    if (typeTex && world) terrainMat = createTerrainMaterial(typeTex, world.size, world.height, liteTerrain, s === 'toon');
+    if (typeTex && world) terrainMat = createTerrainMaterial(typeTex, world.size, world.height, liteTerrain, s !== 'standard', s === 'toonLite');
     game.swapMaterials({ ...matsOf(s), terrainMat: old !== terrainMat ? terrainMat : null });
     if (old && old !== terrainMat) old.dispose();
-    updatePost();
+    scene.backgroundNode = skyNodeOf(s);
+    // 影の大きさと間引き（トゥーン・軽は 1024・4 フレームに 1 回）
+    shadows.setMapSize(shadowSizeOf(QUALITY[quality].shadow));
+    applyShadowEvery();
+    updatePost(true);
   };
   styleSelect.value = renderStyle;
-  styleSelect.addEventListener('change', () => setRenderStyle(styleSelect.value === 'toon' ? 'toon' : 'standard'));
+  styleSelect.addEventListener('change', () => setRenderStyle(isStyle(styleSelect.value) ? styleSelect.value : 'standard'));
   lineInput.addEventListener('input', () => { uLine.value = parseFloat(lineInput.value); });
   $('toonLineRow').hidden = renderStyle !== 'toon';
 
@@ -1228,10 +1250,10 @@ async function main() {
     const p = QUALITY[q];
     renderer.setPixelRatio(p.pixelRatio);
     fit();
-    aoOn = p.ao; dofOn = p.dof && renderStyle !== 'toon'; bloomOn = p.bloom && renderStyle !== 'toon';
+    aoOn = p.ao; dofOn = p.dof && !isToon(); bloomOn = p.bloom && !isToon();
     setChecked('ssao', aoOn); setChecked('dof', dofOn); setChecked('bloom', bloomOn);
     updatePost();
-    shadows.setMapSize(p.shadow);
+    shadows.setMapSize(shadowSizeOf(p.shadow));
     $('qualityLabel').textContent = qualityAuto ? `→ ${QUALITY_NAMES[q]}` : '';
     if (p.lite !== liteTerrain) { liteTerrain = p.lite; if (regenerateIfNeeded && world) doRegen(true); }
   };
@@ -1499,10 +1521,12 @@ async function main() {
     $('aaBenchLabel').textContent = `${AA_NAMES[aaMode]}・${Math.round(renderScale * 100)}%：${r.msPerFrame} ms（${r.fps} fps）`;
   });
   $<HTMLInputElement>('shadowCascade').addEventListener('change', (e) => { shadows.cascade = (e.target as HTMLInputElement).checked; });
-  const applyShadowEvery = () => {
+  function applyShadowEvery() {
     const on = $<HTMLInputElement>('shadowThrottle').checked;
-    shadows.schedule.interval = on ? parseInt($<HTMLSelectElement>('shadowEvery').value, 10) : 1;
-  };
+    const n = on ? parseInt($<HTMLSelectElement>('shadowEvery').value, 10) : 1;
+    shadows.schedule.interval = renderStyle === 'toonLite' ? Math.max(4, n) : n;
+  }
+  applyShadowEvery();
   $<HTMLInputElement>('shadowThrottle').addEventListener('change', applyShadowEvery);
   $<HTMLSelectElement>('shadowEvery').addEventListener('change', applyShadowEvery);
   // 生き物の多さ（倍率）。上げたらすぐ 1 回判定して、増えた上限まで引っ越してくるようにする
