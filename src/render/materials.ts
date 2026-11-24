@@ -79,8 +79,23 @@ const fireflyLight = (pw: N): N => Fn(() => {
   return acc;
 })();
 
+/** 地形・小物のマテリアル（ふつうは PBR、トゥーンは光を段に分ける軽いもの） */
+export type SurfaceMaterial = THREE.MeshStandardNodeMaterial | THREE.MeshToonNodeMaterial;
+
+/**
+ * トゥーン（試作）の光の段：ハーフランバート（dotNL × 0.5 + 0.5）を 3 段に分ける。
+ * 影の側 0.5・横から 0.78・日なた 1
+ */
+export const toonGradient = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([128, 200, 255]), 3, 1, THREE.RedFormat, THREE.UnsignedByteType);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+})();
+
 /** 雲の影・ホタルの光・高い山の雪など、地形と小物に共通の仕上げ */
-function finishSurface(m: THREE.MeshStandardNodeMaterial, albedo: N, extraEmissive: N = null) {
+function finishSurface(m: SurfaceMaterial, albedo: N, extraEmissive: N = null) {
   const shade = float(1).sub(cloudShadowAt(positionWorld).mul(0.38));
   m.colorNode = albedo.mul(shade);
   const glow = (fireflyColor as N).mul(fireflyLight(positionWorld)).mul(albedo.add(0.08));
@@ -160,9 +175,13 @@ function terrainBump(p: N, t: N, kind: N): N {
  * - 角丸は「平面が途切れる縁」だけに付ける（同じ平面の継ぎ目に溝を作らない）
  * - 頂点 AO、季節の色、水中のコースティクス
  */
-export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, height: number, lite = false): THREE.MeshStandardNodeMaterial {
+export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, height: number, lite = false, toon = false): SurfaceMaterial {
   // lite（低画質）：境界のなじませと角丸を省き、テクスチャ参照を 13 回 → 1 回に減らす
-  const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.92, metalness: 0 });
+  // toon（試作）：lite と同じ軽さに加え、光を段に分け、質感の凹凸と水中のコースティクスも省く（線は後処理で描く）
+  if (toon) lite = true;
+  const m: SurfaceMaterial = toon
+    ? new THREE.MeshToonNodeMaterial({ gradientMap: toonGradient })
+    : new THREE.MeshStandardNodeMaterial({ roughness: 0.92, metalness: 0 });
   const pL: N = positionLocal;
   const nL: N = normalLocal;
 
@@ -238,8 +257,9 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
 
   // --- 色 ---
   // ボクセルごとのゆらぎは弱め＋なめらかなノイズで、平面のつながりを保つ
-  const jitter = hash3(voxel).mul(0.05).add(mx_noise_float(pL.mul(0.18)).mul(0.06)).add(0.97);
-  const aoF = mix(float(0.42), float(1), attribute('ao', 'float'));
+  // トゥーンはノイズを使わず、ボクセルごとの小さな明るさの差だけ（平らな塗り）
+  const jitter = toon ? hash3(voxel).mul(0.06).add(0.97) : hash3(voxel).mul(0.05).add(mx_noise_float(pL.mul(0.18)).mul(0.06)).add(0.97);
+  const aoF = toon ? mix(float(0.55), float(1), attribute('ao', 'float')) : mix(float(0.42), float(1), attribute('ao', 'float'));
   const edge = max(abs(eu), abs(ev)).mul(U.roundEdges);
   let albedo: N = blended.mul(jitter).mul(aoF).mul(float(1).sub(edge.mul(0.06)));
   // 畑の畝（うね）：耕した土の上面に筋を入れる
@@ -265,7 +285,7 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   const c2: N = float(1).sub(abs(mx_noise_float(vec3(cp.mul(1.7).add(3.1), time.mul(0.7)))));
   const caustics = (U.sunColor as N).mul(pow(c1, 8).add(pow(c2, 10)).mul(under)).mul(U.daylight).mul(0.55);
 
-  finishSurface(m, albedo, caustics);
+  finishSurface(m, albedo, toon ? null : caustics);
   return m;
 }
 
@@ -273,8 +293,10 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
  * 小物（木・花）：頂点カラー・季節の色・AO・風で揺れる。
  * swayLinear：背の低いもの（花）向けの揺れ。高さに比例して揺らす
  */
-export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean; windows?: boolean } = {}): THREE.MeshStandardNodeMaterial {
-  const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
+export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean; windows?: boolean; toon?: boolean } = {}): SurfaceMaterial {
+  const m: SurfaceMaterial = opts.toon
+    ? new THREE.MeshToonNodeMaterial({ gradientMap: toonGradient })
+    : new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
   const pL: N = positionLocal; // ※インスタンスの行列を適用した後の座標（箱庭全体の中での位置）
   const pG: N = positionGeometry; // モデル自身の座標（根元が y=0）
   const nG: N = normalGeometry;
@@ -304,6 +326,27 @@ export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean; win
   // 建物の窓（veg 4）：夜に灯りがともる
   const windows = opts.windows ? near(veg, 4).select(vec3(WINDOW_LIGHT.r, WINDOW_LIGHT.g, WINDOW_LIGHT.b).mul(U.windowGlow), vec3(0)) : null;
   finishSurface(m, col.mul(jitter).mul(aoF), windows);
+  return m;
+}
+
+/**
+ * トゥーン（試作）の水：画面の読み返し（屈折・水の厚み）をしない、半透明の平らな塗り。
+ * 斜めから見るほど空の色、ゆっくり流れる白い波の線、昼夜で明るさを変える（光の計算はしない）
+ */
+export function createToonWaterMaterial(): THREE.MeshBasicNodeMaterial {
+  const m = new THREE.MeshBasicNodeMaterial({ transparent: true });
+  m.depthWrite = true;
+  const wp: N = positionWorld.xz;
+  const V = normalize(cameraPosition.sub(positionWorld));
+  // フレネルを 2 段に（遠く・斜めは空の色）
+  const fres = step(0.55, pow(float(1).sub(max(V.y, 0)), 2));
+  let col: N = mix((U.deepWater as N).mul(1.35), (U.skyColor as N).mul(0.9), fres.mul(0.55).add(0.1));
+  // 波の線：ノイズの 0 の付近を細い線に
+  const n: N = mx_noise_float(vec3(wp.mul(0.35), time.mul(0.25)));
+  const wave = float(1).sub(smoothstep(0.03, 0.07, abs(n)));
+  col = mix(col, vec3(0.92, 0.97, 1), wave.mul(0.55));
+  m.colorNode = col.mul(mix(float(0.18), float(1), U.daylight));
+  m.opacityNode = float(0.82);
   return m;
 }
 

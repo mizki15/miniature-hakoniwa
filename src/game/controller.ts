@@ -263,6 +263,25 @@ export class GameController {
 
   // ---------- 読み込み ----------
 
+  /**
+   * 描き方（ふつう／トゥーン）を切り替える：マテリアルを差し替える（メッシュは作り直さない）。
+   * これから作るメッシュも新しいマテリアルを使う
+   */
+  swapMaterials(next: Omit<ControllerDeps, 'diorama' | 'worker'> & { terrainMat: THREE.Material | null }) {
+    const map = new Map<THREE.Material, THREE.Material>([
+      [this.deps.waterMat, next.waterMat], [this.deps.detailMat, next.detailMat],
+      [this.deps.flowerMat, next.flowerMat], [this.deps.buildingMat, next.buildingMat],
+    ]);
+    if (this.terrainMat && next.terrainMat) { map.set(this.terrainMat, next.terrainMat); this.terrainMat = next.terrainMat; }
+    this.deps.waterMat = next.waterMat; this.deps.detailMat = next.detailMat;
+    this.deps.flowerMat = next.flowerMat; this.deps.buildingMat = next.buildingMat;
+    for (const d of this.decor) d.mat = map.get(d.mat) ?? d.mat;
+    this.deps.diorama.traverse((o) => {
+      const m = (o as THREE.Mesh).material;
+      if (m && !Array.isArray(m) && map.has(m)) (o as THREE.Mesh).material = map.get(m)!;
+    });
+  }
+
   load(w: WorldData, chunks: ChunkMesh[], models: DetailModel[], placements: PlotPlacements[], lowPolyFlowers: THREE.BufferGeometry[] | null, typeTex: THREE.Data3DTexture, terrainMat: THREE.Material) {
     this.world = w;
     this.typeTex = typeTex;

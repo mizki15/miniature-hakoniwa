@@ -13,7 +13,8 @@ import { Ambience } from './audio';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { denoise } from 'three/addons/tsl/display/DenoiseNode.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { FIREFLIES_ON, RIPPLES, RIPPLES_ON, U, createDetailMaterial, createTerrainMaterial, createWaterMaterial, fireflyData, rippleData, windowGlowAt } from './render/materials';
+import { FIREFLIES_ON, RIPPLES, RIPPLES_ON, U, createDetailMaterial, createTerrainMaterial, createToonWaterMaterial, createWaterMaterial, fireflyData, rippleData, windowGlowAt, type SurfaceMaterial } from './render/materials';
+import { toonOutline, uLine } from './render/toon';
 import { SAMPLES as QUALITY_SAMPLES, nextQuality } from './render/autoQuality';
 import { createDaylight } from './render/daylight';
 import { createShadowSystem } from './render/shadows';
@@ -118,7 +119,10 @@ async function main() {
   const uBokeh = uniform(1.8);
   let aaMode: AAMode = 'fxaa';
   let renderScale = 1;
-  interface ScenePost { scenePass: ReturnType<typeof pass>; aoPass: ReturnType<typeof ao>; color: N; withAO: N; viewZ: N; isSky: N; temporal: { dispose(): void } | null }
+  interface ScenePost { scenePass: ReturnType<typeof pass>; aoPass: ReturnType<typeof ao>; color: N; withAO: N; viewZ: N; isSky: N; depthTex: N; normalTex: N; temporal: { dispose(): void } | null }
+  /** 描き方：ふつう（PBR と AO など）／トゥーン（試作。光を段に分け、線画を重ねる軽い描き方） */
+  type RenderStyle = 'standard' | 'toon';
+  let renderStyle: RenderStyle = localStorage.getItem('hakoniwa.renderStyle') === 'toon' ? 'toon' : 'standard';
   let sp: ScenePost | null = null;
   const buildScenePost = (): ScenePost => {
     const spec = aaSpec(aaMode);
@@ -148,7 +152,7 @@ async function main() {
     const aoValue = (denoise(aoPass.getTextureNode(), depthTex, sceneNormal, camera) as N).r;
     const withAO = vec4(color.rgb.mul(mix(float(1), aoValue, uAO)), 1);
     const isSky = (depthTex as N).r.greaterThanEqual(0.99999);
-    return { scenePass, aoPass, color, withAO, viewZ, isSky, temporal };
+    return { scenePass, aoPass, color, withAO, viewZ, isSky, depthTex, normalTex, temporal };
   };
   let dofOn = true, aoOn = true, bloomOn = true;
   const updatePost = (rebuildScene = false) => {
@@ -157,7 +161,8 @@ async function main() {
       sp = buildScenePost();
     }
     const { color, withAO, viewZ, isSky } = sp;
-    const src: N = aoOn ? withAO : color;
+    // トゥーン：AO は使わず（GTAO の計算ごと飛ぶ）、深さと法線から線画を重ねる
+    const src: N = renderStyle === 'toon' ? toonOutline(color, sp.depthTex, sp.normalTex, camera) : aoOn ? withAO : color;
     // 空（背景）はぼかさない：星や雲がくっきり見えるように
     let out: N = dofOn ? isSky.select(src, dof(src, viewZ, uFocus, uFocal, uBokeh)) : src;
     // ブルーム：明るい所（ホタル・太陽の照り返し）がにじんで光る
@@ -177,15 +182,21 @@ async function main() {
   updatePost();
 
   // ---------- 箱庭 ----------
-  const waterMat = createWaterMaterial();
-  const detailMat = createDetailMaterial();
-  const flowerMat = createDetailMaterial(0.12); // 花は背が低いので高さに比例して揺らす
-  const buildingMat = createDetailMaterial(0, { sway: false, windows: true }); // 建物は風で揺らさない。窓は夜に光る
+  // 描き方ごとのマテリアル（トゥーンは初めて切り替えた時に作る）
+  const makeMats = (toon: boolean) => ({
+    waterMat: toon ? createToonWaterMaterial() : createWaterMaterial() as THREE.Material,
+    detailMat: createDetailMaterial(0, { toon }) as THREE.Material,
+    flowerMat: createDetailMaterial(0.12, { toon }) as THREE.Material, // 花は背が低いので高さに比例して揺らす
+    buildingMat: createDetailMaterial(0, { sway: false, windows: true, toon }) as THREE.Material, // 建物は風で揺らさない。窓は夜に光る
+  });
+  const styleMats: Partial<Record<RenderStyle, ReturnType<typeof makeMats>>> = {};
+  const matsOf = (s: RenderStyle) => (styleMats[s] ??= makeMats(s === 'toon'));
+  const { waterMat, detailMat, flowerMat, buildingMat } = matsOf(renderStyle);
   const lowPolyFlowers = [0, 1, 2].map((v) => buildLowPolyFlower(v));
   let precip: { rain: THREE.InstancedMesh; snow: THREE.InstancedMesh } | null = null;
   const rainAmount = uniform(0);
   const snowAmount = uniform(0);
-  let terrainMat: THREE.MeshStandardNodeMaterial | null = null;
+  let terrainMat: SurfaceMaterial | null = null;
   let typeTex: THREE.Data3DTexture | null = null;
   const diorama = new THREE.Group();
   scene.add(diorama);
@@ -337,7 +348,7 @@ async function main() {
         typeTex.unpackAlignment = 1;
         typeTex.needsUpdate = true;
         terrainMat?.dispose();
-        terrainMat = createTerrainMaterial(typeTex, w.size, w.height, liteTerrain);
+        terrainMat = createTerrainMaterial(typeTex, w.size, w.height, liteTerrain, renderStyle === 'toon');
 
         // 地形（チャンクごと）・木・花。ローポリの花はボクセルの花が作れない 1/1 でも使う
         const hasVoxelFlowers = models.some((d) => d.kind === 'flower');
@@ -1176,6 +1187,28 @@ async function main() {
   aoInput.addEventListener('input', () => { uAO.value = parseFloat(aoInput.value); });
   $<HTMLInputElement>('bloom').addEventListener('change', (e) => { bloomOn = (e.target as HTMLInputElement).checked; updatePost(); });
 
+  // ---------- 描き方（ふつう／トゥーン） ----------
+  const styleSelect = $<HTMLSelectElement>('renderStyle');
+  const lineInput = $<HTMLInputElement>('toonLine');
+  const setRenderStyle = (s: RenderStyle) => {
+    renderStyle = s;
+    localStorage.setItem('hakoniwa.renderStyle', s);
+    styleSelect.value = s;
+    $('toonLineRow').hidden = s !== 'toon';
+    // トゥーンでは、重い後処理（被写界深度・ブルーム）を切っておく（AO は使わない）。ふつうに戻したら画質のプリセットどおり
+    if (s === 'toon') { dofOn = false; bloomOn = false; setChecked('dof', false); setChecked('bloom', false); }
+    else { const p = QUALITY[quality]; aoOn = p.ao; dofOn = p.dof; bloomOn = p.bloom; setChecked('ssao', aoOn); setChecked('dof', dofOn); setChecked('bloom', bloomOn); }
+    const old = terrainMat;
+    if (typeTex && world) terrainMat = createTerrainMaterial(typeTex, world.size, world.height, liteTerrain, s === 'toon');
+    game.swapMaterials({ ...matsOf(s), terrainMat: old !== terrainMat ? terrainMat : null });
+    if (old && old !== terrainMat) old.dispose();
+    updatePost();
+  };
+  styleSelect.value = renderStyle;
+  styleSelect.addEventListener('change', () => setRenderStyle(styleSelect.value === 'toon' ? 'toon' : 'standard'));
+  lineInput.addEventListener('input', () => { uLine.value = parseFloat(lineInput.value); });
+  $('toonLineRow').hidden = renderStyle !== 'toon';
+
   // ---------- 画質プリセット ----------
   type Quality = 'high' | 'medium' | 'low';
   const QUALITY: Record<Quality, { pixelRatio: number; ao: boolean; dof: boolean; bloom: boolean; shadow: number; lite: boolean }> = {
@@ -1195,7 +1228,7 @@ async function main() {
     const p = QUALITY[q];
     renderer.setPixelRatio(p.pixelRatio);
     fit();
-    aoOn = p.ao; dofOn = p.dof; bloomOn = p.bloom;
+    aoOn = p.ao; dofOn = p.dof && renderStyle !== 'toon'; bloomOn = p.bloom && renderStyle !== 'toon';
     setChecked('ssao', aoOn); setChecked('dof', dofOn); setChecked('bloom', bloomOn);
     updatePost();
     shadows.setMapSize(p.shadow);
@@ -1944,7 +1977,7 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { shadows, setAntialias, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { shadows, setAntialias, setRenderStyle, uLine, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {
