@@ -1,4 +1,6 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
+import { configDefaults } from 'vitest/config';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
 // `npm run dev:lan`：同じ Wi-Fi の端末（ノート PC・スマホ）から開けるようにする。
@@ -7,4 +9,6 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 export default defineConfig(({ mode }) => ({
   plugins: mode === 'lan' ? [basicSsl()] : [],
   server: mode === 'lan' ? { host: true, port: 5173 } : undefined,
+  // テストはこのアプリの src だけ（リポジトリの外の作業フォルダ chatgpt/ などは見ない）
+  test: { include: ['src/**/*.test.ts'], exclude: [...configDefaults.exclude, 'chatgpt/**'] },
 }));

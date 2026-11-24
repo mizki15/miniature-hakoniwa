@@ -37,7 +37,7 @@ import { WATER, isOpaque } from './world/blocks';
 import { PLOT_LAND_INFO, plotLands, type PlotLand } from './world/landPlan';
 import { DEFAULT_PARAMS, LAND_VERSION, landCountsOf, type TerrainParams, type WorldData } from './world/terrain';
 import type { InitResult, PlotResult, RemeshResult } from './world/worker';
-import { FRAME, PLOT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect, rightsLeft } from './world/plots';
+import { FRAME, OPEN_PLOT_POINTS, PLOT, PLOTS_PER_SIDE, PLOT_COUNT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect } from './world/plots';
 import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
 import { FLOWER_KINDS, GameController, PATH_KINDS, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
@@ -50,6 +50,8 @@ import { BuildingViewer } from './build/viewer';
 import { designStats } from './build/stats';
 import { CharacterStore } from './build/characterStore';
 import { buildingTraits } from './build/traits';
+import { renderBag } from './ui/bag';
+import { MATERIALS, MATERIAL_NAME, RAWS, buildCost, craft, matKey } from './game/materials';
 import { CROPS, CROP_KINDS, type CropKind } from './game/farm';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -206,6 +208,8 @@ async function main() {
   // 建物の性格（形ごとに 1 回、別のワーカーで計算して覚えておく）
   const characters = new CharacterStore(new Worker(new URL('./build/characterWorker.ts', import.meta.url), { type: 'module' }));
   game.characterOf = (d) => characters.get(d);
+  // 発見ポイント：建物を建てる時に使い、片付けると戻る（progress は下で作る）
+  game.wallet = { get: () => progress.points, add: (n) => { progress.points = Math.max(0, progress.points + n); refreshGhosts(); } };
   let onCharacterReady: () => void = () => {};
   characters.onReady = () => { game.characterReady(); onCharacterReady(); };
   /** 知らせを出す（toast を作るまでは何もしない） */
@@ -223,13 +227,14 @@ async function main() {
   const eco = new EcoManager({
     diorama, envInput: () => game.envInput(), toast: (m, ms) => toast(m, ms), fireflies, treeShape: (c) => game.treeShape(c),
     onChanged: () => { game.unsaved = true; refreshDex(); },
+    onPoints: (n) => { progress.points += n; refreshGhosts(); },
   });
   game.onEnvChanged = () => eco.envDirty();
   game.onBuildingsPlaced = (cols) => eco.evictFrom(cols); // 建物の足元にいた住人は外へ
   let onGenerated: ((r: InitResult) => void) | null = null;
   const onPlot = (r: PlotResult) => {
     game.addPlot(r);
-    progress.rightsUsed++;
+    progress.points = Math.max(0, progress.points - OPEN_PLOT_POINTS);
     game.unsaved = true; playerChanged();
     opening = false;
     openingDone = null;
@@ -246,7 +251,7 @@ async function main() {
     else if (e.data.type === 'plot') onPlot(e.data);
     else onGenerated?.(e.data);
   };
-  // 進み具合（発見ポイントと土地の権利）。段階 ② ③ で図鑑・解放につなぐ
+  // 進み具合（発見ポイント。v0.14〜 は土地の権利をなくし、ポイントで区画を開き、建物を建てる）
   let progress: SaveData['progress'] = { points: 0, rightsUsed: 0, unlocks: [], firsts: [], newMarks: [] };
   let base: THREE.Group | null = null;
   // エディタモードで、開ける隣の区画を半透明の枠で見せる
@@ -254,13 +259,15 @@ async function main() {
   scene.add(ghosts.group);
   /** 区画を開いている途中（ワーカーの返事待ち）。素早く 2 回押しても 1 回だけ開く */
   let opening = false;
-  const rights = () => Math.max(0, rightsLeft(progress.points, progress.rightsUsed) - (opening ? 1 : 0));
+  /** 使える発見ポイント（区画を開いている途中なら、その分を引いておく） */
+  const points = () => Math.max(0, progress.points - (opening ? OPEN_PLOT_POINTS : 0));
   /** 開いた区画の地面の平均の高さ（枠を置く高さの目安） */
   const groundOf = (plot: number) => {
     const w = world!;
     let sum = 0, n = 0;
-    for (let p = 0; p < 16; p++) {
-      if (!isOpen(w.plots, p) || Math.abs((p % 4) - (plot % 4)) + Math.abs(Math.floor(p / 4) - Math.floor(plot / 4)) !== 1) continue;
+    const S = PLOTS_PER_SIDE;
+    for (let p = 0; p < PLOT_COUNT; p++) {
+      if (!isOpen(w.plots, p) || Math.abs((p % S) - (plot % S)) + Math.abs(Math.floor(p / S) - Math.floor(plot / S)) !== 1) continue;
       const r = plotRect(p);
       for (let z = r.z0; z < r.z1; z += 4) for (let x = r.x0; x < r.x1; x += 4) { sum += Math.max(w.heights[x + z * FRAME], w.waterLevel); n++; }
     }
@@ -268,17 +275,17 @@ async function main() {
   };
   /** いまの箱庭の、区画ごとの土地の型（地形の作り方の版 2 だけ。版 1 の箱庭は区画で地形が変わらないので出さない） */
   let worldLands: PlotLand[] | null = null;
-  const refreshGhosts = () => { if (world) ghosts.update(world.plots, rights(), groundOf, worldLands); };
+  const refreshGhosts = () => { if (world) ghosts.update(world.plots, points() >= OPEN_PLOT_POINTS ? 1 : 0, groundOf, worldLands); };
   let plotResolve: (() => void) | null = null;
   /** 開いている途中の区画（作り直す前に、開き終わるのを待つ） */
   let openingDone: Promise<void> | null = null;
-  /** 区画を開く（権利を 1 つ使う）。開けない時は理由を返す */
+  /** 区画を開く（発見ポイントを 30 使う）。開けない時は理由を返す */
   const openPlot = (plot: number): Promise<void> | string => {
     if (!world) return '';
     if (game.locked) return 'いま箱庭を作っています';
     if (opening) return 'いま土地を開いています';
-    if (!canOpen(world.plots, plot, rights())) return rights() > 0 ? 'この土地はまだ開けません' : '土地の権利が足りません';
-    // 権利は開き終わった時（onPlot）に使う。それまでは rights() で 1 つ引いておく（途中で保存しても食い違わないように）
+    if (!canOpen(world.plots, plot, points())) return points() >= OPEN_PLOT_POINTS ? 'この土地はまだ開けません' : `発見ポイントが足りません（${OPEN_PLOT_POINTS} 要ります）`;
+    // ポイントは開き終わった時（onPlot）に使う。それまでは points() で引いておく（途中で保存しても食い違わないように）
     opening = true;
     // 先に、まだ送っていない編集をワーカーに渡してから区画を足す（境目のチャンクが古い地形で作られないように）
     game.sendDeltaNow();
@@ -482,6 +489,7 @@ async function main() {
       { id: 'harvest', icon: '🧺', name: '収穫', help: help('harvest') },
       { id: 'plant', icon: '🌳', name: '苗木', help: help('plant') },
       ...FLOWER_KINDS.map((f) => ({ id: `flower:${f.variant}`, icon: f.icon, name: f.name, help: help('flower') })),
+      { id: 'pick', icon: '✂', name: '摘む・刈る', help: help('pick') },
       { id: 'fell', icon: '🪓', name: '木を切る', help: help('fell') },
     ] },
     { id: 'g:terrain', name: 'Terrain', options: () => [
@@ -612,6 +620,26 @@ async function main() {
     // 同じ建物なら見本を作り直さない（回した向きを保つ）
     if (viewer && d !== viewerShown) { viewer.show(d); viewerShown = d; }
   };
+  // ---------- 持ち物・加工の窓（I キー） ----------
+  const bagEl = $('bag');
+  const bagIsOpen = () => bagEl.classList.contains('open');
+  const renderBagNow = () => renderBag($('bagRaws'), $('bagMats'), game.farm.inventory, (r, all) => {
+    const n = craft(game.farm.inventory, r, all ? Infinity : 1);
+    if (n) { game.unsaved = true; playerChanged(); toast(`${MATERIAL_NAME[r.mat]}を ${r.out * n} 個作りました`); }
+    renderBagNow();
+    if (viewerIsOpen()) renderViewer();
+  }, (el, html) => hoverTip.attach(el, html, 'left', true, bagEl));
+  const setBag = (open: boolean) => {
+    if (open && viewOnly) return;
+    bagEl.classList.toggle('open', open);
+    bagEl.setAttribute('aria-hidden', String(!open));
+    hoverTip.hide();
+    if (open) renderBagNow();
+  };
+  $('openBag').addEventListener('click', () => setBag(true));
+  $('bagClose').addEventListener('click', () => setBag(false));
+  bagEl.addEventListener('pointerdown', (e) => { if (e.target === bagEl) setBag(false); });
+
   /** 建物の性格（星 3 行と、遠のく生き物。まだ観察していない生き物は「？」） */
   const renderTraits = (d: BuildingDesign | null) => {
     const box = $('viewerTraits');
@@ -623,8 +651,18 @@ async function main() {
     const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
     const name = (id: VisitorId) => (dexStage(eco.dex, id) === 'observed' ? VISITOR[id].name : '？');
     const away = t.away.length ? t.away.map((a) => `${name(a.id)}（${a.why}）`).join('・') : 'なし';
+    // コスト：素材ごとの必要量と手持ち、発見ポイント、時間（数字で）
+    const cost = buildCost(c);
+    const inv = game.farm.inventory;
+    const matRows = Object.entries(cost.mats).sort((a, b) => b[1] - a[1]).map(([m, n]) => {
+      const have = inv[matKey(m)] ?? 0;
+      return `<span class="tr-cost${have >= n ? '' : ' lack'}">${esc(MATERIAL_NAME[m] ?? m)} ${have}/${n}</span>`;
+    }).join('');
+    const pts = progress.points;
     box.innerHTML = t.rows.map((r) => `<div class="tr-row"><span class="tr-label">${esc(r.label)}</span><span class="tr-stars">${esc(r.stars)}</span><span class="tr-note">${esc(r.note)}</span></div>`).join('') +
-      `<div class="tr-away">遠のく生き物：${esc(away)}</div>`;
+      `<div class="tr-away">遠のく生き物：${esc(away)}</div>` +
+      `<div class="tr-costs"><div class="tr-cost-head">建てるのに要るもの（手持ち/必要）</div>${matRows}` +
+      `<span class="tr-cost${pts >= cost.points ? '' : ' lack'}">✨ 発見ポイント ${pts}/${cost.points}</span><span class="tr-cost">⏱ 約 ${buildMinutes(d)} 分</span></div>`;
   };
   onCharacterReady = () => { if (viewerIsOpen()) renderViewer(); };
   const setViewer = async (open: boolean, tab?: 'import' | 'shelf') => {
@@ -787,10 +825,13 @@ async function main() {
   window.addEventListener('blur', () => { moveKeys.clear(); hoverTip.hide(); });
   window.addEventListener('keydown', (e) => {
     if (viewerIsOpen()) { if (e.key === 'Escape') void setViewer(false); return; } // 建物の窓を開いている間は、Esc で閉じるだけ
+    if (bagIsOpen()) { if (e.key === 'Escape' || e.code === 'KeyI') setBag(false); return; } // 持ち物の窓も同じ
     if (e.key === 'Escape') { setMenu(!menuOpen()); return; }
     if (menuOpen()) return; // メニューを開いている間は他のキーを受け付けない
     if ((e.target as HTMLElement).closest?.('input[type="text"], input[type="number"], textarea, select')) return;
     // Tab：見るモード ⇄ エディタモード（ブラウザのフォーカス移動はさせない）
+    // I：持ち物・加工の窓
+    if (e.code === 'KeyI' && !e.ctrlKey && !e.metaKey) { setBag(true); return; }
     if (e.code === 'Tab') {
       e.preventDefault();
       if (!e.repeat) setMode(mode === 'view' ? 'edit' : 'view');
@@ -1204,11 +1245,11 @@ async function main() {
     $('st-time').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
     $('st-season').textContent = SEASON_NAMES[season] + (season !== calendarSeason ? '（手動）' : '');
     $('st-weather').textContent = WEATHER_NAMES[weatherOverride ?? weatherAt(new Date(), season)];
-    // 土地の権利（図鑑の上）：持っている数と、次の権利までのたまり具合（発見ポイント 3 で 1 つ）
-    const pts = progress.points % 3;
-    $('rightsCount').textContent = String(rights());
-    $('rightsNext').textContent = `次まで あと ${3 - pts} ポイント`;
-    $('rightsGauge').style.width = `${(pts / 3) * 100}%`;
+    // 発見ポイント（図鑑の上）：持っている数と、区画を開ける 30 までのたまり具合
+    const pts = points();
+    $('rightsCount').textContent = String(pts);
+    $('rightsNext').textContent = pts >= OPEN_PLOT_POINTS ? `区画を開ける（${OPEN_PLOT_POINTS}）・建物にも使う` : `区画を開くまで あと ${OPEN_PLOT_POINTS - pts}`;
+    $('rightsGauge').style.width = `${Math.min(1, pts / OPEN_PLOT_POINTS) * 100}%`;
   };
 
   // 天気
@@ -1326,7 +1367,9 @@ async function main() {
     const target = save.farm.simMs + Math.max(0, Date.now() - save.savedAt);
     const r = game.catchUp(target, envAt);
     if (r.hours >= 0.05) {
-      const news = [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : '', r.built > 0 ? `${r.built} 棟の建物が完成しました` : ''].filter(Boolean).join('・');
+      const picked = game.pickedSince;
+      game.pickedSince = 0;
+      const news = [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : '', r.built > 0 ? `${r.built} 棟の建物が完成しました` : '', picked > 0 ? `原料を ${picked} 個拾いました` : ''].filter(Boolean).join('・');
       toast(`おかえりなさい。${fmtHours(r.hours)}たちました${news ? `：${news}` : ''}`, 5000);
     }
     // 閉じていた間は引っ越してこない（判定の基準をいまにそろえる）
@@ -1366,10 +1409,17 @@ async function main() {
   };
   $('regen').addEventListener('click', newWorld);
   $('rightPlus').addEventListener('click', () => {
-    progress.points += 3;
+    progress.points += OPEN_PLOT_POINTS;
     game.unsaved = true;
     refreshGhosts();
-    toast(`土地の権利：${rights()}`);
+    toast(`発見ポイント：${points()}`);
+  });
+  $('bagPlus').addEventListener('click', () => {
+    const inv = game.farm.inventory;
+    for (const r of RAWS) inv[r.id] = (inv[r.id] ?? 0) + 50;
+    for (const m of MATERIALS) inv[matKey(m.id)] = (inv[matKey(m.id)] ?? 0) + 50;
+    game.unsaved = true;
+    toast('原料と素材を 50 ずつ足しました');
   });
   $('ecoCall').addEventListener('click', () => {
     // 確率を 1 にして 1 回判定する（時刻・季節・天気の条件はそのまま）
@@ -1414,7 +1464,7 @@ async function main() {
     // 残りの区画を 1 つずつ開く（権利が足りなければ足す）。途中で箱庭が作り直されたら止める
     const startGen = gen;
     for (let next = openable(world.plots); next.length && gen === startGen; next = openable(world.plots)) {
-      if (rights() === 0) progress.points += 3;
+      if (points() < OPEN_PLOT_POINTS) progress.points += OPEN_PLOT_POINTS;
       const r = openPlot(next[0]);
       if (typeof r === 'string') break;
       await r;
@@ -1779,7 +1829,7 @@ async function main() {
       if (gp >= 0) {
         game.cursor.visible = false;
         const land = worldLands ? `${PLOT_LAND_INFO[worldLands[gp]].icon} ${PLOT_LAND_INFO[worldLands[gp]].text}・` : '';
-        hintEl.textContent = land + (rights() > 0 ? 'クリックでこの土地を開く（権利 1）' : '土地の権利が足りません');
+        hintEl.textContent = land + (points() >= OPEN_PLOT_POINTS ? `クリックでこの土地を開く（発見ポイント ${OPEN_PLOT_POINTS}）` : `発見ポイントが足りません（${OPEN_PLOT_POINTS} 要ります）`);
       } else {
         const msg = game.updateCursor(hit, !!stroke);
         if (!stroke) hintEl.textContent = msg;

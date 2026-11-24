@@ -7,7 +7,12 @@ import { LAND_NAMES, sharePct, type EnvCounts, type Habitat, type Land } from '.
  */
 export type Rarity = 'common' | 'uncommon' | 'rare';
 export const RARITY_CHANCE: Record<Rarity, number> = { common: 0.4, uncommon: 0.15, rare: 0.05 };
-export const RARITY_POINTS: Record<Rarity, number> = { common: 1, uncommon: 2, rare: 4 };
+/** 発見ポイント（v0.14〜 は 10 倍の整数。区画を開く＝30）：初めての観察 */
+export const RARITY_POINTS: Record<Rarity, number> = { common: 10, uncommon: 20, rare: 40 };
+/** 訪問者を新しい季節に観察した時 */
+export const SEASON_POINTS = 10;
+/** 訪問者が来るたび */
+export const VISITOR_POINTS = 2;
 export const RARITY_STARS: Record<Rarity, string> = { common: '★', uncommon: '★★', rare: '★★★' };
 
 export type VisitorId = 'butterfly' | 'bee' | 'sparrow' | 'frog' | 'fish' | 'dragonfly' | 'woodpecker' | 'firefly' | 'snail' | 'longtailedTit' | 'owl' | 'kingfisher';

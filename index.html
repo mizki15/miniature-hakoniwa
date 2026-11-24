@@ -89,7 +89,8 @@
             <span id="nightBrightLabel"></span>
           </div>
           <div class="row">
-            <button id="rightPlus" title="土地の権利を 1 つ増やす（発見ポイント +3。テスト用）">🔑 権利 +1</button>
+            <button id="rightPlus" title="発見ポイントを 30 増やす（区画 1 つぶん。テスト用）">✨ ポイント +30</button>
+            <button id="bagPlus" title="原料と素材を 50 ずつ足す（テスト用）">🎒 素材 +50</button>
             <button id="openAll" title="残りの区画をすべて開く（テスト用）">全区画を開く</button>
             <button id="ecoCall" title="来るかどうかの判定を、確率 1 で 1 回行う（テスト用）">🐾 生き物を呼ぶ</button>
             <button id="ecoClear" title="訪問者をみんな帰す（テスト用）">訪問者を帰す</button>
@@ -216,6 +217,7 @@
         <div class="side-body">
           <div id="tools" class="tool-list"></div>
           <button id="openBuildings" type="button" class="open-viewer" hidden>📦 建物を読み込む・棚を見る</button>
+          <button id="openBag" type="button" class="open-viewer">🎒 持ち物・加工<small>（I）</small></button>
         </div>
       </aside>
 
@@ -232,7 +234,7 @@
             <dt>天気</dt><dd id="st-weather">—</dd>
           </dl>
           <div class="rights-box">
-            <div class="rights-row"><span>🔑 土地の権利</span><b id="rightsCount">0</b></div>
+            <div class="rights-row"><span>✨ 発見ポイント</span><b id="rightsCount">0</b></div>
             <div class="rights-gauge"><i id="rightsGauge"></i></div>
             <small id="rightsNext" class="rights-next"></small>
           </div>
@@ -245,6 +247,26 @@
     <div id="hoverTip" class="hover-tip"></div>
 
     <!-- 建物の窓（読み込みと棚）。メニューと同じく、画面全体をすりガラスにして表示 -->
+    <!-- 持ち物と加工（I キー）：左に原料、右に素材と加工のボタン -->
+    <div id="bag" aria-hidden="true">
+      <div class="viewer-panel bag-panel" role="dialog" aria-label="持ち物・加工">
+        <header class="viewer-head">
+          <span>🎒 持ち物・加工</span>
+          <button id="bagClose" type="button" title="閉じる（Esc）">×</button>
+        </header>
+        <div class="viewer-body bag-body">
+          <section class="bag-col">
+            <h3>原料 <small>拾う・切る・掘る・摘む</small></h3>
+            <div id="bagRaws" class="bag-raws"></div>
+          </section>
+          <section class="bag-col bag-col-mats">
+            <h3>素材 <small>ボタンで加工（Shift で全部）</small></h3>
+            <div id="bagMats" class="bag-mats"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
     <div id="viewer" aria-hidden="true">
       <div class="viewer-panel" role="dialog" aria-label="建物">
         <header class="viewer-head">

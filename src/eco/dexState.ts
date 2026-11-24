@@ -1,5 +1,5 @@
 import type { SaveData } from '../save/format';
-import { RARITY_POINTS, isVisitorId, rarityOf, type DexId } from './species';
+import { RARITY_POINTS, SEASON_POINTS, isVisitorId, rarityOf, type DexId } from './species';
 
 /**
  * 図鑑の段階（設計書 2.5）と、観察で入る発見ポイント（3.1 のうち観察のぶん）。
@@ -22,8 +22,8 @@ export function markSeen(dex: Dex, id: DexId, now: number): boolean {
 
 /**
  * 観察した時に呼ぶ。入る発見ポイントを返す：
- * 初めて＝珍しさのポイント（ふつう 1・ややまれ 2・まれ 4。住人はふつう）、
- * 訪問者を新しい季節に観察＝1、それ以外＝0
+ * 初めて＝珍しさのポイント（ふつう 10・ややまれ 20・まれ 40。住人はふつう）、
+ * 訪問者を新しい季節に観察＝10、それ以外＝0
  */
 export function observe(dex: Dex, id: DexId, season: number, now: number): number {
   markSeen(dex, id, now);
@@ -35,5 +35,5 @@ export function observe(dex: Dex, id: DexId, season: number, now: number): numbe
   }
   if (e.seasons.includes(season)) return 0;
   e.seasons = [...e.seasons, season].sort((a, b) => a - b);
-  return isVisitorId(id) ? 1 : 0;
+  return isVisitorId(id) ? SEASON_POINTS : 0;
 }

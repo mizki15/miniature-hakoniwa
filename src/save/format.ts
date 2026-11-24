@@ -9,7 +9,7 @@ import { FIELD_SHIFT, FRAME, OLD_FRAME, PLOT, PLOTS_PER_SIDE } from '../world/pl
  * 地形はシード値から毎回同じものを作れるので、「生成の設定＋変えた所（差分）」だけを保存する。
  * 形式を変えた時は SAVE_VERSION を上げ、migrate() で古い形式を読めるようにする。
  */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 export interface SaveData {
   version: number;
@@ -25,7 +25,7 @@ export interface SaveData {
   plots: number;
   /** 地形の差分：[ボクセルの番号, 種類, 番号, 種類, ...]。番号は枠の座標（v4〜は 320 の枠、v3 までは 256 の枠） */
   edits: number[];
-  /** 進み具合（発見ポイントと土地の権利。権利の残り = floor(points / 3) - rightsUsed） */
+  /** 進み具合。points：使える発見ポイント（v5〜 は 10 倍の整数。区画を開く＝30・建物＝2〜15）。rightsUsed は v4 まで（v5 では 0） */
   progress: { points: number; rightsUsed: number; unlocks: string[]; firsts: string[]; newMarks: string[] };
   /** 図鑑（段階 ② で使う） */
   dex: Record<string, { seenAt: number; observedAt?: number; seasons: number[] }>;
@@ -45,10 +45,15 @@ export interface SaveData {
     faded?: number[];
     /** 移り変わりを最後に進めた日（箱庭の時計の日数。v0.13） */
     natureDay?: number;
+    /** 刈った葦の列と、生え戻る時刻（v0.14） */
+    reedCut?: [col: number, at: number][];
+    /** 拾う：最後に足した時刻と、原料ごとの端数（v0.14） */
+    pickup?: { at: number; frac: Record<string, number> };
   };
   /** 建物（v3）：棚に入れた建物と、置いた場所（x, z は枠のボクセル座標、rot は 90° 刻み）。
-   *  progress は建設の進み具合（0〜1）。建ち終わった建物と古い記録には無い（＝完成） */
-  buildings: { designs: BuildingDesign[]; placed: [designId: string, x: number, z: number, rot: Rot, progress?: number][] };
+   *  progress は建設の進み具合（0〜1）。建ち終わった建物と古い記録には無い（＝完成）。
+   *  paid は素材と発見ポイントを払って建てた印（1。v0.14〜。片付けると戻す） */
+  buildings: { designs: BuildingDesign[]; placed: [designId: string, x: number, z: number, rot: Rot, progress?: number, paid?: number][] };
 }
 
 /** v1（大きさを選んで作った箱庭）のデータ。地形の作り方が変わったので引き継げない */
@@ -64,7 +69,20 @@ function migrate(d: SaveData): SaveData {
   if (d.version < 3) d = { ...d, version: 3, buildings: { designs: [], placed: [] } };
   // v3 → v4：枠を 256×256（4×4 区画）から 320×320（5×5 区画、最初の区画が真ん中）に広げた。座標を 1 区画ぶんずらす
   if (d.version < 4) d = toFrame5(d);
+  // v4 → v5：土地の権利をなくし、発見ポイントに一本化（10 倍にし、使った権利 1 つ＝30 を引く）。木材は広葉樹の丸太に
+  if (d.version < 5) d = toPoints10(d);
   return d;
+}
+
+export function toPoints10(d: SaveData): SaveData {
+  const inv = { ...d.farm.inventory };
+  if (inv.wood) { inv.log_broad = (inv.log_broad ?? 0) + inv.wood; }
+  delete inv.wood;
+  return {
+    ...d, version: 5,
+    progress: { ...d.progress, points: Math.max(0, d.progress.points * 10 - d.progress.rightsUsed * 30), rightsUsed: 0 },
+    farm: { ...d.farm, inventory: inv },
+  };
 }
 
 /**

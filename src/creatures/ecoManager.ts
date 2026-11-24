@@ -4,7 +4,7 @@ import type { SaveData } from '../save/format';
 import { countOpen } from '../world/plots';
 import { countEnvironment, emptyEnv, fitsHabitat, habitatCols, type EnvCounts, type EnvInput } from '../eco/environment';
 import { checkEcosystem, dueChecks, needsStarterRabbits, stayMs, type EcoState } from '../eco/ecosystem';
-import { VISITOR, type DexId, type Moment, type VisitorId } from '../eco/species';
+import { VISITOR, type DexId, type Moment, type VisitorId, VISITOR_POINTS } from '../eco/species';
 import { markSeen, observe, type Dex } from '../eco/dexState';
 import { SPECIES, NAMES, makeResident, type Animal, type Species } from './animals';
 import { pickName, placeResident, restorePlace } from './place';
@@ -21,6 +21,8 @@ export interface EcoDeps {
   treeShape: (col: number) => TreeShape | null;
   /** 住人・訪問者が増えた・減った・図鑑が変わった時 */
   onChanged: () => void;
+  /** 発見ポイントが入った（訪問者が来た時など） */
+  onPoints?: (n: number) => void;
 }
 
 /**
@@ -186,6 +188,7 @@ export class EcoManager {
     let arrived = 0, movedIn = false;
     for (const id of r.leave) this.removeVisitor(id);
     for (const id of r.arrive) if (this.addVisitor(id, nowReal + stayMs(Math.random))) arrived++;
+    if (arrived) this.deps.onPoints?.(arrived * VISITOR_POINTS); // 訪問者が来るたびに少し
     // 生き物の多さを上げていると、1 回に何匹も引っ越してくる。知らせは 1 回にまとめる
     const came: string[] = [];
     let firstSeen = false;

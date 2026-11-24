@@ -40,3 +40,21 @@ describe('ground decor', () => {
     expect(placeGround(v, heights, N, H, 1, () => false)).toEqual(placeGround(v, heights, N, H, 1, () => false));
   });
 });
+
+describe('reeds (v0.14)', () => {
+  it('grow on part of the mud, also under shallow water, and not where they were cut', async () => {
+    const { MUD } = await import('../world/blocks');
+    const { isReedSpot, REED_CHANCE } = await import('./groundDecor');
+    const { v, heights } = world(MUD, true);
+    const p = placeGround(v, heights, N, H, 0, () => false);
+    const reeds = p.reeds.reduce((n, l) => n + l.length / 5, 0);
+    const spots = Array.from({ length: N * N }, (_, c) => c).filter(isReedSpot).length;
+    expect(reeds).toBe(spots);
+    expect(spots / (N * N)).toBeGreaterThan(REED_CHANCE * 0.7);
+    expect(spots / (N * N)).toBeLessThan(REED_CHANCE * 1.3);
+    // 刈った列には出ない。泥には草や小石は出ない
+    const cut = placeGround(v, heights, N, H, 1, () => false, () => true);
+    expect(cut.reeds.reduce((n, l) => n + l.length, 0)).toBe(0);
+    expect(count(cut)).toBe(0);
+  });
+});

@@ -53,7 +53,10 @@ export function openable(mask: number): number[] {
   return out;
 }
 
-export const canOpen = (mask: number, plot: number, rightsLeft: number) => rightsLeft > 0 && openable(mask).includes(plot);
+/** 区画を開くのに使う発見ポイント（v0.14〜。土地の権利をなくし、発見ポイントに一本化した） */
+export const OPEN_PLOT_POINTS = 30;
+
+export const canOpen = (mask: number, plot: number, points: number) => points >= OPEN_PLOT_POINTS && openable(mask).includes(plot);
 
 export function plotRect(plot: number): Rect {
   const x0 = (plot % PLOTS_PER_SIDE) * PLOT, z0 = Math.floor(plot / PLOTS_PER_SIDE) * PLOT;
@@ -95,4 +98,3 @@ export function borderChunks(mask: number, plot: number): [number, number][] {
   return out;
 }
 
-export const rightsLeft = (points: number, rightsUsed: number) => Math.max(0, Math.floor(points / 3) - rightsUsed);

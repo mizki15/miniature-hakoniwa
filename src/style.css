@@ -177,6 +177,33 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .viewer-list[hidden] { display: none; }
 .viewer-actions button[hidden] { display: none; }
 
+/* 持ち物・加工の窓（建物の窓と同じ見た目） */
+#bag { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; background: rgba(232, 237, 243, 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
+#bag.open { opacity: 1; pointer-events: auto; }
+.bag-panel { width: min(860px, 94vw); }
+.bag-body { gap: 0; }
+.bag-col { flex: 1; min-width: 0; overflow-y: auto; padding: 10px 14px 14px; }
+.bag-col + .bag-col { border-left: 1px solid #eef1f4; }
+.bag-col-mats { flex: 1.35; }
+.bag-col h3 { margin: 2px 0 8px; font-size: 13px; color: #1f2933; }
+.bag-col h3 small { font-weight: 400; color: #7a8590; margin-left: 6px; }
+.bag-raws { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.bag-raw { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 10px; background: #f4f7f9; font-size: 12.5px; }
+.bag-raw.none { opacity: 0.5; }
+.bag-ic { width: 28px; height: 28px; display: inline-grid; place-items: center; font-size: 20px; flex: none; }
+.bag-ic img { width: 100%; height: 100%; object-fit: contain; }
+.bag-name { flex: 1; min-width: 0; }
+.bag-n { font-variant-numeric: tabular-nums; }
+.bag-mats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.bag-mat { padding: 6px 8px; border-radius: 12px; background: #f4f7f9; font-size: 12.5px; }
+.bag-mat-head { display: flex; align-items: center; gap: 8px; }
+.bag-recipes { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.bag-recipes button { display: flex; align-items: center; gap: 4px; border: 1px solid #d5dbe1; background: #fff; border-radius: 9px; padding: 3px 8px; cursor: pointer; font: inherit; font-size: 11.5px; color: #1f2933; text-align: left; }
+.bag-recipes button .bag-ic { width: 18px; height: 18px; font-size: 13px; }
+.bag-recipes button:hover:not(:disabled) { background: #eaf2fc; }
+.bag-recipes button:disabled { opacity: 0.45; cursor: default; }
+.open-viewer small { opacity: 0.6; margin-left: 4px; }
+
 /* 建物の棚のビューワー（メニューと同じく、画面全体をすりガラスにして表示） */
 #viewer { position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; background: rgba(232, 237, 243, 0.55); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
 #viewer.open { opacity: 1; pointer-events: auto; }
@@ -206,6 +233,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .viewer-traits .tr-label { color: #4a5560; }
 .viewer-traits .tr-stars { color: #d09a2a; letter-spacing: -1px; }
 .viewer-traits .tr-note { grid-column: 2; color: #6a7580; font-size: 11px; }
+.viewer-traits .tr-costs { margin-top: 6px; padding-top: 5px; border-top: 1px solid #e6eaee; display: flex; flex-wrap: wrap; gap: 3px 8px; font-size: 11px; color: #1f2933; }
+.viewer-traits .tr-cost-head { width: 100%; color: #4a5560; }
+.viewer-traits .tr-cost.lack { color: #c0453c; font-weight: 700; }
 .viewer-traits .tr-away { margin-top: 6px; padding-top: 5px; border-top: 1px solid #e6eaee; color: #4a5560; font-size: 11px; }
 .viewer-actions { display: flex; gap: 8px; margin-top: 8px; }
 .viewer-actions button { border: 1px solid #d5dbe1; background: #fff; border-radius: 10px; padding: 6px 12px; cursor: pointer; font-size: 13px; color: #1f2933; }

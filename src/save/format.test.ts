@@ -11,9 +11,9 @@ const v3 = (): SaveData => ({
   buildings: { designs: [], placed: [] },
 });
 
-describe('save v4', () => {
-  it('versionIs4', () => {
-    expect(SAVE_VERSION).toBe(4);
+describe('save v5', () => {
+  it('versionIs5', () => {
+    expect(SAVE_VERSION).toBe(5);
   });
   it('roundtrips', async () => {
     const d = v3();
@@ -30,7 +30,7 @@ describe('save v4', () => {
   it('migratesV2', async () => {
     const { buildings: _, ...old } = v3();
     const loaded = await decodeSave(await encodeSave({ ...old, version: 2 } as SaveData));
-    expect(loaded.version).toBe(4);
+    expect(loaded.version).toBe(5);
     expect(loaded.buildings).toEqual({ designs: [], placed: [] });
   });
   it('rejects v1 with OldSaveError', async () => {
@@ -50,7 +50,7 @@ describe('v3 → v4: the 4×4 frame becomes 5×5 with the start in the middle', 
       buildings: { designs: [], placed: [['abcd', 90, 100, 1], ['efgh', 91, 101, 0, 0.5]] },
     };
     const d = await decodeSave(await encodeSave(old));
-    expect(d.version).toBe(4);
+    expect(d.version).toBe(5);
     expect(d.plots).toBe((1 << START_PLOT) | (1 << 13) | (1 << 6));
     expect(d.edits).toEqual([164 + 154 * 320 + 12 * 320 * 320, 2]);
     expect(d.residents).toEqual([['rabbit', 134.5, 154.25, 'こむぎ']]);
@@ -58,5 +58,19 @@ describe('v3 → v4: the 4×4 frame becomes 5×5 with the start in the middle', 
     expect(d.farm.saplings[0][0]).toBe(144 + 134 * 320);
     expect([d.farm.wet[0][0], d.farm.flowers![0][0], d.farm.bare![0][0], d.farm.faded![0]]).toEqual([145, 146, 147, 148].map((x) => x + 134 * 320));
     expect(d.buildings.placed).toEqual([['abcd', 154, 164, 1], ['efgh', 155, 165, 0, 0.5]]);
+  });
+});
+
+describe('v4 → v5: land rights become discovery points (×10)', () => {
+  it('points ×10 minus 30 for each right used; wood becomes broadleaf logs', async () => {
+    const old: SaveData = { ...v3(), version: 4, progress: { points: 7, rightsUsed: 2, unlocks: [], firsts: [], newMarks: [] }, farm: { simMs: 0, inventory: { wood: 6, wheat: 2 }, crops: [], saplings: [], wet: [] } };
+    const d = await decodeSave(await encodeSave(old));
+    expect(d.progress.points).toBe(70 - 60);
+    expect(d.progress.rightsUsed).toBe(0);
+    expect(d.farm.inventory).toEqual({ wheat: 2, log_broad: 6 });
+  });
+  it('never goes below zero', async () => {
+    const d = await decodeSave(await encodeSave({ ...v3(), version: 4, progress: { points: 2, rightsUsed: 1, unlocks: [], firsts: [], newMarks: [] } }));
+    expect(d.progress.points).toBe(0);
   });
 });

@@ -20,12 +20,13 @@ describe('plots', () => {
     expect(P.countOpen(m)).toBe(25);
     expect(P.openable(m)).toEqual([]);
   });
-  it('canOpen needs a right and adjacency', () => {
+  it('canOpen needs 30 discovery points and adjacency', () => {
     const m = 1 << 6;
-    expect(P.canOpen(m, 7, 1)).toBe(true);
-    expect(P.canOpen(m, 7, 0)).toBe(false);
-    expect(P.canOpen(m, 24, 1)).toBe(false); // 離れている
-    expect(P.canOpen(m, 6, 1)).toBe(false); // もう開いている
+    expect(P.OPEN_PLOT_POINTS).toBe(30);
+    expect(P.canOpen(m, 7, 30)).toBe(true);
+    expect(P.canOpen(m, 7, 29)).toBe(false);
+    expect(P.canOpen(m, 24, 99)).toBe(false); // 離れている
+    expect(P.canOpen(m, 6, 99)).toBe(false); // もう開いている
   });
   it('boundsOf', () => {
     expect(P.boundsOf((1 << 6) | (1 << 7))).toMatchObject({ x0: 64, z0: 64, x1: 192, z1: 128, w: 128, d: 64, cx: 128, cz: 96 });
@@ -36,10 +37,6 @@ describe('plots', () => {
     // 区画 6 が開いていて区画 7 を足す：区画 6 のチャンクを作り直す
     expect(P.borderChunks(1 << 6, 7)).toEqual([[1, 1]]);
     expect(P.borderChunks((1 << 6) | (1 << 12), 7)).toEqual([[1, 1], [2, 2]]);
-  });
-  it('rightsLeft', () => {
-    expect(P.rightsLeft(7, 1)).toBe(1);
-    expect(P.rightsLeft(2, 0)).toBe(0);
   });
   it('isOpenCol', () => {
     expect(P.isOpenCol(1 << 6, 100, 100)).toBe(true);
