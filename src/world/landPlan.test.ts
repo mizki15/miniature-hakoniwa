@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { V0161_PARAMS } from './testParams';
 import { landWeight, plotLands } from './landPlan';
 import { createWorld, generatePlot, DEFAULT_PARAMS } from './terrain';
 import { FIELD_SHIFT, FRAME, PLOT, PLOT_COUNT, START_PLOT, plotRect } from './plots';
@@ -29,7 +30,7 @@ describe('plotLands', () => {
 /** 区画の中の、地表の種類ごとの割合 */
 function tops(seed: number, plot: number, land = 2) {
   const w = createWorld(64);
-  generatePlot(w, plot, seed, { ...DEFAULT_PARAMS, land });
+  generatePlot(w, plot, seed, { ...V0161_PARAMS, land });
   const r = plotRect(plot);
   const n: Record<number, number> = {};
   for (let z = r.z0; z < r.z1; z++) for (let x = r.x0; x < r.x1; x++) {
@@ -64,7 +65,7 @@ describe('land version 1 stays exactly the same (old saves rebuild the same terr
     let h = 0x811c9dc5;
     for (const seed of [1234, 42]) {
       const w = createWorld(64);
-      for (let p = 0; p < PLOT_COUNT; p++) { const r = plotRect(p); if (r.x0 >= S && r.z0 >= S && r.x1 <= S + OLD && r.z1 <= S + OLD) generatePlot(w, p, seed, { ...DEFAULT_PARAMS, land: 1 }); }
+      for (let p = 0; p < PLOT_COUNT; p++) { const r = plotRect(p); if (r.x0 >= S && r.z0 >= S && r.x1 <= S + OLD && r.z1 <= S + OLD) generatePlot(w, p, seed, { ...V0161_PARAMS, land: 1 }); }
       for (let y = 0; y < 64; y++) for (let z = 0; z < OLD; z++) for (let x = 0; x < OLD; x++) { h ^= w.voxels[x + S + (z + S) * F + y * F * F]; h = Math.imul(h, 0x01000193) >>> 0; }
       for (const t of [...w.trees, ...w.flowers]) { h ^= Math.round((t.x - S) * 100 + (t.z - S) * 7 + t.variant); h = Math.imul(h, 0x01000193) >>> 0; }
       for (let z = 0; z < OLD; z++) for (let x = 0; x < OLD; x++) { h ^= w.walkable[x + S + (z + S) * F]; h = Math.imul(h, 0x01000193) >>> 0; }
@@ -86,7 +87,7 @@ describe('terrain factors (debug window)', () => {
     const lands = plotLands(42);
     const sig = (extra: Record<string, number>, plot = START_PLOT) => {
       const w = createWorld(64);
-      generatePlot(w, plot, 42, { ...DEFAULT_PARAMS, land: 2, ...extra });
+      generatePlot(w, plot, 42, { ...V0161_PARAMS, land: 2, ...extra });
       let h = 0;
       for (let i = 0; i < w.voxels.length; i += 7) h = (h * 31 + w.voxels[i]) >>> 0;
       return h + ':' + w.trees.map((t) => t.variant).join('');

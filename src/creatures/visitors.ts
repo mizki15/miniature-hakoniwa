@@ -117,6 +117,21 @@ export class Visitor {
   /** 地面か水面の高さ（飛ぶ生き物が水の上でも水面より下に潜らないように） */
   private surfaceAt(x: number, z: number) { return Math.max(this.groundAt(x, z), this.world.waterLevel); }
 
+  /** 飛ぶ生き物の基準の高さ（なめらかに追う。v0.16.2） */
+  private baseY: number | null = null;
+  /**
+   * 飛ぶ生き物の基準の高さ：足元の地面（水面）を、まわり r 列も見て、なめらかに追う。
+   * 真下の列の高さをそのまま使うと、列の段差のたびに高さが跳んでカクカクする（v0.16.2）。
+   * 上がる時は速く（ぶつからないように）、下がる時はゆっくり
+   */
+  private smoothSurface(x: number, z: number, dt: number, r = 1) {
+    let s = 0;
+    for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) s = Math.max(s, this.surfaceAt(x + dx, z + dz));
+    if (this.baseY === null || dt <= 0) this.baseY = s;
+    else this.baseY += (s - this.baseY) * Math.min(1, dt * (s > this.baseY ? 5 : 1.2));
+    return this.baseY;
+  }
+
   private walkable(x: number, z: number) {
     const N = this.world.size, ix = Math.floor(x), iz = Math.floor(z);
     return ix >= 0 && iz >= 0 && ix < N && iz < N && this.world.walkable[ix + iz * N] === 1;
@@ -178,7 +193,10 @@ export class Visitor {
           const busy = this.hopT > 0; // 花の上で止まっている
           x = this.hx + (this.tx - this.hx) * k + Math.sin(t * 7) * (busy ? 0.08 : 0.2);
           z = this.hz + (this.tz - this.hz) * k + Math.cos(t * 6) * (busy ? 0.08 : 0.2);
-          y = this.surfaceAt(x, z) + (busy ? 0.55 : 0.9) + Math.sin(t * 13) * 0.05;
+          // 花の上で止まる時と飛ぶ時の高さは、少しずつ切り替える（急に跳ばない）
+          const want = busy ? 0.55 : 0.9;
+          this.fy = dt > 0 ? this.fy + (want - this.fy) * Math.min(1, dt * 4) : want;
+          y = this.smoothSurface(x, z, dt, 0) + this.fy + Math.sin(t * 13) * 0.05;
           this.wings(0.35 + Math.sin(t * 70) * 0.45);
         } else if (id === 'butterfly') {
           // ひらひら飛び、時々花にとまって羽をゆっくり開け閉めする
@@ -205,7 +223,7 @@ export class Visitor {
             face = this.heading;
           }
           x = this.fx; z = this.fz;
-          y = this.surfaceAt(x, z) + this.fy;
+          y = this.smoothSurface(x, z, dt, 0) + this.fy;
         } else if (id === 'dragonfly') {
           // すっと移って、止まって浮かぶ、をくり返す。羽は細かく震わせる
           this.modeT -= dt;
@@ -217,7 +235,7 @@ export class Visitor {
           const k = Math.min(1, dt * (this.mode === 'fly' ? 7 : 1.5));
           this.fx += (this.gx - this.fx) * k; this.fz += (this.gz - this.fz) * k;
           x = this.fx; z = this.fz;
-          y = this.surfaceAt(x, z) + 1.2 + Math.sin(t * 2) * 0.12;
+          y = this.smoothSurface(x, z, dt) + 1.2 + Math.sin(t * 2) * 0.12;
           if (this.mode === 'rest') face = this.heading; // 浮かんでいる間は向きを変えない
           this.wings(Math.sin(t * 55) * 0.35);
         } else if (id === 'kingfisher') {
@@ -388,7 +406,8 @@ export class Visitor {
       else { this.fy = -0.35 + smooth((u - 0.3) / 0.7) * (this.sy + 0.35); this.flapBird(dt, 26, 0.85); pitch = 0.45; }
       if (this.modeT <= 0) { this.mode = 'fly'; this.modeT = 5 + Math.random() * 6; this.fy = this.sy; }
     }
-    return { x: this.fx, y: Math.max(this.groundAt(this.fx, this.fz), wl) + this.fy, z: this.fz, pitch };
+    void wl;
+    return { x: this.fx, y: this.smoothSurface(this.fx, this.fz, dt) + this.fy, z: this.fz, pitch };
   }
 
   /** ヒバリ：草原から真上へ舞い上がり、空の高い所で羽ばたきながらさえずり、ゆっくり降りてくる */
@@ -442,7 +461,14 @@ export class Visitor {
         if (this.modeT <= 0) { this.mode = 'ground'; this.modeT = 3 + Math.random() * 4; this.fy = 0; }
       }
     }
-    return { x: this.fx, y: this.groundAt(this.fx, this.fz) + Math.max(0, this.fy), z: this.fz, pitch };
+    // 地面にいる間と降りる途中は真下の地面へ（なめらかに寄せる）、飛んでいる間はまわりも見たなめらかな基準の高さ
+    let base: number;
+    if (this.mode === 'ground' || this.mode === 'descend') {
+      const g = this.groundAt(this.fx, this.fz);
+      this.baseY = this.baseY === null || dt <= 0 ? g : this.baseY + (g - this.baseY) * Math.min(1, dt * (this.mode === 'ground' ? 8 : 2));
+      base = this.baseY;
+    } else base = this.smoothSurface(this.fx, this.fz, dt);
+    return { x: this.fx, y: base + Math.max(0, this.fy), z: this.fz, pitch };
   }
 
   /**
@@ -463,7 +489,7 @@ export class Visitor {
     } else if (id === 'gull') {
       this.orbit += dt * 0.35;
       x = this.hx + Math.cos(this.orbit) * 6; z = this.hz + Math.sin(this.orbit) * 3.5;
-      y = this.surfaceAt(x, z) + 4.5 + Math.sin(t * 0.7) * 0.8;
+      y = this.smoothSurface(x, z, dt, 2) + 4.5 + Math.sin(t * 0.7) * 0.8;
       const cycle = t % 5;
       if (cycle < 1.6) this.flapBird(dt, 11, 0.6, 0.12); else this.wings(0.18); // 少し V の字にして滑る
       bank = -0.25 + Math.sin(t * 0.7) * 0.1;
@@ -471,7 +497,7 @@ export class Visitor {
       // ツバメ：8 の字を速く、上下に波打ちながら。羽ばたきと滑りを短く繰り返す
       this.orbit += dt * 1.1;
       x = this.hx + Math.sin(this.orbit) * 6; z = this.hz + Math.sin(this.orbit * 2) * 3;
-      y = this.surfaceAt(x, z) + 1.6 + Math.sin(this.orbit * 3) * 0.8;
+      y = this.smoothSurface(x, z, dt) + 1.6 + Math.sin(this.orbit * 3) * 0.8;
       if ((t % 1.4) < 0.7) this.flapBird(dt, 20, 0.7); else this.wings(0.05);
     }
     return { x, y, z, bank };

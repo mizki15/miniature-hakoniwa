@@ -989,6 +989,12 @@ async function main() {
       setMouse(e.clientX, e.clientY);
       const { plot } = ghostAtMouse();
       if (plot >= 0) {
+        // 開く前に確かめる（v0.16.2）。開けない時（ポイントが足りないなど）は理由だけ出す
+        if (world && canOpen(world.plots, plot, points()) && !game.locked && !opening) {
+          const land = worldLands ? PLOT_LAND_INFO[worldLands[plot]] : null;
+          if (!confirm(`この土地を開きますか？${land ? `（${land.icon} ${land.text}）` : ''}
+発見ポイントを ${OPEN_PLOT_POINTS} 使います（いま ${points()}）。`)) return;
+        }
         const r = openPlot(plot);
         if (typeof r === 'string') { if (r) toast(r); }
 

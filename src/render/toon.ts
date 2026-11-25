@@ -11,7 +11,7 @@ import { abs, float, max, mix, perspectiveDepthToViewZ, reference, screenUV, smo
 type N = any;
 
 /** 線の濃さ（0 = 線なし） */
-export const uLine = uniform(1);
+export const uLine = uniform(0.4); // 初期値 40%（v0.16.2）
 
 export function toonOutline(color: N, depthTex: N, normalTex: N, camera: THREE.PerspectiveCamera): N {
   const near = reference('near', 'float', camera), far = reference('far', 'float', camera);

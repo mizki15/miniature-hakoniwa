@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { V0161_PARAMS } from './testParams';
 import { createWorld, generatePlot, applyEdits, DEFAULT_PARAMS } from './terrain';
 import { FRAME } from './plots';
 
 const gen = (order: number[]) => {
   const w = createWorld(64);
-  for (const p of order) generatePlot(w, p, 1234, { ...DEFAULT_PARAMS, land: 2 });
+  for (const p of order) generatePlot(w, p, 1234, { ...V0161_PARAMS, land: 2 });
   return w;
 };
 const key = (p: { x: number; z: number; variant: number }) => `${p.x.toFixed(3)},${p.z.toFixed(3)},${p.variant}`;

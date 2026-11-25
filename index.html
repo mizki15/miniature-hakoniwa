@@ -56,7 +56,7 @@
           <div class="row">
             <label><input type="checkbox" id="round" checked /> 角丸</label>
             <label>境界のなじみ <input type="range" id="blend" min="0" max="1" step="0.05" value="1" /></label>
-            <label title="地面の質感（光の当たり方だけを細かく変える凹凸）の強さ。0 でなし。画質「低」では描かない">地面の質感 <input type="range" id="bump" min="0" max="1" step="0.05" value="1" /></label>
+            <label title="地面の質感（光の当たり方だけを細かく変える凹凸）の強さ。0 でなし。画質「低」では描かない">地面の質感 <input type="range" id="bump" min="0" max="1" step="0.05" value="0.2" /></label>
           </div>
           <div class="row">
             <label>画質
@@ -75,7 +75,7 @@
                 <option value="toonLite">トゥーン・軽（試作）</option>
               </select>
             </label>
-            <label id="toonLineRow" hidden>線 <input type="range" id="toonLine" min="0" max="1.5" step="0.05" value="1" /></label>
+            <label id="toonLineRow" hidden>線 <input type="range" id="toonLine" min="0" max="1.5" step="0.05" value="0.4" /></label>
             <button id="sound" title="環境音（風・水・鳥・虫・雨）">🔈 環境音</button>
           </div>
           <div class="row">
@@ -160,13 +160,13 @@
           </div>
           <details class="params">
             <summary>地形のパラメータ</summary>
-            <div class="param"><label for="p-relief">起伏の激しさ</label><input type="range" id="p-relief" min="0" max="2.5" step="0.1" value="0.4" /><output></output></div>
-            <div class="param"><label for="p-mountains">山の高さ</label><input type="range" id="p-mountains" min="0" max="2.5" step="0.1" value="0.8" /><output></output></div>
-            <div class="param"><label for="p-water">水の多さ</label><input type="range" id="p-water" min="0" max="2" step="0.1" value="1" /><output></output></div>
-            <div class="param"><label for="p-rocks">岩場の多さ</label><input type="range" id="p-rocks" min="0" max="2" step="0.1" value="0.8" /><output></output></div>
-            <div class="param"><label for="p-forest">森の密度</label><input type="range" id="p-forest" min="0" max="3" step="0.1" value="0.5" /><output></output></div>
-            <div class="param"><label for="p-flowers">花の密度</label><input type="range" id="p-flowers" min="0" max="3" step="0.1" value="1.6" /><output></output></div>
-            <div class="param"><label for="p-lakes">湖の多さ</label><input type="range" id="p-lakes" min="0" max="2" step="0.1" value="1" /><output></output></div>
+            <div class="param"><label for="p-relief">起伏の激しさ</label><input type="range" id="p-relief" min="0" max="2.5" step="0.1" value="0.2" /><output></output></div>
+            <div class="param"><label for="p-mountains">山の高さ</label><input type="range" id="p-mountains" min="0" max="2.5" step="0.1" value="0.2" /><output></output></div>
+            <div class="param"><label for="p-water">水の多さ</label><input type="range" id="p-water" min="0" max="2" step="0.1" value="0.4" /><output></output></div>
+            <div class="param"><label for="p-rocks">岩場の多さ</label><input type="range" id="p-rocks" min="0" max="2" step="0.1" value="0.4" /><output></output></div>
+            <div class="param"><label for="p-forest">森の密度</label><input type="range" id="p-forest" min="0" max="3" step="0.1" value="0.9" /><output></output></div>
+            <div class="param"><label for="p-flowers">花の密度</label><input type="range" id="p-flowers" min="0" max="3" step="0.1" value="1.4" /><output></output></div>
+            <div class="param"><label for="p-lakes">湖の多さ</label><input type="range" id="p-lakes" min="0" max="2" step="0.1" value="0.4" /><output></output></div>
             <div class="param"><label for="p-river">川の幅</label><input type="range" id="p-river" min="0" max="3" step="0.1" value="1" /><output></output></div>
             <div class="param"><label for="p-bare">むき出しの土</label><input type="range" id="p-bare" min="0" max="2" step="0.1" value="1" /><output></output></div>
             <div class="param"><label for="p-shoreSand">岸の砂</label><input type="range" id="p-shoreSand" min="0" max="2" step="0.1" value="1" /><output></output></div>
@@ -175,15 +175,15 @@
             <div class="param"><label for="p-rockPlots">岩場の区画</label><input type="range" id="p-rockPlots" min="0" max="24" step="1" value="6" /><output></output></div>
             <div class="param"><label for="p-wetPlots">湿地の区画</label><input type="range" id="p-wetPlots" min="0" max="24" step="1" value="6" /><output></output></div>
             <div class="param"><label for="p-beachPlots">砂浜の区画</label><input type="range" id="p-beachPlots" min="0" max="24" step="1" value="5" /><output></output></div>
-            <div class="param"><label for="p-cliffs">崖の高さ</label><input type="range" id="p-cliffs" min="0" max="2.5" step="0.1" value="1" /><output></output></div>
-            <div class="param"><label for="p-wetland">湿地の広さ</label><input type="range" id="p-wetland" min="0" max="2.5" step="0.1" value="1" /><output></output></div>
-            <div class="param"><label for="p-pools">湿地の水たまり</label><input type="range" id="p-pools" min="0" max="2" step="0.1" value="1" /><output></output></div>
-            <div class="param"><label for="p-beachWidth">砂浜の広さ</label><input type="range" id="p-beachWidth" min="0" max="2" step="0.1" value="1" /><output></output></div>
+            <div class="param"><label for="p-cliffs">崖の高さ</label><input type="range" id="p-cliffs" min="0" max="2.5" step="0.1" value="0.2" /><output></output></div>
+            <div class="param"><label for="p-wetland">湿地の広さ</label><input type="range" id="p-wetland" min="0" max="2.5" step="0.1" value="0.8" /><output></output></div>
+            <div class="param"><label for="p-pools">湿地の水たまり</label><input type="range" id="p-pools" min="0" max="2" step="0.1" value="0.7" /><output></output></div>
+            <div class="param"><label for="p-beachWidth">砂浜の広さ</label><input type="range" id="p-beachWidth" min="0" max="2" step="0.1" value="0.7" /><output></output></div>
             <div class="param-head">空島（新しく作る箱庭だけ・試作）</div>
-            <div class="param"><label for="p-islandEdge">縁の削れ方</label><input type="range" id="p-islandEdge" min="0" max="2" step="0.1" value="1" /><output></output></div>
-            <div class="param"><label for="p-islandDetail">縁の細かさ</label><input type="range" id="p-islandDetail" min="0.3" max="3" step="0.1" value="1" /><output></output></div>
+            <div class="param"><label for="p-islandEdge">縁の削れ方</label><input type="range" id="p-islandEdge" min="0" max="2" step="0.1" value="0.5" /><output></output></div>
+            <div class="param"><label for="p-islandDetail">縁の細かさ</label><input type="range" id="p-islandDetail" min="0.3" max="3" step="0.1" value="2.6" /><output></output></div>
             <div class="param"><label for="p-islandDepth">島の底の厚さ</label><input type="range" id="p-islandDepth" min="0" max="3" step="0.1" value="1" /><output></output></div>
-            <div class="param"><label for="p-biomeSize">バイオームの大きさ</label><input type="range" id="p-biomeSize" min="0.4" max="2.5" step="0.1" value="1" /><output></output></div>
+            <div class="param"><label for="p-biomeSize">バイオームの大きさ</label><input type="range" id="p-biomeSize" min="0.4" max="2.5" step="0.1" value="0.7" /><output></output></div>
             <div class="row"><button id="paramsReset">標準に戻す</button><span class="hint">変更後「生成」で反映</span></div>
           </details>
           <div class="row">

@@ -17,7 +17,7 @@ const smoothstep: N = smoothstepT;
 /** シェーダー間で共有する値（UI や昼夜サイクルから更新する） */
 export const U = {
   roundEdges: uniform(1),
-  bump: uniform(1), // 地面の質感（法線の凹凸）の強さ。0 = なし
+  bump: uniform(0.2), // 地面の質感（法線の凹凸）の強さ。0 = なし（初期値 20%。v0.16.2）
   blend: uniform(0.8), // 境界のなじみ（0 = くっきり, 1 = なめらか）
   warp: uniform(0.45), // 境界のゆらぎ
   waterLevel: uniform(10),

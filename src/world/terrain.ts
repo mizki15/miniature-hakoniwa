@@ -98,11 +98,12 @@ export function islandDist(mask: number, x: number, z: number): number {
 
 /** 地形のパラメータの初期値（「標準に戻す」もこの値） */
 export const DEFAULT_PARAMS: TerrainParams = {
-  relief: 0.4, mountains: 0.8, water: 1, rocks: 0.8, forest: 0.5, flowers: 1.6,
-  lakes: 1, river: 1, bare: 1, shoreSand: 1, conifer: 1,
+  // v0.16.2 で今の値に（それまで：起伏 0.4・山 0.8・水 1・岩場 0.8・森 0.5・花 1.6・湖 1・崖 1・湿地の広さ 1・水たまり 1・砂浜の広さ 1・縁の削れ方 1・縁の細かさ 1・バイオームの大きさ 1）
+  relief: 0.2, mountains: 0.2, water: 0.4, rocks: 0.4, forest: 0.9, flowers: 1.4,
+  lakes: 0.4, river: 1, bare: 1, shoreSand: 1, conifer: 1,
   rockPlots: DEFAULT_LAND_COUNTS.rock, wetPlots: DEFAULT_LAND_COUNTS.wetland, beachPlots: DEFAULT_LAND_COUNTS.beach,
-  cliffs: 1, wetland: 1, pools: 1, beachWidth: 1,
-  islandEdge: 1, islandDetail: 1, islandDepth: 1, biomeSize: 1,
+  cliffs: 0.2, wetland: 0.8, pools: 0.7, beachWidth: 0.7,
+  islandEdge: 0.5, islandDetail: 2.6, islandDepth: 1, biomeSize: 0.7,
   land: LAND_VERSION,
 };
 
