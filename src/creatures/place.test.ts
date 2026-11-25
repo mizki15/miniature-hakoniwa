@@ -45,3 +45,24 @@ describe('leaving a building footprint', () => {
     expect(w.walkable[to[0] + to[1] * w.size]).toBe(1);
   });
 });
+
+describe('placeResident by land type (v0.16)', () => {
+  it('goes to its favourite land type when codes are given', () => {
+    const w = testWorld();
+    const codes = new Uint8Array(FRAME * FRAME);
+    // 歩ける列のうち、x = 90 の列だけ湿地（9）、x = 95 の列だけ岩場（8）
+    for (let z = 0; z < FRAME; z++) { codes[90 + z * FRAME] = 9; codes[95 + z * FRAME] = 8; }
+    for (let i = 0; i < 10; i++) {
+      expect(placeResident(w, 'capybara', Math.random, undefined, { codes })![0]).toBe(90);
+      expect(placeResident(w, 'stoat', Math.random, undefined, { codes })![0]).toBe(95);
+    }
+  });
+  it('the cat stays near the houses', () => {
+    const w = testWorld();
+    const b = new Set([100 + 100 * FRAME]);
+    for (let i = 0; i < 10; i++) {
+      const p = placeResident(w, 'cat', Math.random, undefined, { buildingCols: b })!;
+      expect(Math.max(Math.abs(p[0] - 100), Math.abs(p[1] - 100))).toBeLessThanOrEqual(4);
+    }
+  });
+});

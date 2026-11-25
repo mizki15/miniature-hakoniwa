@@ -474,6 +474,20 @@ async function main() {
     return null;
   };
 
+  /**
+   * ホイールでズームする前に、注視点を画面中央に見えている地面へ置き直す（v0.16）。
+   * カーソルへ向かうズームは、注視点を「カメラの前、いまの距離の所」に置くので、何度も寄ったり引いたりすると
+   * 注視点が地面から離れた空中に残り、距離が最短（3）に張り付いてそれ以上寄れなくなっていた。
+   * 見ている向きはそのまま（注視点は視線の上を動くだけ）なので、画面は変わらない
+   */
+  renderer.domElement.addEventListener('wheel', () => {
+    const d = centerDepth();
+    if (d === null || d < 1) return;
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    controls.target.copy(camera.position).addScaledVector(dir, d);
+  }, { capture: true, passive: true });
+
   // ---------- 波紋 ----------
   let rippleIdx = 0;
   const addRipple = (x: number, z: number, strength: number) => {
@@ -2007,7 +2021,7 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { spawnAll: () => eco.spawnAll(), shadows, setAntialias, setRenderStyle, uLine, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { spawnAll: () => eco.spawnAll(), camera, controls, shadows, setAntialias, setRenderStyle, uLine, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {

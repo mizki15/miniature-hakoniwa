@@ -29,8 +29,11 @@ describe('visitors arrive', () => {
     expect(checkEcosystem(state(), e, morning, NOW, always(0.01)).arrive).toEqual(expect.arrayContaining(['fish', 'kingfisher']));
   });
   it('maxEightVisitors', () => {
-    const visitors = VISITORS.slice(0, 8).map((v) => ({ id: v.id, leavesAt: NOW + 1e9 }));
-    const r = checkEcosystem(state({ visitors }), env({ flowerField: 20, forest: 40, waterside: 20, deepWater: 10, farm: 10, crops: 10 }), spring(), NOW, always(0));
+    // いる 8 匹は、みな環境が合っていて帰らない種類（帰ると空きができて、ほかの種類が来る）
+    const e = env({ flowerField: 20, forest: 40, waterside: 20, deepWater: 10, farm: 10, crops: 10 });
+    const visitors = VISITORS.filter((v) => v.needs(e)).slice(0, 8).map((v) => ({ id: v.id, leavesAt: NOW + 1e9 }));
+    expect(visitors.length).toBe(8);
+    const r = checkEcosystem(state({ visitors }), e, spring(), NOW, always(0));
     expect(r.arrive).toEqual([]);
   });
   it('never goes past eight in one check', () => {

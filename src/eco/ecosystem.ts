@@ -49,7 +49,7 @@ export function checkEcosystem(s: EcoState, e: EnvCounts, m: Moment, nowReal: nu
     let best = Infinity, pick: Species | null = null;
     for (const sp of RESIDENT_ORDER) {
       const n = count(sp);
-      if (RESIDENT_RULES[sp](e) && n < MAX_PER_SPECIES * k && n < best) { best = n; pick = sp; }
+      if (RESIDENT_RULES[sp](e, m) && n < MAX_PER_SPECIES * k && n < best) { best = n; pick = sp; }
     }
     if (!pick) break;
     moveIns.push(pick);

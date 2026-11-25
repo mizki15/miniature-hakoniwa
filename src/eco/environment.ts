@@ -35,6 +35,9 @@ export interface EnvInput {
   buildingWildCols?: number;
   /** 建物の灯り：中心の列の座標と、届く距離（列） */
   lights?: readonly Light[];
+  /** 建ち終わった建物の数・そのうち灯りのある建物の数（v0.16：ねこ・ツバメ・ヤモリの条件） */
+  houses?: number;
+  litHouses?: number;
 }
 
 export interface Light { x: number; z: number; r: number }
@@ -64,11 +67,19 @@ export const LAND_NAMES: Record<Land, string> = {
 export type EnvCounts = Record<Land, number> & {
   ground: number;
   crops: number;
+  /** 高い所（高さ HIGH_GROUND 以上の、水でない列）の数（v0.16：カモシカ・ワシ） */
+  high: number;
+  /** 建ち終わった建物・灯りのある建物の数 */
+  houses: number;
+  litHouses: number;
   /** 野生度（1〜5）。5 がいちばん自然 */
   wild: number;
 };
 
-export const emptyEnv = (): EnvCounts => ({ ground: 0, forest: 0, meadow: 0, flowerField: 0, farm: 0, waterside: 0, deepWater: 0, human: 0, rock: 0, wetland: 0, beach: 0, darkWaterside: 0, darkForest: 0, crops: 0, wild: 5 });
+export const emptyEnv = (): EnvCounts => ({ ground: 0, forest: 0, meadow: 0, flowerField: 0, farm: 0, waterside: 0, deepWater: 0, human: 0, rock: 0, wetland: 0, beach: 0, darkWaterside: 0, darkForest: 0, crops: 0, high: 0, houses: 0, litHouses: 0, wild: 5 });
+
+/** 高い所の高さ（水面 10 から 10 上） */
+export const HIGH_GROUND = 20;
 
 /** その土地の型が、開いた地面に占める割合（%） */
 export const sharePct = (e: EnvCounts, land: Land) => (e.ground > 0 ? (e[land] / e.ground) * 100 : 0);
@@ -83,8 +94,13 @@ export function wildness(humanPct: number): number {
   return i < 0 ? 1 : 5 - i;
 }
 
-/** darkTree・grassNearWater は灯りの届かない所だけ（フクロウ・ホタル） */
-export type Habitat = 'flower' | 'flowerCrop' | 'farm' | 'waterside' | 'deepWater' | 'tree' | 'darkTree' | 'grassNearWater' | 'flowerOrFarm';
+/**
+ * darkTree・grassNearWater は灯りの届かない所だけ（フクロウ・ホタル）。
+ * v0.16：meadow 草原、rock 岩場、highRock 高い岩場、wetland 湿地（泥と、底が泥の浅い水）、beach 砂浜、
+ * nearHouse 建物のまわり（6 列以内の歩ける列）、houseWall 建物の足元の縁（壁に張り付く）
+ */
+export type Habitat = 'flower' | 'flowerCrop' | 'farm' | 'waterside' | 'deepWater' | 'tree' | 'darkTree' | 'grassNearWater' | 'flowerOrFarm'
+  | 'meadow' | 'rock' | 'highRock' | 'wetland' | 'beach' | 'nearHouse' | 'houseWall';
 
 const N = FRAME;
 const isWater = (w: WorldData, col: number) => w.heights[col] > 0 && w.heights[col] < w.waterLevel;
@@ -183,8 +199,11 @@ export function countEnvironment(i: EnvInput): EnvCounts {
     if (l === 'human' && i.buildingCols?.has(col)) buildingCols++;
     if ((l === 'waterside' || l === 'forest') && !litBy(i.lights, col)) e[l === 'waterside' ? 'darkWaterside' : 'darkForest']++;
     if (isDeep(w, col)) e.deepWater++;
+    if (w.heights[col] >= HIGH_GROUND && !isWater(w, col)) e.high++;
   }
   e.crops = i.crops;
+  e.houses = i.houses ?? 0;
+  e.litHouses = i.litHouses ?? 0;
   // 道は、人の手の列から建物の足元を引いた分。建物は自然の星で重み付けした分だけ数える
   const paths = e.human - buildingCols;
   const built = i.buildingWildCols ?? buildingCols;
@@ -206,7 +225,35 @@ export function fitsHabitat(i: EnvInput, h: Habitat, col: number): boolean {
     case 'waterside': return isWaterside(w, col);
     case 'deepWater': return isDeep(w, col);
     case 'grassNearWater': return isGrass(w, col) && nearWater(w, col) && !litBy(i.lights, col);
+    case 'meadow': return isGrass(w, col) && !i.treeCols.has(col);
+    case 'rock': return topOf(w, col) === STONE;
+    case 'highRock': return topOf(w, col) === STONE && w.heights[col] >= HIGH_GROUND;
+    case 'wetland': return topOf(w, col) === MUD;
+    case 'beach': return topOf(w, col) === SAND && !isWater(w, col);
+    case 'nearHouse': return !!i.buildingCols?.size && w.walkable[col] === 1 && nearSet(i.buildingCols, col, 6);
+    case 'houseWall': return !!i.buildingCols?.has(col);
   }
+}
+
+/** 列のまわり r 列以内に、集合の列があるか */
+const nearSet = (set: ReadonlySet<number>, col: number, r: number) => {
+  const x = col % N, z = (col - x) / N;
+  for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) if (set.has(x + dx + (z + dz) * N)) return true;
+  return false;
+};
+
+/** 建物の足元の縁の列（となりに足元でない列がある）と、壁の外向き（dx, dz） */
+export function houseWallSpots(i: EnvInput): { col: number; dx: number; dz: number }[] {
+  const out: { col: number; dx: number; dz: number }[] = [];
+  const b = i.buildingCols;
+  if (!b) return out;
+  for (const col of b) {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const n = col + dx + dz * N;
+      if (!b.has(n) && i.world.heights[n] > 0) { out.push({ col, dx, dz }); break; }
+    }
+  }
+  return out;
 }
 
 /** 生き物が現れる場所の候補（列番号）。開いた区画の中だけ */
@@ -220,6 +267,28 @@ export function habitatCols(i: EnvInput, h: Habitat): number[] {
     case 'darkTree': return uniq(i.treeCols).filter((c) => !litBy(i.lights, c));
     case 'flowerCrop':
     case 'flowerOrFarm': return uniq([...i.flowerCols, ...i.farmland]);
+    case 'houseWall': return houseWallSpots(i).map((s) => s.col);
+    case 'meadow': case 'rock': case 'highRock': case 'wetland': case 'beach': {
+      // 土地の型の分け方（classifyColumns）で選ぶ。湿地は底が泥の浅い水も含む
+      const codes = classifyColumns(i);
+      const want = h === 'meadow' ? LAND_CODE.meadow : h === 'wetland' ? LAND_CODE.wetland : h === 'beach' ? LAND_CODE.beach : LAND_CODE.rock;
+      const out: number[] = [];
+      for (let col = 0; col < N * N; col++) {
+        if (codes[col] !== want) continue;
+        if (h === 'highRock' && w.heights[col] < HIGH_GROUND) continue;
+        out.push(col);
+      }
+      // 岩場が少なくても、高い岩場が無ければ高い所の岩（水辺の崖など）でもよい
+      if (h === 'highRock' && out.length === 0) for (let col = 0; col < N * N; col++) if (w.heights[col] >= HIGH_GROUND && topOf(w, col) === STONE) out.push(col);
+      return out;
+    }
+    case 'nearHouse': {
+      const b = i.buildingCols;
+      if (!b?.size) return [];
+      const out: number[] = [];
+      for (let col = 0; col < N * N; col++) if (w.walkable[col] === 1 && nearSet(b, col, 6)) out.push(col);
+      return out;
+    }
     default: {
       const out: number[] = [];
       for (let col = 0; col < N * N; col++) {

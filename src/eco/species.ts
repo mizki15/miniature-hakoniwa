@@ -2,7 +2,7 @@ import type { Species } from '../creatures/animals';
 import { LAND_NAMES, sharePct, type EnvCounts, type Habitat, type Land } from './environment';
 
 /**
- * 住人 7 種と訪問者 12 種のデータ（設計書 2.2・2.3）。
+ * 住人 16 種と訪問者 24 種のデータ（設計メモ 10 章。v0.16 で 40 種に）。
  * three.js に依存しない（テストで使えるように）。
  */
 export type Rarity = 'common' | 'uncommon' | 'rare';
@@ -15,8 +15,10 @@ export const SEASON_POINTS = 10;
 export const VISITOR_POINTS = 2;
 export const RARITY_STARS: Record<Rarity, string> = { common: '★', uncommon: '★★', rare: '★★★' };
 
-export type VisitorId = 'butterfly' | 'bee' | 'sparrow' | 'frog' | 'fish' | 'dragonfly' | 'woodpecker' | 'firefly' | 'snail' | 'longtailedTit' | 'owl' | 'kingfisher';
-export type Motion = 'fly' | 'hop' | 'perch' | 'swim' | 'crawl' | 'glow';
+export type VisitorId = 'butterfly' | 'bee' | 'sparrow' | 'frog' | 'fish' | 'dragonfly' | 'woodpecker' | 'firefly' | 'snail' | 'longtailedTit' | 'owl' | 'kingfisher'
+  | 'mejiro' | 'skylark' | 'cricket' | 'flyingSquirrel' | 'eagle' | 'heron' | 'crane' | 'crab' | 'gull' | 'seaTurtle' | 'swallow' | 'gecko';
+/** 動き：飛ぶ・跳ねる・とまる・泳ぐ・はう・光る。v0.16：glide 滑空（ムササビ）、wade 浅瀬を歩く（サギ・ツル）、wall 壁に張り付く（ヤモリ） */
+export type Motion = 'fly' | 'hop' | 'perch' | 'swim' | 'crawl' | 'glow' | 'glide' | 'wade' | 'wall';
 
 /** いまの暦・時刻・天気。season：0 春・1 夏・2 秋・3 冬。seasonProgress：その季節の中の進み具合 0..1 */
 export interface Moment { season: number; seasonProgress: number; hour: number; raining: boolean }
@@ -26,7 +28,13 @@ export interface Moment { season: number; seasonProgress: number; hour: number; 
  * lands に 2 つ以上あれば、その合計の割合で見る（例：花畑と畑の合計）。
  */
 export interface LandNeed { lands: Land[]; min?: number; max?: number }
-export interface Needs { land?: LandNeed[]; wild?: { min?: number; max?: number }; crops?: boolean }
+/**
+ * v0.16：deep 深い水がある（8 列以上）、high 高い所がある（16 列以上）、houses 建ち終わった建物の数の下限、
+ * litHouses 灯りのある建物の数の下限
+ */
+export interface Needs { land?: LandNeed[]; wild?: { min?: number; max?: number }; crops?: boolean; deep?: boolean; high?: boolean; houses?: number; litHouses?: number }
+export const DEEP_MIN_COLS = 8;
+export const HIGH_MIN_COLS = 16;
 
 export function meetsNeeds(n: Needs, e: EnvCounts): boolean {
   for (const l of n.land ?? []) {
@@ -37,6 +45,10 @@ export function meetsNeeds(n: Needs, e: EnvCounts): boolean {
   if (n.wild?.min !== undefined && e.wild < n.wild.min) return false;
   if (n.wild?.max !== undefined && e.wild > n.wild.max) return false;
   if (n.crops && e.crops < 1) return false;
+  if (n.deep && e.deepWater < DEEP_MIN_COLS) return false;
+  if (n.high && e.high < HIGH_MIN_COLS) return false;
+  if (n.houses !== undefined && e.houses < n.houses) return false;
+  if (n.litHouses !== undefined && e.litHouses < n.litHouses) return false;
   return true;
 }
 
@@ -55,6 +67,10 @@ export function needsText(n: Needs): string {
     else if (l.max !== undefined) parts.push(`${name} ${starText(shareStars(l.max))} まで`);
   }
   if (n.crops) parts.push('作物');
+  if (n.deep) parts.push('深い水');
+  if (n.high) parts.push('高い所');
+  if (n.houses !== undefined) parts.push(`家 ${n.houses} 棟以上`);
+  if (n.litHouses !== undefined) parts.push('灯りのともる家');
   const w = n.wild;
   if (w?.min !== undefined && w.max !== undefined) parts.push(`野生度 ${starText(w.min)}〜${starText(w.max)}`);
   else if (w?.min !== undefined) parts.push(`野生度 ${starText(w.min)} 以上`);
@@ -76,6 +92,9 @@ export const isDay = (h: number) => h >= 6 && h < 18;
 export const isNight = (h: number) => h >= 19 || h < 5;
 export const isMorning = (h: number) => h >= 5 && h < 9;
 const springSummer = (m: Moment) => m.season === 0 || m.season === 1;
+const notWinter = (m: Moment) => m.season !== 3;
+/** 夕方〜夜（17〜翌 5 時） */
+const isEvening = (h: number) => h >= 17 || h < 5;
 
 type VisitorSpec = Omit<VisitorDef, 'needs'>;
 const F = (min?: number, max?: number): LandNeed => ({ lands: ['forest'], min, max });
@@ -87,6 +106,9 @@ const DARK_W = (min: number): LandNeed => ({ lands: ['darkWaterside'], min });
 const DARK_F = (min: number): LandNeed => ({ lands: ['darkForest'], min });
 const FARM = (min: number): LandNeed => ({ lands: ['farm'], min });
 const FLFARM = (min: number): LandNeed => ({ lands: ['flowerField', 'farm'], min });
+const R = (min: number): LandNeed => ({ lands: ['rock'], min });
+const WET = (min: number): LandNeed => ({ lands: ['wetland'], min });
+const B = (min: number): LandNeed => ({ lands: ['beach'], min });
 
 /** 条件の数値はたたき台（設計メモ 10 章）。自然な地形の割合（森 4〜10%・草原 17〜25%・花畑 3〜6%・水辺 11〜14%）に合わせて、草原だけ少し下げた */
 const VISITOR_SPECS: VisitorSpec[] = [
@@ -126,6 +148,43 @@ const VISITOR_SPECS: VisitorSpec[] = [
   { id: 'kingfisher', name: 'カワセミ', icon: '💎', rarity: 'rare', habitat: 'waterside', motion: 'fly',
     need: { land: [W(5), D(5)], wild: { min: 4 } }, when: (m) => isMorning(m.hour),
     hint: '魚のいる、人の手の少ない水辺に、朝だけ青い鳥が来るらしい', note: '魚のいる水辺に朝だけ来る、青く光る鳥。畑や道が多いと来ない。', likesWhen: '朝・魚がいる' },
+  // ---- v0.16 で足した 12 種（設計メモ 10 章。割合は自然な地形に合わせて少し下げた） ----
+  { id: 'mejiro', name: 'メジロ', icon: '🐤', rarity: 'uncommon', habitat: 'tree', motion: 'perch',
+    need: { land: [FL(5), F(5)] }, when: (m) => (m.season === 3 || m.season === 0) && isDay(m.hour),
+    hint: '冬から春、花のそばの木に、目のまわりが白い鳥が来るらしい', note: '目のまわりが白い、うぐいす色の小鳥。花の蜜が好き。', likesWhen: '冬から春の昼' },
+  { id: 'skylark', name: 'ヒバリ', icon: '🎵', rarity: 'uncommon', habitat: 'meadow', motion: 'fly',
+    need: { land: [M(30), F(undefined, 10)] }, when: (m) => m.season === 0 && isDay(m.hour) && !m.raining,
+    hint: '春の晴れた日、広い草原の空高くで鳴いているものがいるらしい', note: '草原から真上へ舞い上がり、空でさえずり続ける。', likesWhen: '春の晴れた昼' },
+  { id: 'cricket', name: 'コオロギ', icon: '🦗', rarity: 'common', habitat: 'meadow', motion: 'hop',
+    need: { land: [M(15)] }, when: (m) => m.season === 2 && isNight(m.hour),
+    hint: '秋の夜、草むらから鳴き声がするらしい', note: '秋の夜、草むらで鳴く。ぴょんと跳ねる。', likesWhen: '秋の夜' },
+  { id: 'flyingSquirrel', name: 'ムササビ', icon: '🪂', rarity: 'uncommon', habitat: 'tree', motion: 'glide',
+    need: { land: [F(30)] }, when: (m) => isNight(m.hour),
+    hint: '森の夜、木から木へ空を滑るものがいるらしい', note: '夜の森で、大きな木から木へ、膜を広げて滑空する。', likesWhen: '夜' },
+  { id: 'eagle', name: 'ワシ', icon: '🦅', rarity: 'rare', habitat: 'highRock', motion: 'fly',
+    need: { land: [R(15)], high: true, wild: { min: 4 } }, when: (m) => isDay(m.hour) && !m.raining,
+    hint: '高い岩場の上を、大きな影が回っているらしい。人の手が多いと来ないらしい', note: '高い岩場の上空を、大きな輪を描いて舞う。', likesWhen: '晴れた昼' },
+  { id: 'heron', name: 'サギ', icon: '🩶', rarity: 'common', habitat: 'wetland', motion: 'wade',
+    need: { land: [WET(10)] }, when: (m) => notWinter(m) && (isMorning(m.hour) || isDay(m.hour)),
+    hint: '湿地の浅瀬を、足の長い鳥が歩いているらしい', note: '長い足で浅瀬をゆっくり歩き、じっと待って魚をとる。', likesWhen: '春から秋の朝と昼' },
+  { id: 'crane', name: 'ツル', icon: '🕊', rarity: 'rare', habitat: 'wetland', motion: 'wade',
+    need: { land: [WET(20), M(5)], wild: { min: 4 } }, when: (m) => m.season === 3,
+    hint: '冬、広い湿地に、頭の赤い大きな鳥が来るらしい', note: '冬の湿地に来る。頭の赤い、白と黒の大きな鳥。', likesWhen: '冬' },
+  { id: 'crab', name: 'カニ', icon: '🦀', rarity: 'common', habitat: 'beach', motion: 'crawl',
+    need: { land: [B(5)] }, when: (m) => m.season === 1 && isEvening(m.hour),
+    hint: '夏の夕方、砂浜を横歩きするものがいるらしい', note: '夏の夕方から夜、砂浜を横に歩く。はさみを振り上げる。', likesWhen: '夏の夕方から夜' },
+  { id: 'gull', name: 'カモメ', icon: '🌊', rarity: 'common', habitat: 'beach', motion: 'fly',
+    need: { land: [B(10)], deep: true }, when: (m) => isDay(m.hour),
+    hint: '砂浜と深い水のある所の空を、白い鳥が飛んでいるらしい', note: '砂浜と深い水の上を、翼を広げてゆったり飛ぶ。', likesWhen: '昼' },
+  { id: 'seaTurtle', name: 'ウミガメ', icon: '🐢', rarity: 'rare', habitat: 'beach', motion: 'crawl',
+    need: { land: [B(12)], wild: { min: 4 } }, when: (m) => m.season === 1 && isNight(m.hour),
+    hint: '夏の夜、静かな砂浜に大きなものが上がってくるらしい', note: '夏の夜、人の手の少ない砂浜にゆっくり上がってくる。', likesWhen: '夏の夜' },
+  { id: 'swallow', name: 'ツバメ', icon: '🪁', rarity: 'common', habitat: 'nearHouse', motion: 'fly',
+    need: { land: [FARM(1)], houses: 2 }, when: (m) => springSummer(m) && isDay(m.hour),
+    hint: '家と畑のある所を、すいすい低く飛ぶ鳥がいるらしい', note: '家のまわりを、低く速く飛び回る。尾が長く二つに分かれている。', likesWhen: '春と夏の昼' },
+  { id: 'gecko', name: 'ヤモリ', icon: '🦎', rarity: 'uncommon', habitat: 'houseWall', motion: 'wall',
+    need: { litHouses: 1 }, when: (m) => m.season === 1 && isNight(m.hour),
+    hint: '夏の夜、灯りのともる家の壁に、何かが張り付いているらしい', note: '夏の夜、灯りに集まる虫を待って、家の壁に張り付く。', likesWhen: '夏の夜' },
 ];
 export const VISITORS: VisitorDef[] = VISITOR_SPECS.map((v) => ({ ...v, needs: (e: EnvCounts) => meetsNeeds(v.need, e) }));
 /** 好きな環境の文（観察した後の図鑑に出す） */
@@ -141,10 +200,26 @@ export const RESIDENT_NEEDS: Record<Species, Needs> = {
   duck: { land: [W(10)] },
   squirrel: { land: [F(20)] },
   hedgehog: { land: [FLFARM(15)] },
+  // ---- v0.16 で足した 9 種（設計メモ 10 章。割合は自然な地形に合わせて少し下げた） ----
+  sheep: { land: [M(35), F(undefined, 10)], wild: { max: 3 } },
+  bear: { land: [F(35)], deep: true },
+  otter: { land: [W(15)], deep: true, wild: { min: 3 } },
+  mole: { land: [FARM(10), F(undefined, 20)] },
+  serow: { land: [R(15)], high: true },
+  stoat: { land: [R(10), F(10)] },
+  beaver: { land: [WET(15), F(5)] },
+  capybara: { land: [WET(20)], wild: { min: 2, max: 4 } },
+  cat: { houses: 4, wild: { max: 2 } },
 };
-export const RESIDENT_RULES: Record<Species, (e: EnvCounts) => boolean> = Object.fromEntries(
-  (Object.keys(RESIDENT_NEEDS) as Species[]).map((sp) => [sp, sp === 'rabbit' ? () => false : (e: EnvCounts) => meetsNeeds(RESIDENT_NEEDS[sp], e)]),
-) as Record<Species, (e: EnvCounts) => boolean>;
+/** 季節などの決まりがある住人（オコジョは冬にだけ引っ越してくる） */
+export const RESIDENT_WHEN: Partial<Record<Species, { when: (m: Moment) => boolean; text: string }>> = {
+  stoat: { when: (m) => m.season === 3, text: '冬' },
+};
+export const RESIDENT_RULES: Record<Species, (e: EnvCounts, m?: Moment) => boolean> = Object.fromEntries(
+  (Object.keys(RESIDENT_NEEDS) as Species[]).map((sp) => [sp, sp === 'rabbit' ? () => false
+    : (e: EnvCounts, m?: Moment) => meetsNeeds(RESIDENT_NEEDS[sp], e) && (!m || !RESIDENT_WHEN[sp] || RESIDENT_WHEN[sp]!.when(m))]),
+) as Record<Species, (e: EnvCounts, m?: Moment) => boolean>;
+const likesOf = (sp: Species) => [needsText(RESIDENT_NEEDS[sp]), RESIDENT_WHEN[sp]?.text].filter(Boolean).join('・');
 
 export const RESIDENT_TEXT: Record<Species, { hint: string; likes: string }> = {
   rabbit: { hint: '最初から箱庭にいる', likes: `${needsText(RESIDENT_NEEDS.rabbit)}・畑のそば` },
@@ -154,11 +229,20 @@ export const RESIDENT_TEXT: Record<Species, { hint: string; likes: string }> = {
   duck: { hint: '水辺の多い所に住みたいらしい', likes: needsText(RESIDENT_NEEDS.duck) },
   squirrel: { hint: '森のある所に住みたいらしい', likes: needsText(RESIDENT_NEEDS.squirrel) },
   hedgehog: { hint: '花畑や畑のある所に住みたいらしい', likes: needsText(RESIDENT_NEEDS.hedgehog) },
+  sheep: { hint: 'とても広い草原に住みたいらしい。森や、野生のままの土地は苦手らしい', likes: likesOf('sheep') },
+  bear: { hint: '深い森と、深い水のある所に住みたいらしい', likes: likesOf('bear') },
+  otter: { hint: '深い水のある、人の手の少ない水辺に住みたいらしい', likes: likesOf('otter') },
+  mole: { hint: '畑の多い所に住みたいらしい。森が広すぎると来ないらしい', likes: likesOf('mole') },
+  serow: { hint: '高い岩場に住みたいらしい', likes: likesOf('serow') },
+  stoat: { hint: '岩場と森のある所に、冬にだけ来るらしい', likes: likesOf('stoat') },
+  beaver: { hint: '森のそばの湿地に住みたいらしい', likes: likesOf('beaver') },
+  capybara: { hint: '広い湿地に住みたいらしい。人の手が多すぎても少なすぎても来ないらしい', likes: likesOf('capybara') },
+  cat: { hint: '家の多い、にぎやかな所に住みたいらしい', likes: likesOf('cat') },
 };
 
-export const RESIDENT_ORDER: Species[] = ['rabbit', 'tanuki', 'fox', 'deer', 'duck', 'squirrel', 'hedgehog'];
+export const RESIDENT_ORDER: Species[] = ['rabbit', 'tanuki', 'fox', 'deer', 'duck', 'squirrel', 'hedgehog', 'sheep', 'bear', 'otter', 'mole', 'serow', 'stoat', 'beaver', 'capybara', 'cat'];
 export type DexId = Species | VisitorId;
-/** 図鑑の並び：住人 7 種 → 訪問者 12 種 */
+/** 図鑑の並び：住人 16 種 → 訪問者 24 種 */
 export const DEX_ORDER: DexId[] = [...RESIDENT_ORDER, ...VISITORS.map((v) => v.id)];
 export const isVisitorId = (id: string): id is VisitorId => id in VISITOR;
 export const rarityOf = (id: DexId): Rarity => (isVisitorId(id) ? VISITOR[id].rarity : 'common');

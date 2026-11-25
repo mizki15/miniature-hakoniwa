@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>生き物の一覧（開発用）</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #dfe9f2; font-family: system-ui, sans-serif; overflow: hidden; }
+      #labels { position: fixed; inset: 0; pointer-events: none; }
+      #labels span { position: absolute; transform: translate(-50%, 0); font-size: 12px; color: #1f2933; background: rgba(255,255,255,0.75); padding: 1px 5px; border-radius: 6px; white-space: nowrap; }
+    </style>
+  </head>
+  <body>
+    <div id="labels"></div>
+    <!-- 開発用：全種類の生き物のモデルを並べて見る（本番のビルドには入らない）。?flap で羽ばたかせる -->
+    <script type="module" src="/src/gallery.ts"></script>
+  </body>
+</html>

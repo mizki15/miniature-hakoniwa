@@ -18,23 +18,51 @@ const nearWaterCol = (w: WorldData, col: number) => {
   return (x > 0 && isWater(w, col - 1)) || (x < N - 1 && isWater(w, col + 1)) || isWater(w, col - N) || isWater(w, col + N);
 };
 
+/** 住人の好きな場所（v0.16）。土地の型は environment.ts の LAND_CODE の番号 */
+const HOME: Record<Species, 'water' | 'tree' | number | 'house' | 'high'> = {
+  rabbit: 6, deer: 6, fox: 6, sheep: 6, // 草原
+  hedgehog: 5, // 花畑
+  duck: 'water', otter: 'water',
+  squirrel: 'tree', tanuki: 'tree', bear: 'tree',
+  beaver: 9, capybara: 9, // 湿地
+  serow: 'high', stoat: 8, // 岩場
+  mole: 2, // 畑
+  cat: 'house',
+};
+const HIGH = 20;
+
 /**
- * 新しい住人の場所。あひるは水辺、りす・たぬきは木の近く（半径 6）、ほかは歩ける列。
- * 好きな場所が見つからなければ、歩ける列のどこか。どこも歩けなければ null
+ * 新しい住人の場所。種類ごとの好きな場所（HOME）の歩ける列から選ぶ。木の近くは半径 6 以内。
+ * 好きな場所が見つからなければ、歩ける列のどこか。どこも歩けなければ null。
+ * codes：列ごとの土地の型（classifyColumns）。無ければ土地の型で選ぶ種類は、歩ける列のどこか
  */
-export function placeResident(w: WorldData, species: Species, rand: () => number = Math.random, treeCols?: ReadonlySet<number>): [number, number] | null {
+export function placeResident(w: WorldData, species: Species, rand: () => number = Math.random, treeCols?: ReadonlySet<number>,
+  extra: { codes?: Uint8Array; buildingCols?: ReadonlySet<number> } = {}): [number, number] | null {
   const N = w.size;
   const cols = walkableCols(w);
   if (cols.length === 0) return null;
   let prefer: number[] = [];
-  if (species === 'duck') prefer = cols.filter((c) => nearWaterCol(w, c));
-  else if ((species === 'squirrel' || species === 'tanuki') && treeCols && treeCols.size) {
+  const home = HOME[species];
+  const codes = extra.codes;
+  if (home === 'water') prefer = cols.filter((c) => nearWaterCol(w, c));
+  else if (home === 'tree' && treeCols && treeCols.size) {
     const trees = [...treeCols];
     for (let tries = 0; tries < 200 && prefer.length === 0; tries++) {
       const t = trees[Math.floor(rand() * trees.length)];
       const r = restorePlace(w, (t % N) + Math.round((rand() - 0.5) * 8), Math.floor(t / N) + Math.round((rand() - 0.5) * 8));
       if (r && Math.abs(r[0] - (t % N)) + Math.abs(r[1] - Math.floor(t / N)) <= 8) prefer = [r[0] + r[1] * N];
     }
+  } else if (home === 'house' && extra.buildingCols?.size) {
+    const b = extra.buildingCols;
+    const near = (c: number) => { for (let dz = -4; dz <= 4; dz++) for (let dx = -4; dx <= 4; dx++) if (b.has(c + dx + dz * N)) return true; return false; };
+    prefer = cols.filter(near);
+  } else if (home === 'high' && codes) {
+    prefer = cols.filter((c) => codes[c] === 8 && w.heights[c] >= HIGH);
+    if (!prefer.length) prefer = cols.filter((c) => codes[c] === 8);
+  } else if (typeof home === 'number' && codes) {
+    prefer = cols.filter((c) => codes[c] === home);
+    // 湿地の住人は、泥が無ければ水辺でもよい
+    if (!prefer.length && home === 9) prefer = cols.filter((c) => nearWaterCol(w, c));
   }
   const pool = prefer.length ? prefer : cols;
   const c = pool[Math.floor(rand() * pool.length)];

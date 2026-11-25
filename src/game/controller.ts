@@ -462,11 +462,12 @@ export class GameController {
     }
     // 建物：野生度は足元を自然の星で重み付けして数える。建ち終わった灯りのある建物は、まわりを照らす
     // 性格がまだ計算できていない建物は、足元をそのまま数え、灯りは無いものとする（計算できたら数え直す）
-    let buildingWildCols = 0;
+    let buildingWildCols = 0, houses = 0;
     const lights: Light[] = [];
     for (const p of this.placed) {
       const d = this.designs.get(p.id);
       if (!d) continue;
+      if (p.progress >= 1) houses++;
       const cols = footprintCols(d, p.rot, p.x, p.z, N);
       const c = this.characterOf?.(d);
       buildingWildCols += cols.length * (c ? buildingWildWeight(c.nature) : 1);
@@ -478,7 +479,7 @@ export class GameController {
     }
     return {
       flowerCols, treeCols: this.treeCols as ReadonlySet<number>, farmland: this.farmland as ReadonlySet<number>, crops: this.farm.crops.size,
-      buildingCols: this.buildingCols as ReadonlySet<number>, buildingWildCols, lights,
+      buildingCols: this.buildingCols as ReadonlySet<number>, buildingWildCols, lights, houses, litHouses: lights.length,
     };
   }
 

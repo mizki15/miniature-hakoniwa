@@ -1,6 +1,6 @@
 import { ACTIVITY_NAMES, SPECIES, type Animal, type Species } from './animals';
 import type { Visitor } from './visitors';
-import { DEX_ORDER, RARITY_STARS, RESIDENT_TEXT, VISITOR, isVisitorId, visitorLikes, rarityOf, type DexId } from '../eco/species';
+import { DEX_ORDER, RARITY_STARS, RESIDENT_ORDER, RESIDENT_TEXT, VISITOR, isVisitorId, visitorLikes, rarityOf, type DexId } from '../eco/species';
 import { dexStage, type Dex } from '../eco/dexState';
 import { SEASON_NAMES } from '../calendar';
 import { LAND_NAMES, sharePct, type EnvCounts, type Land } from '../eco/environment';
@@ -14,7 +14,7 @@ export function envSummaryHtml(e: EnvCounts): string {
 }
 
 /**
- * 生き物図鑑：住人 7 種と訪問者 12 種。
+ * 生き物図鑑：住人 16 種と訪問者 24 種。
  *   ？？？：ヒントだけ／見かけた：シルエット（名前はまだ出さない）／観察した：名前・説明・好きな環境・観察した季節
  */
 const nameOf = (id: DexId) => (isVisitorId(id) ? VISITOR[id].name : SPECIES[id as Species].name);
@@ -54,7 +54,7 @@ export function renderDex(grid: HTMLElement, dex: Dex, animals: Animal[], visito
   };
 
   DEX_ORDER.forEach((id, i) => {
-    if (i === 7) head('訪問者');
+    if (i === RESIDENT_ORDER.length) head('訪問者');
     const stage = dexStage(dex, id);
     const card = document.createElement('div');
     card.className = `dex-card ${stage}`;

@@ -2,13 +2,13 @@ import * as THREE from 'three/webgpu';
 import type { WorldData } from '../world/terrain';
 import type { SaveData } from '../save/format';
 import { countOpen } from '../world/plots';
-import { countEnvironment, emptyEnv, fitsHabitat, habitatCols, type EnvCounts, type EnvInput } from '../eco/environment';
+import { classifyColumns, countEnvironment, emptyEnv, fitsHabitat, habitatCols, houseWallSpots, type EnvCounts, type EnvInput } from '../eco/environment';
 import { checkEcosystem, dueChecks, needsStarterRabbits, stayMs, type EcoState } from '../eco/ecosystem';
 import { VISITOR, type DexId, type Moment, type VisitorId, VISITOR_POINTS } from '../eco/species';
 import { markSeen, observe, type Dex } from '../eco/dexState';
 import { SPECIES, SPECIES_LIST, NAMES, makeResident, type Animal, type Species } from './animals';
 import { pickName, placeResident, restorePlace } from './place';
-import { Visitor, type TreeShape } from './visitors';
+import { Visitor, type TreeShape, type VisitorPlace } from './visitors';
 import type { Fireflies } from './fireflies';
 
 export interface EcoDeps {
@@ -162,7 +162,8 @@ export class EcoManager {
   }
 
   private addResident(sp: Species) {
-    const at = placeResident(this.world!, sp, Math.random, this.deps.envInput().treeCols);
+    const input = this.deps.envInput();
+    const at = placeResident(this.world!, sp, Math.random, input.treeCols, { codes: classifyColumns({ world: this.world!, ...input }), buildingCols: input.buildingCols });
     if (!at) return null;
     markSeen(this.dex, sp, Date.now());
     return this.put(sp, at);
@@ -212,18 +213,32 @@ export class EcoManager {
     if (!this.world || this.visitors.some((v) => v.def.id === id)) return false;
     const def = VISITOR[id];
     const input = { world: this.world, ...this.deps.envInput() };
-    // とまる鳥は、育った木だけ（小さい苗木にはとまらない）
-    const cols = def.motion === 'perch' ? habitatCols(input, def.habitat).filter((c) => this.deps.treeShape(c)) : habitatCols(input, def.habitat);
+    // とまる鳥・ムササビは、育った木だけ（小さい苗木にはとまらない）
+    const onTree = def.motion === 'perch' || def.motion === 'glide';
+    const cols = onTree ? habitatCols(input, def.habitat).filter((c) => this.deps.treeShape(c)) : habitatCols(input, def.habitat);
     if (cols.length === 0) return false;
     const pick = (a: number[]) => a[Math.floor(Math.random() * a.length)];
-    let second: number | undefined;
+    const N = this.world.size;
     let home = pick(cols);
+    const place: VisitorPlace = {};
     if (id === 'bee') {
       // ミツバチ：花と作物（畑）の間を行き来する
       const flowers = habitatCols(input, 'flower'), farm = habitatCols(input, 'farm');
-      if (flowers.length && farm.length) { home = pick(flowers); second = pick(farm); }
+      if (flowers.length && farm.length) { home = pick(flowers); place.second = pick(farm); }
     }
-    const v = new Visitor(def, this.world, home, leavesAt, second, def.motion === 'perch' ? this.deps.treeShape(home) : null);
+    if (onTree) place.tree = this.deps.treeShape(home);
+    if (def.motion === 'glide') {
+      // ムササビ：4〜14 列離れた、もう 1 本の育った木へ滑空する
+      const hx = home % N, hz = Math.floor(home / N);
+      const far = cols.filter((c) => { const d = Math.hypot((c % N) - hx, Math.floor(c / N) - hz); return d >= 4 && d <= 14; });
+      if (far.length) { place.second = pick(far); place.tree2 = this.deps.treeShape(place.second); }
+    }
+    if (def.motion === 'wall') {
+      // ヤモリ：建物の足元の縁の列と、壁の外向き
+      const spot = houseWallSpots(input).find((s) => s.col === home);
+      if (spot) place.wall = { dx: spot.dx, dz: spot.dz };
+    }
+    const v = new Visitor(def, this.world, home, leavesAt, place);
     this.visitors.push(v);
     this.deps.diorama.add(v.object);
     // ホタルは見た目を持たない（光そのものが目印）

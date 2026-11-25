@@ -7,25 +7,36 @@ import { wrapAngle } from './motion';
  */
 const mat = new THREE.MeshStandardMaterial({ color: 0x3b3f46, flatShading: true, roughness: 0.9 });
 
-function buildBird(): { root: THREE.Group; left: THREE.Mesh; right: THREE.Mesh } {
+/**
+ * 翼は根元（内側）と先（外側）の 2 枚。先は根元に付いていて、少し遅れて動く（打ち下ろしで先がしなる。v0.16）
+ */
+function buildBird(): { root: THREE.Group; left: THREE.Group; right: THREE.Group; leftTip: THREE.Group; rightTip: THREE.Group } {
   const root = new THREE.Group();
   const body = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.6, 4), mat);
   body.rotation.x = Math.PI / 2;
   root.add(body);
-  const wingGeo = new THREE.BufferGeometry();
-  wingGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0.15, 0.7, 0, 0, 0, 0, -0.15], 3));
-  wingGeo.computeVertexNormals();
+  const tri = (pts: number[]) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)); g.computeVertexNormals(); return g; };
+  // 根元：付け根の前後 0.3、幅 0.38。先：幅 0.36 で細くとがる（少し後ろへ流れる）
+  const innerGeo = tri([0, 0, 0.16, 0.38, 0, 0.1, 0, 0, -0.14, 0.38, 0, 0.1, 0.38, 0, -0.1, 0, 0, -0.14]);
+  const tipGeo = tri([0, 0, 0.1, 0.36, 0, -0.12, 0, 0, -0.1]);
   const dmat = mat.clone();
   dmat.side = THREE.DoubleSide;
-  const left = new THREE.Mesh(wingGeo, dmat);
-  const right = new THREE.Mesh(wingGeo, dmat);
-  right.scale.x = -1;
-  root.add(left, right);
+  const wing = (sign: number) => {
+    const inner = new THREE.Group(), tip = new THREE.Group();
+    inner.add(new THREE.Mesh(innerGeo, dmat));
+    tip.add(new THREE.Mesh(tipGeo, dmat));
+    tip.position.x = 0.38;
+    inner.add(tip);
+    inner.scale.x = sign;
+    root.add(inner);
+    return { inner, tip };
+  };
+  const l = wing(1), r = wing(-1);
   root.traverse((o) => { o.castShadow = true; });
-  return { root, left, right };
+  return { root, left: l.inner, right: r.inner, leftTip: l.tip, rightTip: r.tip };
 }
 
-interface Bird { root: THREE.Group; left: THREE.Mesh; right: THREE.Mesh; offset: THREE.Vector3; phase: number; lag: number; flap: number; beat: number }
+interface Bird { root: THREE.Group; left: THREE.Group; right: THREE.Group; leftTip: THREE.Group; rightTip: THREE.Group; offset: THREE.Vector3; phase: number; lag: number; flap: number; beat: number }
 
 export class Birds {
   readonly group = new THREE.Group();
@@ -95,8 +106,14 @@ export class Birds {
       const s = Math.sin(b.beat);
       const stroke = (s > 0 ? s : s * 0.6) * 0.7;
       const wing = stroke * b.flap + (1 - Math.min(1, b.flap)) * 0.12;
+      // 先は根元より少し遅れて、同じ向きにもう少し曲がる（滑空中はまっすぐ）
+      const s2 = Math.sin(b.beat - 0.9);
+      const tip = (s2 > 0 ? s2 : s2 * 0.6) * 0.45 * Math.min(1, b.flap);
       b.left.rotation.z = wing;
-      b.right.rotation.z = -wing;
+      b.right.rotation.z = -wing; // 右の翼は x を反転してから回すので、角度は逆
+      // 先は親（根元）の中で回るので、左右とも同じ角度で鏡写しになる
+      b.leftTip.rotation.z = tip;
+      b.rightTip.rotation.z = tip;
       b.root.scale.setScalar(amount);
     }
   }
