@@ -7,6 +7,7 @@ import { FRAME, PLOT, plotOfCol, plotRect } from '../world/plots';
 import { canSetCol, floodAllowed } from './edgeRules';
 import { CROPS, Farm, type Crop, type CropKind, type FarmEnv, type Sapling } from './farm';
 import { UndoStack } from './undoStack';
+import { TOOL_DEFS, toolDef, type ToolAt, type ToolCtx } from './tools';
 import { buildCropGeometry, buildSaplingGeometry } from './cropModels';
 import { raycastVoxels, type VoxelHit } from './picking';
 import { GRASS_VARIANTS, PEBBLE_VARIANTS, REED_VARIANTS, buildGrassTuft, buildPebble, buildReed, isReedSpot, placeGround } from '../creatures/groundDecor';
@@ -97,10 +98,8 @@ const BLOCK_COST: Record<number, RawId[]> = {
 
 export const TOOLS: { id: Tool; name: string; icon: string; help: string }[] = [
   { id: 'look', name: '見る', icon: '👁', help: '眺めるだけ。水面をクリックすると波紋' },
-  { id: 'till', name: '耕す', icon: '⛏', help: '草地や土を耕して畑にする' },
-  { id: 'seed', name: '種まき', icon: '🌱', help: '畑に種をまく' },
-  { id: 'water', name: '水やり', icon: '💧', help: '畑に水をやる（6 時間、倍の速さで育つ）' },
-  { id: 'harvest', name: '収穫', icon: '🧺', help: '育ちきった作物を収穫する' },
+  // 畑の 4 つはレジストリ（game/tools.ts）から
+  ...TOOL_DEFS.map(({ id, name, icon, help }) => ({ id, name, icon, help })),
   { id: 'plant', name: '苗木', icon: '🌳', help: '苗木を植える（約 1 日で木になる）' },
   { id: 'flower', name: '花を植える', icon: '🌷', help: '草地に花を植える。花は虫や鳥を呼ぶ' },
   { id: 'pick', name: '摘む・刈る', icon: '✂', help: '花を摘む（花 +1）・湿地の葦を刈る（葦 +1。数日で生え戻る）' },
@@ -379,7 +378,7 @@ export class GameController {
       for (let y = 0; y < H; y++) w.voxels.set(r.voxels.subarray(lz * W + y * W * D, lz * W + y * W * D + W), row + y * NN);
     }
     w.plots |= 1 << r.plot;
-    this.typeTex!.needsUpdate = true;
+    this.texFull = true;
     this.irrigatedCache.clear();
     const risers: THREE.Object3D[] = [];
     for (const c of r.chunks) {
@@ -686,7 +685,7 @@ export class GameController {
       const n = addPickup(f.inventory, this.pickupFrac, perDay, Math.min(7, since / DAY_MS));
       if (n) { this.pickedSince += n; this.unsaved = true; }
     }
-    if (changed) { this.rebuildGrowing(); this.env(); this.unsaved = true; }
+    if (changed) { this.markGrowing(); this.env(); this.unsaved = true; }
   }
 
   /** 花を 1 本足す（列の中で少しずらし、向き・大きさはばらつかせる） */
@@ -902,8 +901,8 @@ export class GameController {
       else this.farmland.delete(col);
     }
     this.irrigatedCache.clear();
-    this.rebuildCrops();
-    this.rebuildGrowing();
+    this.markCrops();
+    this.markGrowing();
     this.rebuildBuildings();
     this.env();
     this.unsaved = true; this.onPlayerChange?.();
@@ -931,7 +930,7 @@ export class GameController {
     // 表面がむき出しの土になった列は、草が生えるまでの時計を回し始める（土でなくなったらやめる）
     if (h > 0 && w.voxels[this.idx(x, h - 1, z)] === DIRT && h >= w.waterLevel) { if (!this.bareSince.has(col)) this.bareSince.set(col, this.farm.simMs); }
     else this.bareSince.delete(col);
-    this.typeTex!.needsUpdate = true;
+    this.texLayers.add(y); // 地形の 3D テクスチャは、変えた高さの層だけ送る（tick の終わりにまとめて）
     this.irrigatedCache.clear();
     // このチャンクと、縁なら隣のチャンクも作り直す
     const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK);
@@ -1107,27 +1106,10 @@ export class GameController {
       if (sp && sp.progress < 1) return res(false, `まだ育っています（${Math.floor(sp.progress * 100)}%）`, tx, ty, tz);
       return res(true, `木を切る（丸太 +${LOGS_PER_TREE}・葉 +${FOLIAGE_PER_TREE}）`, tx, ty, tz);
     }
+    // レジストリにある道具（game/tools.ts）
+    const def = toolDef(this.tool);
+    if (def) { const r = def.check(this.toolCtx, { x, y, z, col, block: t, topFace, isTop }); return res(r.ok, r.msg); }
     switch (this.tool) {
-      case 'till':
-        if (!topFace || !isTop) return res(false, '地面の上面を選んでください');
-        if (this.treeCols.has(col)) return res(false, '木の根元は耕せません');
-        if (isFarm(t)) return res(false, 'もう耕してあります');
-        if (t !== GRASS && t !== DIRT) return res(false, '草地か土の所だけ耕せます');
-        return res(true, '耕す');
-      case 'seed': {
-        if (!isFarm(t) || !isTop) return res(false, '畑に種をまけます');
-        if (this.farm.crops.has(col)) return res(false, 'もう植えてあります');
-        return res(true, `${CROPS[this.seed].name}の種をまく`);
-      }
-      case 'water':
-        if (!isFarm(t) || !isTop) return res(false, '畑に水をやれます');
-        return res(true, this.farm.isWateredNow(col) ? 'もう湿っています（延長）' : '水をやる');
-      case 'harvest': {
-        const c = this.farm.crops.get(col);
-        if (!c || !isTop) return res(false, '作物がありません');
-        if (c.progress < 1) return res(false, `${CROPS[c.kind].name}：育ち具合 ${Math.floor(c.progress * 100)}%`);
-        return res(true, `${CROPS[c.kind].name}を収穫`);
-      }
       case 'plant': {
         if (!topFace || !isTop) return res(false, '地面の上面を選んでください');
         if (t !== GRASS && t !== DIRT) return res(false, '草地か土の所に植えられます');
@@ -1230,6 +1212,9 @@ export class GameController {
     if (!c.ok) return c.msg;
     this.unsaved = true; this.onPlayerChange?.();
     if (this.recording) this.recording.changed = true;
+    // レジストリにある道具（game/tools.ts）
+    const def = toolDef(this.tool);
+    if (def) { const at: ToolAt = { x, y, z, col, block: this.get(x, y, z), topFace: true, isTop: true }; return def.apply(this.toolCtx, at); }
     switch (this.tool) {
       case 'build': {
         const d = this.designs.get(this.selectedDesign!)!;
@@ -1250,35 +1235,13 @@ export class GameController {
         if (cost) { refundMats(this.farm.inventory, cost); this.wallet.add(cost.points); }
         return `「${p.design.name}」を片付けました${cost ? '（素材と発見ポイントが戻りました）' : ''}`;
       }
-      case 'till':
-        this.removeFlowersAt(x, z);
-        this.setVoxel(x, y, z, FARMLAND);
-        this.farmland.add(col);
-        this.onGoalEvent?.({ k: 'till' });
-        return '耕しました';
-      case 'seed':
-        this.farm.plant(col, this.seed);
-        this.rebuildCrops();
-        return `${CROPS[this.seed].name}の種をまきました`;
-      case 'water':
-        this.farm.water(col);
-        this.setVoxel(x, y, z, WET_FARMLAND);
-        return '水をやりました';
-      case 'harvest': {
-        const kind = this.farm.harvest(col);
-        this.rebuildCrops();
-        if (kind) this.onGoalEvent?.({ k: 'harvest', crop: kind });
-        // ひつじがいると、わらが 1 つ多い（住人の仕事）
-        if (kind === 'wheat') { const n = 1 + this.jobs().extraStraw; gain(this.farm.inventory, 'straw', n); return `小麦を収穫しました（わら +${n}）`; }
-        return kind ? `${CROPS[kind].name}を収穫しました` : null;
-      }
       case 'plant': {
         this.removeFlowersAt(x, z);
         const variant = y + 1 > 19 ? 4 + Math.floor(Math.random() * 2) : Math.floor(Math.random() * 4);
         this.farm.plantSapling(col, variant, Math.floor(Math.random() * 4) * (Math.PI / 2));
         this.treeCols.add(col);
         w.walkable[col] = 0;
-        this.rebuildGrowing();
+        this.markGrowing();
         return '苗木を植えました';
       }
       case 'flower':
@@ -1341,7 +1304,7 @@ export class GameController {
         const logs = LOGS_PER_TREE + this.jobs().extraLogs;
         gain(this.farm.inventory, log, logs);
         gain(this.farm.inventory, 'foliage', FOLIAGE_PER_TREE);
-        this.rebuildGrowing();
+        this.markGrowing();
         this.env();
         return `木を切りました（${RAW[log].name} +${logs}・葉 +${FOLIAGE_PER_TREE}）`;
       }
@@ -1354,10 +1317,10 @@ export class GameController {
           if (si >= 0) {
             this.farm.saplings.splice(si, 1);
             this.treeCols.delete(col);
-            this.rebuildGrowing();
+            this.markGrowing();
           }
           this.removeFlowersAt(x, z);
-          if (this.farm.crops.delete(col)) this.rebuildCrops();
+          if (this.farm.crops.delete(col)) this.markCrops();
           this.farmland.delete(col);
         }
         // 掘ったブロックは原料になる。岩を深く掘ると、まれに鉄鉱石
@@ -1373,7 +1336,7 @@ export class GameController {
         const prevTop = w.heights[col] - 1;
         if (y > prevTop) {
           this.removeFlowersAt(x, z);
-          if (this.farm.crops.delete(col)) this.rebuildCrops();
+          if (this.farm.crops.delete(col)) this.markCrops();
           if (this.farmland.delete(col)) this.setVoxel(x, prevTop, z, DIRT);
         }
         const need = this.blockRaw(this.block);
@@ -1681,8 +1644,54 @@ export class GameController {
     return g;
   }
 
+  /** 道具のレジストリ（game/tools.ts）に渡す、箱庭の操作 */
+  private _toolCtx: ToolCtx | null = null;
+  private get toolCtx(): ToolCtx {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const g = this;
+    return this._toolCtx ??= {
+      get farm() { return g.farm; },
+      get seed() { return g.seed; },
+      isTree: (col) => g.treeCols.has(col),
+      setVoxel: (x, y, z, b) => g.setVoxel(x, y, z, b),
+      removeFlowersAt: (x, z) => g.removeFlowersAt(x, z),
+      addFarmland: (col) => { g.farmland.add(col); },
+      markCrops: () => g.markCrops(),
+      gain: (raw, n) => gain(g.farm.inventory, raw, n),
+      extraStraw: () => g.jobs().extraStraw,
+      goalEvent: (e) => g.onGoalEvent?.(e),
+    };
+  }
+
+  // ---------- 作り直しの印（v0.18）：use() などでは印を付けるだけにし、tick の終わりに 1 回だけ作り直す ----------
+  private cropsDirty = false;
+  private growingDirty = false;
+  /** 作物を作り直す印。envChanged：作物の数が変わった（植えた・収穫した。育っただけなら false） */
+  private markCrops(envChanged = true) { this.cropsDirty = true; if (envChanged) this.env(); }
+  /** 植えた木を作り直す印。envChanged：木が増えた・減った・形が変わった（大きさが変わっただけなら false） */
+  private markGrowing(envChanged = true) { this.growingDirty = true; if (envChanged) this.env(); }
+  /** 地形の 3D テクスチャ（ボクセルの種類）：送り直す高さの層と、丸ごと送り直すか */
+  private texLayers = new Set<number>();
+  private texFull = false;
+  /** 印の付いた作り直しと、テクスチャの送り直しをまとめて行う（毎フレーム 1 回） */
+  flushDirty() {
+    if (this.cropsDirty) { this.cropsDirty = false; this.rebuildCrops(); }
+    if (this.growingDirty) { this.growingDirty = false; this.rebuildGrowing(); }
+    const t = this.typeTex as (THREE.Data3DTexture & { layerUpdates?: Set<number> }) | null;
+    if (t && (this.texFull || this.texLayers.size)) {
+      // WebGPU は layerUpdates の層だけを送り、送ったら空にする。WebGL は 3D テクスチャを毎回丸ごと送る（層は残るので、多くなったら空にする）
+      const lu = t.layerUpdates;
+      if (lu) {
+        if (this.texFull || this.texLayers.size + lu.size > 16) lu.clear();
+        else for (const y of this.texLayers) lu.add(y);
+      }
+      t.needsUpdate = true;
+      this.texFull = false;
+      this.texLayers.clear();
+    }
+  }
+
   private rebuildCrops() {
-    this.env();
     const w = this.world!;
     const half = w.size / 2;
     for (const m of this.cropMeshes) { this.deps.diorama.remove(m); m.dispose(); }
@@ -1712,11 +1721,8 @@ export class GameController {
 
   /** 植えた木：苗木 → 小さな木 → 大きな木 */
   private rebuildGrowing() {
-    this.env();
     const w = this.world!;
     const half = w.size / 2;
-    for (const m of this.growingMeshes) { this.deps.diorama.remove(m); m.dispose(); }
-    this.growingMeshes = [];
     const byGeo = new Map<THREE.BufferGeometry, THREE.Matrix4[]>();
     const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
     for (const s of this.farm.saplings) {
@@ -1730,6 +1736,19 @@ export class GameController {
       if (!byGeo.has(geo)) byGeo.set(geo, []);
       byGeo.get(geo)!.push(m);
     }
+    // 形ごとの数が前と同じなら（大きくなっただけ）、作り直さずに行列だけ書き換える
+    const same = this.growingMeshes.length === byGeo.size && [...byGeo].every(([geo, mats], i) => this.growingMeshes[i].geometry === geo && this.growingMeshes[i].count === mats.length);
+    if (same) {
+      [...byGeo.values()].forEach((mats, i) => {
+        const im = this.growingMeshes[i];
+        mats.forEach((m, j) => im.setMatrixAt(j, m));
+        im.instanceMatrix.needsUpdate = true;
+        im.computeBoundingSphere();
+      });
+      return;
+    }
+    for (const m of this.growingMeshes) { this.deps.diorama.remove(m); m.dispose(); }
+    this.growingMeshes = [];
     for (const [geo, mats] of byGeo) {
       const im = new THREE.InstancedMesh(geo, geo === this.saplingGeo ? this.deps.flowerMat : this.deps.detailMat, mats.length);
       mats.forEach((m, i) => im.setMatrixAt(i, m));
@@ -1754,8 +1773,11 @@ export class GameController {
     return { ...env, isWet: (col) => this.isWet(col), growth: j.growth, winterGrowth: j.winterGrowth };
   }
 
-  /** 毎フレーム呼ぶ。dtReal は現実の経過秒 */
-  tick(dtReal: number, env: { season: number; raining: boolean }) {
+  /**
+   * 毎フレーム呼ぶ。dtReal：演出用の経過秒（せり上がり・土ぼこりなど。重い時は短く切ってある）、
+   * dtSim：畑・植林・建設を進める現実の経過秒（切らない。v0.18。大きく空いた時は main が catchUp で進める）
+   */
+  tick(dtReal: number, env: { season: number; raining: boolean }, dtSim = dtReal) {
     if (!this.world) return;
     // 開いたばかりの区画をせり上げる
     for (const r of this.rising) {
@@ -1765,9 +1787,10 @@ export class GameController {
     }
     for (const r of this.rising) if (r.t >= 1) r.done?.();
     this.rising = this.rising.filter((r) => r.t < 1);
-    const changed = this.farm.advance(dtReal * 1000 * this.farm.speed, this.farmEnv(env));
-    if (changed) { this.rebuildCrops(); this.rebuildGrowing(); }
-    this.advanceBuildings(dtReal * 1000 * this.farm.speed);
+    const ch = this.farm.advance(dtSim * 1000 * this.farm.speed, this.farmEnv(env));
+    if (ch.crops) this.markCrops(false);
+    if (ch.saplings || ch.matured) this.markGrowing(ch.matured);
+    this.advanceBuildings(dtSim * 1000 * this.farm.speed);
     this.animateSites(dtReal);
     // 畑の湿り具合を見た目（ブロックの種類）に反映（1 秒ごと）
     this.wetCheck -= dtReal;
@@ -1786,6 +1809,7 @@ export class GameController {
     // 地面の小物：変わってから少し待って置き直す（なぞっている間に毎フレーム作り直さない）。せり上がり中は待つ
     this.groundTimer -= dtReal;
     if (this.groundDirty && this.groundTimer <= 0 && !this.isRising()) { this.rebuildGround(); this.groundTimer = 0.3; }
+    this.flushDirty();
     this.flushRemesh();
   }
 
@@ -1794,8 +1818,8 @@ export class GameController {
     const steps = Math.ceil(hours * 4); // 15 分ずつ
     for (let i = 0; i < steps; i++) this.farm.advance((hours * HOUR) / steps, this.farmEnv(env));
     this.advanceBuildings(hours * HOUR);
-    this.rebuildCrops();
-    this.rebuildGrowing();
+    this.markCrops();
+    this.markGrowing();
     this.wetCheck = 0;
   }
 
@@ -1922,8 +1946,8 @@ export class GameController {
     // 進み具合のない古い記録は、建ち終わった建物として読む
     this.placed = save.buildings.placed.filter(([id]) => this.designs.has(id)).map(([id, x, z, rot, progress, paid]) => ({ id, x, z, rot, progress: progress ?? 1, paid: paid === 1 }));
     if (this.selectedDesign && !this.designs.has(this.selectedDesign)) this.selectedDesign = null;
-    this.rebuildCrops();
-    this.rebuildGrowing();
+    this.markCrops();
+    this.markGrowing();
     this.rebuildBuildings();
     this.undo.clear();
     this.redo.clear();
@@ -1955,8 +1979,8 @@ export class GameController {
     this.onBuildingDone = done;
     this.rebuildBuildings();
     this.runNature();
-    this.rebuildCrops();
-    this.rebuildGrowing();
+    this.markCrops();
+    this.markGrowing();
     this.wetCheck = 0;
     return {
       hours: (target - from) / HOUR,

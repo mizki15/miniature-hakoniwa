@@ -22,6 +22,7 @@ export const SAPLING_HOURS = 24;
 export const WET_HOURS = 6;
 
 export interface Crop { kind: CropKind; col: number; progress: number; }
+export interface FarmChange { crops: boolean; saplings: boolean; matured: boolean }
 export interface Sapling { col: number; variant: number; rot: number; progress: number; }
 
 export interface FarmEnv {
@@ -75,10 +76,14 @@ export class Farm {
    * 時間を進める。dtMs は箱庭内の経過時間（早送り込み）。
    * 段階が変わった作物・苗木があれば true（見た目を作り直す合図）
    */
-  advance(dtMs: number, env: FarmEnv): boolean {
+  /**
+   * 時間を進める。戻り値：crops 作物の段階が変わった、saplings 苗木の大きさが変わった（1/20 ごと）、
+   * matured 苗木の形が変わった（小さな木になった・育ちきった。とまれる木が変わるので環境を数え直す）
+   */
+  advance(dtMs: number, env: FarmEnv): FarmChange {
     this.simMs += dtMs;
     const hours = dtMs / HOUR;
-    let changed = false;
+    const out: FarmChange = { crops: false, saplings: false, matured: false };
     for (const c of this.crops.values()) {
       if (c.progress >= 1) continue;
       const def = CROPS[c.kind];
@@ -87,17 +92,18 @@ export class Farm {
       const wetRate = env.isWet(c.col) ? 1 : 0.5;
       const before = Farm.stage(c.progress);
       c.progress = Math.min(1, c.progress + (hours / def.hours) * seasonRate * wetRate * (env.growth?.(c.col) ?? 1));
-      if (Farm.stage(c.progress) !== before) changed = true;
+      if (Farm.stage(c.progress) !== before) out.crops = true;
     }
     for (const s of this.saplings) {
       if (s.progress >= 1) continue;
-      const before = Math.floor(s.progress * 20);
+      const before = Math.floor(s.progress * 20), was = s.progress;
       s.progress = Math.min(1, s.progress + (hours / SAPLING_HOURS) * (env.season === 3 ? 0.2 : 1));
-      if (Math.floor(s.progress * 20) !== before) changed = true;
+      if (Math.floor(s.progress * 20) !== before) out.saplings = true;
+      if ((was < 0.25) !== (s.progress < 0.25) || (was < 1 && s.progress >= 1)) out.matured = true;
     }
     // 雨の間はすべての畑が湿る
     if (env.raining) for (const col of this.crops.keys()) this.wetUntil.set(col, this.simMs + WET_HOURS * HOUR);
-    return changed;
+    return out;
   }
 
   isWateredNow(col: number) { return (this.wetUntil.get(col) ?? 0) > this.simMs; }

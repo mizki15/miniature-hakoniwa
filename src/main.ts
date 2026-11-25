@@ -1,20 +1,13 @@
 import * as THREE from 'three/webgpu';
-import { float, fog, packNormalToRGB, rangeFogFactor, unpackRGBToNormal, mix, mrt, normalView, output, pass, sample, uniform, vec4, velocity } from 'three/tsl';
-import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
-import { smaa } from 'three/addons/tsl/display/SMAANode.js';
-import { traa } from 'three/addons/tsl/display/TRAANode.js';
-import { taau } from 'three/addons/tsl/display/TAAUNode.js';
-import { AA_NAMES, aaSpec, isAAMode, type AAMode } from './render/antialias';
-import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js';
-import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { fog, rangeFogFactor, uniform } from 'three/tsl';
+import { AA_NAMES, isAAMode } from './render/antialias';
+import { createPost } from './render/post';
 import { Fireflies } from './creatures/fireflies';
 import { Birds } from './creatures/birds';
 import { Ambience } from './audio';
-import { ao } from 'three/addons/tsl/display/GTAONode.js';
-import { denoise } from 'three/addons/tsl/display/DenoiseNode.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FIREFLIES_ON, RIPPLES, RIPPLES_ON, U, createDetailMaterial, createTerrainMaterial, createToonWaterMaterial, createWaterMaterial, fireflyData, rippleData, windowGlowAt, type SurfaceMaterial } from './render/materials';
-import { toonOutline, uLine } from './render/toon';
+import { uLine } from './render/toon';
 import { SAMPLES as QUALITY_SAMPLES, nextQuality } from './render/autoQuality';
 import { createDaylight } from './render/daylight';
 import { createShadowSystem } from './render/shadows';
@@ -45,6 +38,8 @@ import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
 import { FLOWER_KINDS, GameController, PATH_KINDS, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
 import { HoverTip } from './ui/hoverTip';
+import { CROP_ICONS, registryOptions } from './game/tools';
+import { createHud } from './ui/hud';
 import { buildMinutes } from './build/construction';
 import { parseBuilding, type BuildingDesign, type ParseIssue } from './build/geoParse';
 import { buildFixPrompt, buildPrompt } from './build/aiPrompt';
@@ -129,71 +124,11 @@ async function main() {
 
   // ---------- ポストプロセス：（時間方向のアンチエイリアス）→ AO（GTAO）→ 被写界深度（画面中央にピント）→ ブルーム →（FXAA・SMAA） ----------
   // アンチエイリアスの方法と、場面を描く解像度はデバッグで切り替える。切り替えると場面の描き方ごと作り直す
-  const pipeline = new THREE.RenderPipeline(renderer);
-  const uAO = uniform(1);
-  const uFocus = uniform(100);
-  const uFocal = uniform(30);
-  const uBokeh = uniform(1.8);
-  let aaMode: AAMode = 'fxaa';
-  let renderScale = 1;
-  interface ScenePost { scenePass: ReturnType<typeof pass>; aoPass: ReturnType<typeof ao>; color: N; withAO: N; viewZ: N; isSky: N; depthTex: N; normalTex: N; temporal: { dispose(): void } | null }
-  let sp: ScenePost | null = null;
-  const buildScenePost = (): ScenePost => {
-    const spec = aaSpec(aaMode);
-    const scenePass = pass(scene, camera, { samples: spec.samples });
-    scenePass.setMRT(mrt(spec.velocity ? { output, normal: packNormalToRGB(normalView), velocity } : { output, normal: packNormalToRGB(normalView) }));
-    scenePass.setResolutionScale(renderScale * (renderStyle === 'toonLite' ? TOON_LITE_SCALE : 1));
-    const raw = scenePass.getTextureNode('output');
-    const normalTex = scenePass.getTextureNode('normal');
-    const depthTex = scenePass.getTextureNode('depth');
-    const viewZ = scenePass.getViewZNode();
-    // 時間方向の方法は、場面の色そのものにかける（AO などはその後）
-    let temporal: (N & { dispose(): void }) | null = null;
-    if (spec.temporal !== 'none') {
-      const vel = scenePass.getTextureNode('velocity');
-      temporal = (spec.temporal === 'traa' ? traa : taau)(raw, depthTex, vel, camera) as N;
-    }
-    const color: N = temporal ?? raw;
-
-    const sceneNormal = sample((uv: N) => unpackRGBToNormal((normalTex as N).sample(uv)));
-    const aoPass = ao(depthTex, sceneNormal, camera);
-    aoPass.resolutionScale = 0.5;
-    aoPass.radius.value = 1.6; // ボクセル 1〜2 個分くらいの範囲の隅を暗く
-    aoPass.thickness.value = 2;
-    aoPass.scale.value = 1.6;
-    aoPass.distanceFallOff.value = 1;
-    // GTAO はサンプルのノイズが粒状に見えるので、深度と法線を見ながらぼかして消す
-    const aoValue = (denoise(aoPass.getTextureNode(), depthTex, sceneNormal, camera) as N).r;
-    const withAO = vec4(color.rgb.mul(mix(float(1), aoValue, uAO)), 1);
-    const isSky = (depthTex as N).r.greaterThanEqual(0.99999);
-    return { scenePass, aoPass, color, withAO, viewZ, isSky, depthTex, normalTex, temporal };
-  };
-  let dofOn = true, aoOn = true, bloomOn = true;
-  const updatePost = (rebuildScene = false) => {
-    if (rebuildScene || !sp) {
-      if (sp) { sp.scenePass.dispose(); sp.aoPass.dispose(); sp.temporal?.dispose(); }
-      sp = buildScenePost();
-    }
-    const { color, withAO, viewZ, isSky } = sp;
-    // トゥーン：AO は使わず（GTAO の計算ごと飛ぶ）、深さと法線から線画を重ねる
-    const src: N = isToon() ? toonOutline(color, sp.depthTex, sp.normalTex, camera) : aoOn ? withAO : color;
-    // 空（背景）はぼかさない：星や雲がくっきり見えるように
-    let out: N = dofOn ? isSky.select(src, dof(src, viewZ, uFocus, uFocal, uBokeh)) : src;
-    // ブルーム：明るい所（ホタル・太陽の照り返し）がにじんで光る
-    if (bloomOn) out = out.add(bloom(out, 0.45, 0.4, 0.9));
-    // 描き終わった絵にかける方法は最後に
-    const post = aaSpec(aaMode).post;
-    if (post === 'fxaa') out = fxaa(out);
-    else if (post === 'smaa') out = smaa(out);
-    pipeline.outputNode = out;
-    pipeline.needsUpdate = true;
-  };
-  const setAntialias = (mode: AAMode, scale = renderScale) => {
-    if (mode === aaMode && scale === renderScale && sp) return;
-    aaMode = mode; renderScale = scale;
-    updatePost(true);
-  };
-  updatePost();
+  // render/post.ts（v0.18 で切り出した）
+  const post = createPost(renderer, scene, camera, { toon: () => isToon(), sceneScale: () => (renderStyle === 'toonLite' ? TOON_LITE_SCALE : 1) });
+  const { pipeline } = post;
+  const { ao: uAO, focus: uFocus, focal: uFocal } = post.uniforms;
+  const updatePost = post.update, setAntialias = post.setAntialias;
 
   // ---------- 箱庭 ----------
   // 描き方ごとのマテリアル（トゥーンは初めて切り替えた時に作る）
@@ -374,6 +309,8 @@ async function main() {
         typeTex.type = THREE.UnsignedByteType;
         typeTex.minFilter = typeTex.magFilter = THREE.NearestFilter;
         typeTex.unpackAlignment = 1;
+        // 1 マス変えた時に、その高さの層だけを送れるように（v0.18。three の WebGPU は Data3DTexture でも layerUpdates を見る）
+        { const lu = new Set<number>(); Object.assign(typeTex, { layerUpdates: lu, clearLayerUpdates: () => lu.clear() }); }
         typeTex.needsUpdate = true;
         terrainMat?.dispose();
         terrainMat = createTerrainMaterial(typeTex, w.size, w.height, liteTerrain, isToon(), renderStyle === 'toonLite');
@@ -451,12 +388,14 @@ async function main() {
   };
 
   // ---------- 画面中央の奥行き（ボクセルのレイマーチ） ----------
+  const tmpHalf = new THREE.Vector3();
+  const cdDir = new THREE.Vector3(), cdO = new THREE.Vector3();
   const centerDepth = (): number | null => {
     if (!world) return null;
     const N = world.size, H = world.height, half = N / 2;
-    const dir = new THREE.Vector3();
+    const dir = cdDir;
     camera.getWorldDirection(dir);
-    const o = camera.position.clone().add(new THREE.Vector3(half, 0, half));
+    const o = cdO.copy(camera.position).add(tmpHalf.set(half, 0, half));
     // 箱との交差区間
     let t0 = 0, t1 = 1e9;
     const lo = [0, 0, 0], hi = [N, H, N];
@@ -530,7 +469,6 @@ async function main() {
   /** 読み込んだ建物の名前など、外から来た文字を HTML に入れる時に使う */
   const esc = (t: string) => t.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-  const CROP_ICONS: Record<CropKind, string> = { turnip: '🥬', wheat: '🌾', pumpkin: '🎃' };
   let editTool: Tool = 'till';
 
   // 左のエディタパネル：上の Build｜Life｜Terrain（1〜3 キー）でグループを選び、その中の道具を選ぶ
@@ -546,10 +484,7 @@ async function main() {
       { id: 'unbuild', icon: '🧹', name: '片付ける', help: help('unbuild') },
     ] },
     { id: 'g:life', name: 'Life', options: () => [
-      { id: 'till', icon: '⛏', name: '耕す', help: help('till') },
-      ...CROP_KINDS.map((k) => ({ id: `seed:${k}`, icon: CROP_ICONS[k], name: `${CROPS[k].name}の種`, help: `畑にまく。育つまで ${CROPS[k].hours} 時間` })),
-      { id: 'water', icon: '💧', name: '水やり', help: help('water') },
-      { id: 'harvest', icon: '🧺', name: '収穫', help: help('harvest') },
+      ...registryOptions('life'), // 耕す・種（作物ごと）・水やり・収穫（game/tools.ts）
       { id: 'plant', icon: '🌳', name: '苗木', help: help('plant') },
       ...FLOWER_KINDS.map((f) => ({ id: `flower:${f.variant}`, icon: f.icon, name: f.name, help: help('flower') })),
       { id: 'pick', icon: '✂', name: '摘む・刈る', help: help('pick') },
@@ -1364,11 +1299,11 @@ async function main() {
   blendInput.addEventListener('input', () => { U.blend.value = parseFloat(blendInput.value); });
   const bumpInput = $<HTMLInputElement>('bump');
   bumpInput.addEventListener('input', () => { U.bump.value = parseFloat(bumpInput.value); });
-  $<HTMLInputElement>('dof').addEventListener('change', (e) => { dofOn = (e.target as HTMLInputElement).checked; updatePost(); });
-  $<HTMLInputElement>('ssao').addEventListener('change', (e) => { aoOn = (e.target as HTMLInputElement).checked; updatePost(); });
+  $<HTMLInputElement>('dof').addEventListener('change', (e) => { post.effects.dof = (e.target as HTMLInputElement).checked; updatePost(); });
+  $<HTMLInputElement>('ssao').addEventListener('change', (e) => { post.effects.ao = (e.target as HTMLInputElement).checked; updatePost(); });
   const aoInput = $<HTMLInputElement>('aoStrength');
   aoInput.addEventListener('input', () => { uAO.value = parseFloat(aoInput.value); });
-  $<HTMLInputElement>('bloom').addEventListener('change', (e) => { bloomOn = (e.target as HTMLInputElement).checked; updatePost(); });
+  $<HTMLInputElement>('bloom').addEventListener('change', (e) => { post.effects.bloom = (e.target as HTMLInputElement).checked; updatePost(); });
 
   // ---------- 描き方（ふつう／トゥーン・高／トゥーン・軽） ----------
   /** 影の地図の大きさ（トゥーン・軽は 1024 まで） */
@@ -1381,8 +1316,8 @@ async function main() {
     styleSelect.value = s;
     $('toonLineRow').hidden = s === 'standard';
     // トゥーンでは、重い後処理（被写界深度・ブルーム）を切っておく（AO は使わない）。ふつうに戻したら画質のプリセットどおり
-    if (s !== 'standard') { dofOn = false; bloomOn = false; setChecked('dof', false); setChecked('bloom', false); }
-    else { const p = QUALITY[quality]; aoOn = p.ao; dofOn = p.dof; bloomOn = p.bloom; setChecked('ssao', aoOn); setChecked('dof', dofOn); setChecked('bloom', bloomOn); }
+    if (s !== 'standard') { post.effects.dof = false; post.effects.bloom = false; setChecked('dof', false); setChecked('bloom', false); }
+    else { const p = QUALITY[quality]; post.effects.ao = p.ao; post.effects.dof = p.dof; post.effects.bloom = p.bloom; setChecked('ssao', post.effects.ao); setChecked('dof', post.effects.dof); setChecked('bloom', post.effects.bloom); }
     const old = terrainMat;
     if (typeTex && world) terrainMat = createTerrainMaterial(typeTex, world.size, world.height, liteTerrain, s !== 'standard', s === 'toonLite');
     game.swapMaterials({ ...matsOf(s), terrainMat: old !== terrainMat ? terrainMat : null });
@@ -1417,8 +1352,8 @@ async function main() {
     const p = QUALITY[q];
     renderer.setPixelRatio(p.pixelRatio);
     fit();
-    aoOn = p.ao; dofOn = p.dof && !isToon(); bloomOn = p.bloom && !isToon();
-    setChecked('ssao', aoOn); setChecked('dof', dofOn); setChecked('bloom', bloomOn);
+    post.effects.ao = p.ao; post.effects.dof = p.dof && !isToon(); post.effects.bloom = p.bloom && !isToon();
+    setChecked('ssao', post.effects.ao); setChecked('dof', post.effects.dof); setChecked('bloom', post.effects.bloom);
     updatePost();
     shadows.setMapSize(shadowSizeOf(p.shadow));
     $('qualityLabel').textContent = qualityAuto ? `→ ${QUALITY_NAMES[q]}` : '';
@@ -1472,16 +1407,11 @@ async function main() {
   $('skip1').addEventListener('click', () => { game.skip(1, lastEnv); toast('1 時間進めました'); });
   $('skip6').addEventListener('click', () => { game.skip(6, lastEnv); toast('6 時間進めました'); });
 
+  const hud = createHud();
   // 右のパネル（図鑑）の上の、時刻・季節・天気
   const updateStatus = (hh: number, mm: number, season: number, calendarSeason: number) => {
-    $('st-time').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-    $('st-season').textContent = SEASON_NAMES[season] + (season !== calendarSeason ? '（手動）' : '');
-    $('st-weather').textContent = WEATHER_NAMES[weatherOverride ?? weatherAt(new Date(), season)] + (weatherOverride === null && isSnowDay(new Date()) ? '（雪の日）' : '');
-    // 発見ポイント（図鑑の上）：持っている数と、区画を開ける 30 までのたまり具合
-    const pts = points();
-    $('rightsCount').textContent = String(pts);
-    $('rightsNext').textContent = pts >= OPEN_PLOT_POINTS ? `区画を開ける（${OPEN_PLOT_POINTS}）・建物にも使う` : `区画を開くまで あと ${OPEN_PLOT_POINTS - pts}`;
-    $('rightsGauge').style.width = `${Math.min(1, pts / OPEN_PLOT_POINTS) * 100}%`;
+    const now = new Date();
+    hud.updateStatus({ hh, mm, season, calendarSeason, weather: weatherOverride ?? weatherAt(now, season), snowDay: weatherOverride === null && isSnowDay(now), points: points(), openPoints: OPEN_PLOT_POINTS });
   };
 
   // 天気
@@ -1582,6 +1512,12 @@ async function main() {
     const season = seasonAt(d).season;
     return { season, raining: weatherAt(d, season) === 'rain' };
   };
+  /** 留守の間に起きたこと（catchUp の結果と、拾った原料） */
+  const awayNews = (r: { ripened: number; grown: number; built: number }) => {
+    const picked = game.pickedSince;
+    game.pickedSince = 0;
+    return [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : '', r.built > 0 ? `${r.built} 棟の建物が完成しました` : '', picked > 0 ? `原料を ${picked} 個拾いました` : ''].filter(Boolean).join('・');
+  };
   const fmtHours = (h: number) => (h >= 24 ? `${Math.floor(h / 24)}日${Math.round(h % 24)}時間` : h >= 1 ? `${Math.floor(h)}時間${Math.round((h % 1) * 60)}分` : `${Math.round(h * 60)}分`);
 
   /** セーブデータから箱庭を作り直す。catchUp なら閉じていた間の時間を進める */
@@ -1605,9 +1541,7 @@ async function main() {
     const target = save.farm.simMs + Math.max(0, Date.now() - save.savedAt);
     const r = game.catchUp(target, envAt);
     if (r.hours >= 0.05) {
-      const picked = game.pickedSince;
-      game.pickedSince = 0;
-      const news = [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : '', r.built > 0 ? `${r.built} 棟の建物が完成しました` : '', picked > 0 ? `原料を ${picked} 個拾いました` : ''].filter(Boolean).join('・');
+      const news = awayNews(r);
       toast(`おかえりなさい。${fmtHours(r.hours)}たちました${news ? `：${news}` : ''}`, 5000);
     }
     // 閉じていた間は引っ越してこない（判定の基準をいまにそろえる）
@@ -1692,7 +1626,7 @@ async function main() {
   $('aaBench').addEventListener('click', async () => {
     $('aaBenchLabel').textContent = '測っています…';
     const r = await bench(60);
-    $('aaBenchLabel').textContent = `${AA_NAMES[aaMode]}・${Math.round(renderScale * 100)}%：${r.msPerFrame} ms（${r.fps} fps）`;
+    $('aaBenchLabel').textContent = `${AA_NAMES[post.aaMode]}・${Math.round(post.renderScale * 100)}%：${r.msPerFrame} ms（${r.fps} fps）`;
   });
   $<HTMLInputElement>('shadowCascade').addEventListener('change', (e) => { shadows.cascade = (e.target as HTMLInputElement).checked; });
   function applyShadowEvery() {
@@ -1976,10 +1910,22 @@ async function main() {
   const focusPoint = new THREE.Vector3(0, 10, 0);
 
   let cpuLogic = 0, cpuRender = 0;
+  const wFwd = new THREE.Vector3(), wRight = new THREE.Vector3(), wMv = new THREE.Vector3(), wT = new THREE.Vector3();
+  /** 毎フレーム書く文字：変わった時だけ書き換える（v0.18。ui/hud.ts） */
+  const setText = hud.setText;
+  /** 冬に花を隠す：雪の具合が変わった時と、花が増えた時（区画を開いた）だけ見直す */
+  let flowersShown: boolean | null = null, flowerChildren = -1;
+  /** シミュレーション用の壁時計（v0.18）。演出の dt は 0.1 秒で切るが、畑・植林・建設はこちらで切らずに進める */
+  let lastWall = Date.now();
+  /** これより長く空いたら（背景のタブから戻った・止まっていた）、閉じていた間と同じように catchUp でまとめて進める */
+  const CATCHUP_GAP_MS = 5000;
   const loop = (t: number) => {
     const tl0 = performance.now();
     timer.update(t);
     const dt = Math.min(timer.getDelta(), 0.1);
+    const wallNow = Date.now();
+    const gapMs = Math.max(0, wallNow - lastWall);
+    lastWall = wallNow;
     U.now.value = timer.getElapsed();
     // 広がっている途中の波紋があるか（10 秒でほぼ消える）。無ければ水面の波紋の計算を飛ばす
     RIPPLES_ON.value = rippleData.some((r) => r.w > 0 && U.now.value - r.z >= 0 && U.now.value - r.z < 10) ? 1 : 0;
@@ -1995,14 +1941,14 @@ async function main() {
     }
     // WASD：見ている向きに沿って水平に移動。速さは注視点までの距離に比例（倍率はデバッグウィンドウの「移動の速さ」）
     if (moveKeys.size && !menuOpen()) {
-      const fwd = new THREE.Vector3();
+      const fwd = wFwd;
       camera.getWorldDirection(fwd);
       fwd.y = 0;
       if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
       fwd.normalize();
-      const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+      const right = wRight.set(-fwd.z, 0, fwd.x);
       const has = (c: string) => moveKeys.has(c);
-      const mv = new THREE.Vector3()
+      const mv = wMv.set(0, 0, 0)
         .addScaledVector(fwd, (has('KeyW') ? 1 : 0) - (has('KeyS') ? 1 : 0))
         .addScaledVector(right, (has('KeyD') ? 1 : 0) - (has('KeyA') ? 1 : 0));
       if (mv.lengthSq() > 0) mv.normalize();
@@ -2011,7 +1957,7 @@ async function main() {
       // 注視点が箱庭から離れすぎないように
       const lim = extent / 2 + 24;
       const cx = bounds.cx - FRAME / 2, cz = bounds.cz - FRAME / 2;
-      const t = controls.target.clone().add(mv);
+      const t = wT.copy(controls.target).add(mv);
       t.x = Math.min(cx + lim, Math.max(cx - lim, t.x));
       t.z = Math.min(cz + lim, Math.max(cz - lim, t.z));
       t.y = Math.min(90, Math.max(0, t.y));
@@ -2033,7 +1979,7 @@ async function main() {
     const hour = timeOverride ?? now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
     if (timeOverride === null) timeInput.value = String(hour);
     const hh = Math.floor(hour), mm = Math.floor((hour - hh) * 60);
-    $('timeLabel').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}${timeOverride === null ? '' : '（手動）'}`;
+    setText('timeLabel', `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}${timeOverride === null ? '' : '（手動）'}`);
 
     // 季節（全世界共通の暦。セレクトで上書き可）
     const st = seasonAt(now);
@@ -2047,7 +1993,7 @@ async function main() {
     rainAmount.value = weatherNow.rain;
     snowAmount.value = weatherNow.snow;
     if (precip) { precip.rain.visible = weatherNow.rain > 0.01; precip.snow.visible = weatherNow.snow > 0.01; }
-    $('weatherLabel').textContent = `いま：${WEATHER_NAMES[weatherAt(now, st.season)]}`;
+    setText('weatherLabel', `いま：${WEATHER_NAMES[weatherAt(now, st.season)]}`);
 
     const size = extent;
     // 影の範囲は箱庭全体ではなく、注目点のまわり（カメラとの距離で決める）。広くなっても影が粗くならない
@@ -2074,8 +2020,13 @@ async function main() {
     const snowNow = s === 3 ? 1 : 0, snowNext = nextS === 3 ? 1 : 0;
     U.snow.value = snowNow + (snowNext - snowNow) * blend;
     // 冬は花を隠す
-    diorama.children.forEach((o) => { if (o.userData.kind === 'flower') o.visible = U.snow.value < 0.5; });
-    $('seasonLabel').textContent = `いまの暦：${SEASON_NAMES[st.season]}${st.blend > 0 ? `→${SEASON_NAMES[st.next]}` : ''}`;
+    const showFlowers = U.snow.value < 0.5;
+    if (showFlowers !== flowersShown || diorama.children.length !== flowerChildren) {
+      flowersShown = showFlowers;
+      flowerChildren = diorama.children.length;
+      diorama.children.forEach((o) => { if (o.userData.kind === 'flower') o.visible = showFlowers; });
+    }
+    setText('seasonLabel', `いまの暦：${SEASON_NAMES[st.season]}${st.blend > 0 ? `→${SEASON_NAMES[st.next]}` : ''}`);
 
     lastMoment = { season: s, seasonProgress: seasonOverride === null ? st.progress : 0.3, hour, raining: weatherNow.rain > 0.5 };
     eco.update(dt, hour, lastMoment, game.farm.simMs, performance.now());
@@ -2085,7 +2036,14 @@ async function main() {
 
     // 畑・植林の時間を進める。道具を持っている時はカーソルを更新
     lastEnv = { season: s, raining: weatherNow.rain > 0.5 };
-    game.tick(dt, lastEnv);
+    if (gapMs > CATCHUP_GAP_MS && world && !game.locked && !regenerating) {
+      // 背景のタブから戻った：止まっていた間を、閉じていた間と同じようにまとめて進める（v0.18）
+      const r = game.catchUp(game.farm.simMs + gapMs * game.farm.speed, envAt);
+      eco.resetClock(game.farm.simMs); // まとめて引っ越してこないように
+      const news = awayNews(r);
+      if (news) toast(`${fmtHours(r.hours)}のあいだに：${news}`, 5000);
+      game.tick(dt, lastEnv, 0);
+    } else game.tick(dt, lastEnv, Math.min(gapMs, CATCHUP_GAP_MS) / 1000);
     // ドラッグ中もカーソル（白い枠）をマウスに追従させる。ドラッグ中は使った直後のマスが赤くならないよう白のまま
     if (mode === 'edit' && mouseInside) {
       const { plot: gp, hit } = stroke ? { plot: -1, hit: pickAtMouse() } : ghostAtMouse();
@@ -2184,8 +2142,10 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.defineProperty((window as N).__hakoniwa, 'goals', { get: () => goals, configurable: true }); // Object.assign では今の値しか写らない
-  Object.assign((window as N).__hakoniwa, { tickGoals: () => { goalsAt = -Infinity; tickGoals(); }, spawnAll: () => eco.spawnAll(), camera, controls, shadows, setAntialias, setRenderStyle, uLine, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  // Object.assign では今の値しか写らないので、変わる値は getter で
+  Object.defineProperty((window as N).__hakoniwa, 'goals', { get: () => goals, configurable: true });
+  Object.defineProperty((window as N).__hakoniwa, 'aa', { get: () => ({ mode: post.aaMode, scale: post.renderScale }), configurable: true });
+  Object.assign((window as N).__hakoniwa, { tickGoals: () => { goalsAt = -Infinity; tickGoals(); }, spawnAll: () => eco.spawnAll(), camera, controls, shadows, setAntialias, setRenderStyle, uLine, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {
