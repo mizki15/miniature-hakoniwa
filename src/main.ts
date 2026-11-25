@@ -21,7 +21,7 @@ import { createShadowSystem } from './render/shadows';
 import { SKY, createPrecipitation, createSkyNode } from './render/sky';
 import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
 import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, weatherAt, type WeatherKind } from './weather';
-import { ACTIVITY_NAMES, type Animal } from './creatures/animals';
+import { ACTIVITY_NAMES, SPECIES, type Animal } from './creatures/animals';
 import { EcoManager } from './creatures/ecoManager';
 import { RARITY_STARS, VISITOR, type DexId, type Moment, type VisitorId } from './eco/species';
 import { dexStage } from './eco/dexState';
@@ -52,7 +52,8 @@ import { designStats } from './build/stats';
 import { CharacterStore } from './build/characterStore';
 import { buildingTraits } from './build/traits';
 import { renderBag } from './ui/bag';
-import { MATERIALS, MATERIAL_NAME, RAWS, buildCost, craft, matKey } from './game/materials';
+import { MATERIALS, MATERIAL_NAME, RAW, RAWS, buildCost, craft, gain, matKey } from './game/materials';
+import { JOB_TEXT, SITE_NAMES, likelyResidents } from './eco/residents';
 import { CROPS, CROP_KINDS, type CropKind } from './game/farm';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -255,9 +256,18 @@ async function main() {
     diorama, envInput: () => game.envInput(), toast: (m, ms) => toast(m, ms), fireflies, treeShape: (c) => game.treeShape(c),
     onChanged: () => { game.unsaved = true; refreshDex(); },
     onPoints: (n) => { progress.points += n; refreshGhosts(); },
+    // 訪問者が、その箱庭でとれない原料を運んできた（v0.16.1）
+    onGift: (id, raw, n) => {
+      gain(game.farm.inventory, raw, n);
+      game.unsaved = true;
+      const who = dexStage(eco.dex, id) === 'observed' ? VISITOR[id].name : '訪問者';
+      toast(`${who}が${RAW[raw].name}を ${n} 個運んできた`);
+      if (bagIsOpen()) renderBagNow();
+    },
   });
   game.onEnvChanged = () => eco.envDirty();
   game.onBuildingsPlaced = (cols) => eco.evictFrom(cols); // 建物の足元にいた住人は外へ
+  game.residents = () => eco.residentInfos(); // 住人の仕事（v0.16.1）
   let onGenerated: ((r: InitResult) => void) | null = null;
   const onPlot = (r: PlotResult) => {
     game.addPlot(r);
@@ -645,7 +655,7 @@ async function main() {
         const li = document.createElement('li');
         const b = document.createElement('button');
         b.type = 'button';
-        b.textContent = `🏠 ${x.name}`;
+        b.textContent = `${x.kind === 'deco' ? '🪴' : '🏠'} ${x.name}`;
         b.title = x.name;
         b.classList.toggle('on', x.id === viewerSel);
         b.addEventListener('click', () => { viewerSel = x.id; renderViewer(); });
@@ -668,6 +678,9 @@ async function main() {
     add.textContent = d && game.designs.has(d.id) ? 'もう棚にあります（棚で見る）' : '棚に入れる';
     place.hidden = del.hidden = vtab !== 'shelf';
     place.disabled = del.disabled = !d;
+    // 家か飾りか（棚に入れる前に選ぶ。棚でも変えられる）
+    $('viewerKind').hidden = !d;
+    document.querySelectorAll<HTMLButtonElement>('[data-kind]').forEach((b) => b.classList.toggle('on', !!d && (b.dataset.kind === 'deco') === (d.kind === 'deco')));
     // 同じ建物なら見本を作り直さない（回した向きを保つ）
     if (viewer && d !== viewerShown) { viewer.show(d); viewerShown = d; }
   };
@@ -702,6 +715,8 @@ async function main() {
     const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
     const name = (id: VisitorId) => (dexStage(eco.dex, id) === 'observed' ? VISITOR[id].name : '？');
     const away = t.away.length ? t.away.map((a) => `${name(a.id)}（${a.why}）`).join('・') : 'なし';
+    // 好みそうな住人（形から。場所の条件があれば「〇〇のそばに建てると」。まだ観察していない住人は「？」）
+    const likes = likelyResidents(c).map((x) => `${dexStage(eco.dex, x.species) === 'observed' ? SPECIES[x.species].name : '？'}${x.site ? `（${SITE_NAMES[x.site]}のそばに建てると）` : ''}`).join('・') || 'いない';
     // コスト：素材ごとの必要量と手持ち、発見ポイント、時間（数字で）
     const cost = buildCost(c);
     const inv = game.farm.inventory;
@@ -712,6 +727,7 @@ async function main() {
     const pts = progress.points;
     box.innerHTML = t.rows.map((r) => `<div class="tr-row"><span class="tr-label">${esc(r.label)}</span><span class="tr-stars">${esc(r.stars)}</span><span class="tr-note">${esc(r.note)}</span></div>`).join('') +
       `<div class="tr-away">遠のく生き物：${esc(away)}</div>` +
+      `<div class="tr-away">${d.kind === 'deco' ? '飾り：住人の住まいにはならない（性格は弱め）' : `好みそうな住人：${esc(likes)}`}</div>` +
       `<div class="tr-costs"><div class="tr-cost-head">建てるのに要るもの（手持ち/必要）</div>${matRows}` +
       `<span class="tr-cost${pts >= cost.points ? '' : ' lack'}">✨ 発見ポイント ${pts}/${cost.points}</span><span class="tr-cost">⏱ 約 ${buildMinutes(d)} 分</span></div>`;
   };
@@ -783,6 +799,13 @@ async function main() {
     vtab = 'shelf';
     renderViewer();
   });
+  document.querySelectorAll<HTMLButtonElement>('[data-kind]').forEach((b) => b.addEventListener('click', () => {
+    const kind = b.dataset.kind === 'deco' ? 'deco' : 'house';
+    if (vtab === 'import' && preview) { if (kind === 'deco') preview.kind = 'deco'; else delete preview.kind; if (game.designs.has(preview.id)) game.setDesignKind(preview.id, kind); }
+    else if (vtab === 'shelf' && viewerSel) game.setDesignKind(viewerSel, kind);
+    renderEditor();
+    renderViewer();
+  }));
   $('viewerPlace').addEventListener('click', () => {
     if (!viewerSel) return;
     const id = viewerSel;
@@ -994,8 +1017,18 @@ async function main() {
       return;
     }
     if (!downAt || !world || e.button !== 0 || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
-    // 見る・ステータス：水面をクリックすると波紋
     setMouse(e.clientX, e.clientY);
+    // 住人をクリック：収穫物をおすそ分けする（v0.16.1。好きなものがあればそれ）
+    const t = targetAtMouse();
+    if (t?.kind === 'animal' && !viewOnly) {
+      const crop = eco.share(t.animal, game.farm.inventory, game.farm.simMs);
+      if (!crop) { toast('おすそ分けできる収穫物（カブ・小麦・かぼちゃ）がありません'); return; }
+      game.unsaved = true; playerChanged();
+      const liked = CROPS[crop as CropKind].name === t.animal.favorite;
+      toast(`${t.animal.name}に${CROPS[crop as CropKind].name}をおすそ分けした${liked ? '（大好物！）' : ''}。しばらく原料を多く拾ってくる`);
+      return;
+    }
+    // 見る・ステータス：水面をクリックすると波紋
     raycaster.setFromCamera(mouse, camera);
     const hit = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -(world.waterLevel - 0.15)), new THREE.Vector3());
     if (hit && isWaterAt(hit.x, hit.z)) addRipple(hit.x, hit.z, 1);
@@ -1059,7 +1092,9 @@ async function main() {
     if (t.kind === 'animal') {
       const a = t.animal, info = a.info;
       return `<div class="tt-title">${info.icon} ${a.name}</div><div class="tt-sub">${info.name}</div>` +
-        `<div class="tt-line">いま：${ACTIVITY_NAMES[a.activity]}</div><div class="tt-line">好きなもの：${a.favorite}</div><div class="tt-line">得意：${info.skill}</div>` + ringHtml(t);
+        `<div class="tt-line">いま：${ACTIVITY_NAMES[a.activity]}</div><div class="tt-line">好きなもの：${a.favorite}</div><div class="tt-line">仕事：${JOB_TEXT[a.species]}</div>` +
+        (a.treatedUntil > game.farm.simMs ? `<div class="tt-line">🧺 おすそ分けをもらってうれしそう（あと約 ${Math.ceil((a.treatedUntil - game.farm.simMs) / 3600_000)} 時間）</div>` : '') +
+        (viewOnly ? '' : '<div class="tt-line tt-muted">クリック：収穫物をおすそ分け</div>') + ringHtml(t);
     }
     if (t.kind === 'visitor' || t.kind === 'firefly') {
       // 去った訪問者・消えたホタルは対象から外す

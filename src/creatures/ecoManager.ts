@@ -9,6 +9,8 @@ import { markSeen, observe, type Dex } from '../eco/dexState';
 import { SPECIES, SPECIES_LIST, NAMES, makeResident, type Animal, type Species } from './animals';
 import { pickName, placeResident, restorePlace } from './place';
 import { Visitor, type TreeShape, type VisitorPlace } from './visitors';
+import { SATISFIED_POINTS, TREAT_MS, jobEffects, pickShareCrop, visitorGift, type ResidentInfo } from '../eco/residents';
+import type { RawId } from '../game/materials';
 import type { Fireflies } from './fireflies';
 
 export interface EcoDeps {
@@ -23,6 +25,8 @@ export interface EcoDeps {
   onChanged: () => void;
   /** 発見ポイントが入った（訪問者が来た時など） */
   onPoints?: (n: number) => void;
+  /** 訪問者が、その箱庭でとれない原料を運んできた（v0.16.1） */
+  onGift?: (id: VisitorId, raw: RawId, n: number) => void;
 }
 
 /**
@@ -124,10 +128,12 @@ export class EcoManager {
   restore(dex: Dex, residents: SaveData['residents'] | null) {
     const world = this.world!;
     this.dex = structuredClone(dex);
-    for (const [sp, x, z, name] of residents ?? []) {
+    for (const [sp, x, z, name, treated] of residents ?? []) {
       if (!(sp in SPECIES)) continue;
       const at = restorePlace(world, x, z) ?? placeResident(world, sp as Species, Math.random, this.deps.envInput().treeCols);
-      if (at) this.put(sp as Species, at, name);
+      if (!at) continue;
+      const a = this.put(sp as Species, at, name);
+      if (typeof treated === 'number' && Number.isFinite(treated)) a.treatedUntil = treated;
     }
     if (needsStarterRabbits(this.animals.map((a) => a.species))) {
       const n = 1 + Math.floor(Math.random() * 2);
@@ -184,11 +190,19 @@ export class EcoManager {
     // 訪問者のいる場所が、まだ合っているか（埋めた水・耕した花など）。ホタルは場所を持たない
     const input = { world: this.world!, ...this.deps.envInput() };
     const visitors = this.visitors.map((v) => ({ id: v.def.id, leavesAt: v.leavesAt, homeOk: v.def.motion === 'glow' ? undefined : fitsHabitat(input, v.def.habitat, v.home) }));
-    const state: EcoState = { visitors, residents: this.animals.map((a) => a.species), openPlots: countOpen(this.world!.plots), abundance: this.abundance };
+    const state: EcoState = { visitors, residents: this.animals.map((a) => a.species), openPlots: countOpen(this.world!.plots), abundance: this.abundance, liked: input.liked };
     const r = checkEcosystem(state, this.env(), moment, nowReal, rand);
     let arrived = 0, movedIn = false;
     for (const id of r.leave) this.removeVisitor(id);
-    for (const id of r.arrive) if (this.addVisitor(id, nowReal + stayMs(Math.random))) arrived++;
+    // きつねがいると、訪問者が少し長くいる（仕事）
+    const jobs = jobEffects(this.residentInfos(), this.world!.size);
+    for (const id of r.arrive) {
+      if (!this.addVisitor(id, nowReal + stayMs(Math.random) * jobs.stayMul)) continue;
+      arrived++;
+      // その箱庭でとれない原料を、たまに運んでくる
+      const gift = visitorGift(this.env(), Math.random);
+      if (gift) this.deps.onGift?.(id, gift.raw, gift.n);
+    }
     if (arrived) this.deps.onPoints?.(arrived * VISITOR_POINTS); // 訪問者が来るたびに少し
     // 生き物の多さを上げていると、1 回に何匹も引っ越してくる。知らせは 1 回にまとめる
     const came: string[] = [];
@@ -200,6 +214,12 @@ export class EcoManager {
       if (first) firstSeen = true;
       else came.push(`${SPECIES[sp].name}の${a.name}`);
       movedIn = true;
+      // 好きな家がある所に来た：満足して発見ポイント（カピバラがいると 2 倍）
+      if (input.liked?.has(sp)) {
+        const pts = SATISFIED_POINTS * jobEffects(this.residentInfos(), this.world!.size).satisfyMul;
+        this.deps.onPoints?.(pts);
+        if (!first) this.deps.toast(`${SPECIES[sp].name}の${a.name}は、家が気に入ったようだ ✨ +${pts}`);
+      }
     }
     if (firstSeen) this.deps.toast('何かの気配がする…');
     else if (came.length === 1) this.deps.toast(`${came[0]}が引っ越してきた`);
@@ -317,6 +337,25 @@ export class EcoManager {
   }
 
   residentsSave(): SaveData['residents'] {
-    return this.animals.map((a) => [a.species, ...a.colXZ, a.name]);
+    return this.animals.map((a) => (a.treatedUntil ? [a.species, ...a.colXZ, a.name, a.treatedUntil] : [a.species, ...a.colXZ, a.name]));
+  }
+
+  /** 住人の様子（仕事の効き目・拾う原料に使う。eco/residents.ts） */
+  residentInfos(): ResidentInfo[] {
+    const N = this.world?.size ?? 0;
+    return this.animals.map((a) => { const [x, z] = a.colXZ; return { species: a.species, col: x + z * N, treatedUntil: a.treatedUntil }; });
+  }
+
+  /**
+   * おすそ分け（v0.16.1）：収穫物を 1 つあげる。好きなものがあればそれ。あげた物を返す（無ければ null）。
+   * その住人は箱庭の 3 日間、原料を多く拾ってくる
+   */
+  share(a: Animal, inv: Record<string, number>, now: number): string | null {
+    const crop = pickShareCrop(inv, a.favorite);
+    if (!crop) return null;
+    inv[crop] = (inv[crop] ?? 0) - 1;
+    a.treatedUntil = Math.max(a.treatedUntil, now) + TREAT_MS;
+    this.deps.onChanged();
+    return crop;
   }
 }

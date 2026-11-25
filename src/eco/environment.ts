@@ -35,9 +35,11 @@ export interface EnvInput {
   buildingWildCols?: number;
   /** 建物の灯り：中心の列の座標と、届く距離（列） */
   lights?: readonly Light[];
-  /** 建ち終わった建物の数・そのうち灯りのある建物の数（v0.16：ねこ・ツバメ・ヤモリの条件） */
+  /** 建ち終わった家の数・そのうち灯りのある家の数（v0.16：ねこ・ツバメ・ヤモリの条件。飾りは数えない） */
   houses?: number;
   litHouses?: number;
+  /** 建ち終わった家のどれかを気に入る住人の種類（v0.16.1。eco/residents.ts の likedBy） */
+  liked?: ReadonlySet<string>;
 }
 
 export interface Light { x: number; z: number; r: number }
@@ -299,3 +301,27 @@ export function habitatCols(i: EnvInput, h: Habitat): number[] {
     }
   }
 }
+
+/** 家の建つ場所（足元のまわり 3 列に、水・木・草地・泥があるか。足元が高い所か）。住人の好きな家の判定に使う */
+export function houseSite(i: EnvInput, cols: readonly number[]): { water: boolean; forest: boolean; meadow: boolean; wetland: boolean; high: boolean } {
+  const w = i.world;
+  const s = { water: false, forest: false, meadow: false, wetland: false, high: false };
+  const R = 3;
+  for (const col of cols) {
+    if (w.heights[col] >= HIGH_GROUND) s.high = true;
+    const x = col % N, z = (col - x) / N;
+    for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
+      const xx = x + dx, zz = z + dz;
+      if (xx < 0 || zz < 0 || xx >= N || zz >= N) continue;
+      const c = xx + zz * N;
+      if (w.heights[c] === 0) continue;
+      if (isWater(w, c)) s.water = true;
+      if (i.treeCols.has(c)) s.forest = true;
+      const top = topOf(w, c);
+      if (top === MUD) s.wetland = true;
+      if (top === GRASS && !i.treeCols.has(c)) s.meadow = true;
+    }
+  }
+  return s;
+}
+

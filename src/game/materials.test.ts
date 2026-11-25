@@ -34,8 +34,8 @@ describe('building cost', () => {
   const cube = (name: string, size: number[]) => JSON.stringify({ format_version: '1.12.0', 'minecraft:geometry': [{ description: { identifier: 'geometry.t' }, bones: [{ name, cubes: [{ origin: [0, 0, 0], size }] }] }] });
   const ch = (name: string, size: number[]) => { const r = parseBuilding(cube(name, size)); if (!r.ok) throw new Error(); return buildingCharacter(r.design); };
   it('materials are the visible surface (1 per block²), points grow with the volume (2–15)', () => {
-    const c = buildCost(ch('wall', [32, 32, 32])); // 2×2×2：見える面 4×4 + 上 4 = 20
-    expect(c.mats).toEqual({ wall: 20 });
+    const c = buildCost(ch('wall', [32, 32, 32])); // 2×2×2：見える面 4×4 + 上 4 = 20 マス²（2 マス²につき 1 素材）
+    expect(c.mats).toEqual({ wall: 10 });
     expect(c.points).toBe(buildPoints(8));
     expect(buildPoints(0)).toBe(2);
     expect(buildPoints(1)).toBe(3);

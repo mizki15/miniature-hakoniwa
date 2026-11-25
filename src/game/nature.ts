@@ -36,11 +36,12 @@ export function natureDays(lastDay: number | undefined, simMs: number): { days: 
  * 1 日ぶん：木のまわりに苗木を生やす。canGrow(col)：その列に苗木が生えられるか（草地で、ほかの木や建物がないなど）。
  * 同じ日に生えた苗木どうしも、となり合わないようにする
  */
-export function spreadTrees(trees: Iterable<number>, size: number, canGrow: (col: number) => boolean, rand: () => number): number[] {
+/** mul：生える確率の倍率（住人の仕事：たぬき 1.5、しか 0.5。v0.16.1） */
+export function spreadTrees(trees: Iterable<number>, size: number, canGrow: (col: number) => boolean, rand: () => number, mul = 1): number[] {
   const out: number[] = [];
   const near = (col: number) => out.some((c) => Math.abs((c % size) - (col % size)) <= 1 && Math.abs(Math.floor(c / size) - Math.floor(col / size)) <= 1);
   for (const t of trees) {
-    if (rand() >= SEED_CHANCE) continue;
+    if (rand() >= SEED_CHANCE * mul) continue;
     const x = t % size, z = Math.floor(t / size);
     const r = SEED_MIN + Math.floor(rand() * (SEED_MAX - SEED_MIN + 1));
     // 根元から r 列離れた輪の上の 1 点
@@ -56,8 +57,8 @@ export function spreadTrees(trees: Iterable<number>, size: number, canGrow: (col
 }
 
 /** 1 日ぶん：枯れる花の列 */
-export function fadeFlowers(cols: Iterable<number>, rand: () => number): number[] {
+export function fadeFlowers(cols: Iterable<number>, rand: () => number, mul = 1): number[] {
   const out: number[] = [];
-  for (const c of cols) if (rand() < FADE_CHANCE) out.push(c);
+  for (const c of cols) if (rand() < FADE_CHANCE * mul) out.push(c);
   return out;
 }

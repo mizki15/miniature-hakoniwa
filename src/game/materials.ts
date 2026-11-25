@@ -61,7 +61,7 @@ export const RECIPES: Recipe[] = [
   { id: 'roof', mat: 'roof', inputs: [['clay', 2]], out: 3 },
   { id: 'brick', mat: 'brick', inputs: [['clay', 1]], out: 2 },
   { id: 'white-shell', mat: 'white', inputs: [['shell', 1]], out: 2 },
-  { id: 'white-rock', mat: 'white', inputs: [['rock', 3]], out: 1 },
+  { id: 'white-rock', mat: 'white', inputs: [['rock', 2]], out: 1 },
   { id: 'glass', mat: 'glass', inputs: [['sand', 2]], out: 1 },
   { id: 'dark', mat: 'dark', inputs: [['iron_ore', 1]], out: 2 },
 ];
@@ -82,7 +82,11 @@ export function craft(inv: Inventory, r: Recipe, times = 1): number {
   return t;
 }
 
-/** 建物のコスト（設計メモ 0 章・9 章）：素材は見える表面の広さ（1 素材＝1 マス²、切り上げ）、発見ポイントは体積の段階 */
+/**
+ * 建物のコスト（設計メモ 0 章・9 章）：素材は見える表面の広さ（2 マス²につき 1 素材、切り上げ）、発見ポイントは体積の段階。
+ * v0.16.1：1 マス²につき 1 素材だと、見本の家 1 棟に素材が約 140 個（赤い屋根だけで粘土 43 個）要って重すぎたので半分にした
+ */
+export const MATS_PER_AREA = 0.5;
 export interface BuildCost { mats: Record<string, number>; points: number }
 
 /** 発見ポイント：体積（マス³）が大きいほど多く、2〜15 */
@@ -90,7 +94,7 @@ export const buildPoints = (volume: number) => Math.max(2, Math.min(15, Math.rou
 
 export function buildCost(c: BuildingCharacter): BuildCost {
   const mats: Record<string, number> = {};
-  for (const [m, a] of Object.entries(c.areas)) { const n = Math.ceil(a - 1e-9); if (n > 0) mats[m] = n; }
+  for (const [m, a] of Object.entries(c.areas)) { const n = Math.ceil(a * MATS_PER_AREA - 1e-9); if (n > 0) mats[m] = n; }
   return { mats, points: buildPoints(c.volume) };
 }
 

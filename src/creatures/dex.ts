@@ -2,6 +2,7 @@ import { ACTIVITY_NAMES, SPECIES, type Animal, type Species } from './animals';
 import type { Visitor } from './visitors';
 import { DEX_ORDER, RARITY_STARS, RESIDENT_ORDER, RESIDENT_TEXT, VISITOR, isVisitorId, visitorLikes, rarityOf, type DexId } from '../eco/species';
 import { dexStage, type Dex } from '../eco/dexState';
+import { JOB_TEXT, homeText } from '../eco/residents';
 import { SEASON_NAMES } from '../calendar';
 import { LAND_NAMES, sharePct, type EnvCounts, type Land } from '../eco/environment';
 import { shareStars, starText } from '../eco/species';
@@ -49,7 +50,7 @@ export function renderDex(grid: HTMLElement, dex: Dex, animals: Animal[], visito
     } else {
       const sp = id as Species, info = SPECIES[sp];
       const members = animals.filter((a) => a.species === sp).map((a) => `${a.name}（${ACTIVITY_NAMES[a.activity]}）`).join('、') || 'いまはいない';
-      return `<b>${info.icon} ${info.name}</b>　${RARITY_STARS[rarityOf(id)]}<br>${info.note}<br>好きな環境：${RESIDENT_TEXT[sp].likes}<br>得意なこと：${info.skill}<br>観察した季節：${seasons}<br>住人：${members}`;
+      return `<b>${info.icon} ${info.name}</b>　${RARITY_STARS[rarityOf(id)]}<br>${info.note}<br>好きな環境：${RESIDENT_TEXT[sp].likes}<br>好きな家：${homeText(sp)}<br>仕事：${JOB_TEXT[sp]}<br>観察した季節：${seasons}<br>住人：${members}`;
     }
   };
 

@@ -5,7 +5,7 @@ import type { WorldData } from '../world/terrain';
 import type { ChunkMesh, DetailModel, PlotPlacements, PlotResult } from '../world/worker';
 import { FRAME, PLOT, plotOfCol, plotRect } from '../world/plots';
 import { canSetCol, floodAllowed } from './edgeRules';
-import { CROPS, Farm, type Crop, type CropKind, type Sapling } from './farm';
+import { CROPS, Farm, type Crop, type CropKind, type FarmEnv, type Sapling } from './farm';
 import { UndoStack } from './undoStack';
 import { buildCropGeometry, buildSaplingGeometry } from './cropModels';
 import { raycastVoxels, type VoxelHit } from './picking';
@@ -16,7 +16,8 @@ import { buildBuildingMesh } from '../build/geoMesh';
 import { DAY_MS, fadeFlowers, grassDue, natureDays, spreadTrees } from './nature';
 import { MATERIAL_NAME, RAW, addPickup, buildCost, gain, missingMats, payMats, pickupPerDay, refundMats, spend, type BuildCost, type RawId } from './materials';
 import type { BuildingCharacter } from '../build/character';
-import { buildingWildWeight, countEnvironment, lightReach, type Light } from '../eco/environment';
+import { buildingWildWeight, countEnvironment, houseSite, lightReach, type Light } from '../eco/environment';
+import { jobEffects, likedBy, residentPickupPerDay, type ResidentInfo } from '../eco/residents';
 import { canPlace, footprintCols, rayHitPlaced, rayHitPlacedT, rotatedBounds, type Rot } from '../build/placement';
 import { advanceProgress, buildOrder, builtCount, cubeBox, minutesLeft } from '../build/construction';
 
@@ -462,25 +463,35 @@ export class GameController {
     }
     // 建物：野生度は足元を自然の星で重み付けして数える。建ち終わった灯りのある建物は、まわりを照らす
     // 性格がまだ計算できていない建物は、足元をそのまま数え、灯りは無いものとする（計算できたら数え直す）
-    let buildingWildCols = 0, houses = 0;
+    let buildingWildCols = 0, houses = 0, litHouses = 0;
     const lights: Light[] = [];
+    const homes: { c: BuildingCharacter; cols: number[] }[] = [];
     for (const p of this.placed) {
       const d = this.designs.get(p.id);
       if (!d) continue;
-      if (p.progress >= 1) houses++;
+      // 飾り（v0.16.1）：家に数えず、性格は弱め（野生度の重みが半分、灯りの届く距離が星 1 つぶん短い）
+      const deco = d.kind === 'deco';
       const cols = footprintCols(d, p.rot, p.x, p.z, N);
       const c = this.characterOf?.(d);
-      buildingWildCols += cols.length * (c ? buildingWildWeight(c.nature) : 1);
-      if (c && c.light > 0 && p.progress >= 1 && cols.length) {
+      buildingWildCols += cols.length * (c ? buildingWildWeight(c.nature) : 1) * (deco ? 0.5 : 1);
+      const light = c ? Math.max(0, c.light - (deco ? 1 : 0)) : 0;
+      if (p.progress >= 1 && !deco) houses++;
+      if (light > 0 && p.progress >= 1 && cols.length) {
         let sx = 0, sz = 0;
         for (const col of cols) { sx += col % N; sz += Math.floor(col / N); }
-        lights.push({ x: sx / cols.length, z: sz / cols.length, r: lightReach(c.light) });
+        lights.push({ x: sx / cols.length, z: sz / cols.length, r: lightReach(light) });
+        if (!deco) litHouses++;
       }
+      if (c && p.progress >= 1 && !deco) homes.push({ c, cols });
     }
-    return {
+    const base = {
       flowerCols, treeCols: this.treeCols as ReadonlySet<number>, farmland: this.farmland as ReadonlySet<number>, crops: this.farm.crops.size,
-      buildingCols: this.buildingCols as ReadonlySet<number>, buildingWildCols, lights, houses, litHouses: lights.length,
+      buildingCols: this.buildingCols as ReadonlySet<number>, buildingWildCols, lights, houses, litHouses,
     };
+    // 家を気に入る住人（形と建つ場所）
+    const liked = new Set<string>();
+    for (const h of homes) for (const sp of likedBy(h.c, houseSite({ world: this.world!, ...base }, h.cols))) liked.add(sp);
+    return { ...base, liked };
   }
 
   /** 発見ポイント（main.ts の進み具合）。建物を建てる時に使い、片付けると戻る */
@@ -636,8 +647,9 @@ export class GameController {
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (this.treeCols.has(col + dx + dz * N)) return false;
       return true;
     };
+    const jobs = this.jobs();
     for (let d = 0; d < days; d++) {
-      for (const col of spreadTrees([...this.treeCols], N, canGrow, Math.random)) {
+      for (const col of spreadTrees([...this.treeCols], N, canGrow, Math.random, jobs.treeSpreadMul)) {
         this.removeNaturalFlowers(col);
         this.planted.delete(col);
         const y = w.heights[col];
@@ -649,7 +661,7 @@ export class GameController {
       }
       const flowerCols = new Set<number>();
       for (const dd of this.decor) if (dd.kind === 'flower') for (let i = 0; i < dd.placements.length; i += 5) flowerCols.add(Math.floor(dd.placements[i]) + Math.floor(dd.placements[i + 2]) * N);
-      for (const col of fadeFlowers(flowerCols, Math.random)) {
+      for (const col of fadeFlowers(flowerCols, Math.random, jobs.flowerFadeMul)) {
         if (!this.planted.has(col)) this.faded.add(col);
         this.removeFlowersAt(col % N, Math.floor(col / N));
         changed = true;
@@ -663,7 +675,10 @@ export class GameController {
     if (since >= 3600_000) {
       this.pickupAt = f.simMs;
       const e = countEnvironment({ world: w, ...this.envInput() });
-      const n = addPickup(f.inventory, this.pickupFrac, pickupPerDay(e), Math.min(7, since / DAY_MS));
+      // 土地から拾うぶんと、住人が拾ってくるぶん（仕事・おすそ分け）
+      const perDay = pickupPerDay(e);
+      for (const [k, v] of Object.entries(residentPickupPerDay(this.residents(), f.simMs))) perDay[k as RawId] = (perDay[k as RawId] ?? 0) + (v ?? 0);
+      const n = addPickup(f.inventory, this.pickupFrac, perDay, Math.min(7, since / DAY_MS));
       if (n) { this.pickedSince += n; this.unsaved = true; }
     }
     if (changed) { this.rebuildGrowing(); this.env(); this.unsaved = true; }
@@ -1246,7 +1261,8 @@ export class GameController {
       case 'harvest': {
         const kind = this.farm.harvest(col);
         this.rebuildCrops();
-        if (kind === 'wheat') { gain(this.farm.inventory, 'straw'); return '小麦を収穫しました（わら +1）'; }
+        // ひつじがいると、わらが 1 つ多い（住人の仕事）
+        if (kind === 'wheat') { const n = 1 + this.jobs().extraStraw; gain(this.farm.inventory, 'straw', n); return `小麦を収穫しました（わら +${n}）`; }
         return kind ? `${CROPS[kind].name}を収穫しました` : null;
       }
       case 'plant': {
@@ -1313,11 +1329,13 @@ export class GameController {
         }
         // 4・5 番は針葉樹
         const log: RawId = variant >= 4 ? 'log_conifer' : 'log_broad';
-        gain(this.farm.inventory, log, LOGS_PER_TREE);
+        // くまがいると、丸太が 1 本多い（住人の仕事）
+        const logs = LOGS_PER_TREE + this.jobs().extraLogs;
+        gain(this.farm.inventory, log, logs);
         gain(this.farm.inventory, 'foliage', FOLIAGE_PER_TREE);
         this.rebuildGrowing();
         this.env();
-        return `木を切りました（${RAW[log].name} +${LOGS_PER_TREE}・葉 +${FOLIAGE_PER_TREE}）`;
+        return `木を切りました（${RAW[log].name} +${logs}・葉 +${FOLIAGE_PER_TREE}）`;
       }
       case 'dig': {
         const t0 = this.get(x, y, z);
@@ -1414,6 +1432,15 @@ export class GameController {
     if (this.selectedDesign === id) this.selectedDesign = null;
     this.unsaved = true; this.onPlayerChange?.();
     this.rebuildBuildings();
+  }
+
+  /** 家か飾りかを変える（v0.16.1）。置いた分にもすぐ効く */
+  setDesignKind(id: string, kind: 'house' | 'deco') {
+    const d = this.designs.get(id);
+    if (!d) return;
+    if (kind === 'deco') d.kind = 'deco'; else delete d.kind;
+    this.unsaved = true; this.onPlayerChange?.();
+    this.env();
   }
 
   /** 次に置く建物の向きを 90° 回す */
@@ -1709,6 +1736,16 @@ export class GameController {
 
   // ---------- 時間の経過 ----------
 
+  /** 住人の様子（main が EcoManager とつなぐ。仕事の効き目に使う。v0.16.1） */
+  residents: () => ResidentInfo[] = () => [];
+  private jobs() { return jobEffects(this.residents(), this.world?.size ?? 1); }
+  /** 畑を育てる時の環境（湿り具合と、住人の仕事：うさぎ・オコジョ・モグラ） */
+  private farmEnv(env: { season: number; raining: boolean }): FarmEnv {
+    const j = this.jobs();
+    this.farm.wetMul = j.wetMul;
+    return { ...env, isWet: (col) => this.isWet(col), growth: j.growth, winterGrowth: j.winterGrowth };
+  }
+
   /** 毎フレーム呼ぶ。dtReal は現実の経過秒 */
   tick(dtReal: number, env: { season: number; raining: boolean }) {
     if (!this.world) return;
@@ -1720,7 +1757,7 @@ export class GameController {
     }
     for (const r of this.rising) if (r.t >= 1) r.done?.();
     this.rising = this.rising.filter((r) => r.t < 1);
-    const changed = this.farm.advance(dtReal * 1000 * this.farm.speed, { ...env, isWet: (col) => this.isWet(col) });
+    const changed = this.farm.advance(dtReal * 1000 * this.farm.speed, this.farmEnv(env));
     if (changed) { this.rebuildCrops(); this.rebuildGrowing(); }
     this.advanceBuildings(dtReal * 1000 * this.farm.speed);
     this.animateSites(dtReal);
@@ -1747,7 +1784,7 @@ export class GameController {
   /** 早送り（デバッグ用）：hours 時間ぶん一気に進める */
   skip(hours: number, env: { season: number; raining: boolean }) {
     const steps = Math.ceil(hours * 4); // 15 分ずつ
-    for (let i = 0; i < steps; i++) this.farm.advance((hours * HOUR) / steps, { ...env, isWet: (col) => this.isWet(col) });
+    for (let i = 0; i < steps; i++) this.farm.advance((hours * HOUR) / steps, this.farmEnv(env));
     this.advanceBuildings(hours * HOUR);
     this.rebuildCrops();
     this.rebuildGrowing();
@@ -1901,7 +1938,7 @@ export class GameController {
     const STEP = 15 * 60 * 1000;
     while (f.simMs < target) {
       const dt = Math.min(STEP, target - f.simMs);
-      f.advance(dt, { ...envAt(f.simMs), isWet: (col) => this.isWet(col) });
+      f.advance(dt, this.farmEnv(envAt(f.simMs)));
     }
     // 閉じていた間の建設は、建ち終わりの知らせを 1 棟ずつ出さず、数だけ返す
     const done = this.onBuildingDone;

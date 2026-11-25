@@ -30,7 +30,8 @@ export interface SaveData {
   /** 図鑑（段階 ② で使う） */
   dex: Record<string, { seenAt: number; observedAt?: number; seasons: number[] }>;
   /** 住人（段階 ② で使う） */
-  residents: [species: string, x: number, z: number, name: string][];
+  /** treatedUntil：おすそ分けの効き目が続く期限（箱庭の時計 simMs。v0.16.1。無ければ効いていない） */
+  residents: [species: string, x: number, z: number, name: string, treatedUntil?: number][];
   farm: {
     simMs: number; // 箱庭内の時計
     inventory: Record<string, number>;
@@ -101,7 +102,7 @@ export function toFrame5(d: SaveData): SaveData {
   const f = d.farm;
   return {
     ...d, version: 4, plots, edits,
-    residents: d.residents.map(([sp, x, z, name]) => [sp, x + S, z + S, name]),
+    residents: d.residents.map(([sp, x, z, name, t]) => (t === undefined ? [sp, x + S, z + S, name] : [sp, x + S, z + S, name, t])),
     farm: {
       ...f,
       crops: f.crops.map(([c, k, p]) => [col(c), k, p]),

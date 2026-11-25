@@ -36,10 +36,11 @@ export interface Needs { land?: LandNeed[]; wild?: { min?: number; max?: number 
 export const DEEP_MIN_COLS = 8;
 export const HIGH_MIN_COLS = 16;
 
-export function meetsNeeds(n: Needs, e: EnvCounts): boolean {
+/** relax：割合の下限にかける倍率（好きな家がある住人は 0.8。v0.16.1） */
+export function meetsNeeds(n: Needs, e: EnvCounts, relax = 1): boolean {
   for (const l of n.land ?? []) {
     const p = l.lands.reduce((a, k) => a + sharePct(e, k), 0);
-    if (l.min !== undefined && p < l.min) return false;
+    if (l.min !== undefined && p < l.min * relax) return false;
     if (l.max !== undefined && p > l.max) return false;
   }
   if (n.wild?.min !== undefined && e.wild < n.wild.min) return false;
@@ -215,10 +216,10 @@ export const RESIDENT_NEEDS: Record<Species, Needs> = {
 export const RESIDENT_WHEN: Partial<Record<Species, { when: (m: Moment) => boolean; text: string }>> = {
   stoat: { when: (m) => m.season === 3, text: '冬' },
 };
-export const RESIDENT_RULES: Record<Species, (e: EnvCounts, m?: Moment) => boolean> = Object.fromEntries(
+export const RESIDENT_RULES: Record<Species, (e: EnvCounts, m?: Moment, relax?: number) => boolean> = Object.fromEntries(
   (Object.keys(RESIDENT_NEEDS) as Species[]).map((sp) => [sp, sp === 'rabbit' ? () => false
-    : (e: EnvCounts, m?: Moment) => meetsNeeds(RESIDENT_NEEDS[sp], e) && (!m || !RESIDENT_WHEN[sp] || RESIDENT_WHEN[sp]!.when(m))]),
-) as Record<Species, (e: EnvCounts, m?: Moment) => boolean>;
+    : (e: EnvCounts, m?: Moment, relax = 1) => meetsNeeds(RESIDENT_NEEDS[sp], e, relax) && (!m || !RESIDENT_WHEN[sp] || RESIDENT_WHEN[sp]!.when(m))]),
+) as Record<Species, (e: EnvCounts, m?: Moment, relax?: number) => boolean>;
 const likesOf = (sp: Species) => [needsText(RESIDENT_NEEDS[sp]), RESIDENT_WHEN[sp]?.text].filter(Boolean).join('・');
 
 export const RESIDENT_TEXT: Record<Species, { hint: string; likes: string }> = {

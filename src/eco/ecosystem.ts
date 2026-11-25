@@ -1,5 +1,6 @@
 import type { Species } from '../creatures/animals';
 import type { EnvCounts } from './environment';
+import { LIKED_RELAX } from './residents';
 import { RARITY_CHANCE, RESIDENT_ORDER, RESIDENT_RULES, VISITOR, VISITORS, type Moment, type VisitorId } from './species';
 
 /**
@@ -15,7 +16,8 @@ export const residentCap = (openPlots: number) => Math.min(24, openPlots * 3);
 
 /** homeOk：訪問者のいる場所が、まだその生き物に合っているか（埋めた水・耕した花など。false なら去る） */
 /** abundance：生き物の多さの倍率（デバッグ、1 が普通）。来る確率・訪問者と住人の上限・1 回に引っ越してくる数をこの倍にする */
-export interface EcoState { visitors: { id: VisitorId; leavesAt: number; homeOk?: boolean }[]; residents: Species[]; openPlots: number; abundance?: number }
+/** liked：好きな家がある住人の種類（v0.16.1。条件の割合の下限が 2 割ゆるく、引っ越しの順番で先になる） */
+export interface EcoState { visitors: { id: VisitorId; leavesAt: number; homeOk?: boolean }[]; residents: Species[]; openPlots: number; abundance?: number; liked?: ReadonlySet<string> }
 
 /** 読み込んだ住人が 1 匹もいない時（段階 ① の保存データには住人が無い）は、新しい箱庭と同じくうさぎを置く */
 export const needsStarterRabbits = (restored: Species[]) => restored.length === 0;
@@ -46,10 +48,13 @@ export function checkEcosystem(s: EcoState, e: EnvCounts, m: Moment, nowReal: nu
   const all = [...s.residents];
   for (let round = 0; round < Math.floor(k) && all.length < residentCap(s.openPlots) * k; round++) {
     const count = (sp: Species) => all.filter((r) => r === sp).length;
+    // 好きな家がある種類を先に（同じなら今いる数の少ない種類、図鑑の順）
     let best = Infinity, pick: Species | null = null;
     for (const sp of RESIDENT_ORDER) {
       const n = count(sp);
-      if (RESIDENT_RULES[sp](e, m) && n < MAX_PER_SPECIES * k && n < best) { best = n; pick = sp; }
+      const liked = s.liked?.has(sp) ?? false;
+      const key = (liked ? 0 : 1000) + n;
+      if (RESIDENT_RULES[sp](e, m, liked ? LIKED_RELAX : 1) && n < MAX_PER_SPECIES * k && key < best) { best = key; pick = sp; }
     }
     if (!pick) break;
     moveIns.push(pick);

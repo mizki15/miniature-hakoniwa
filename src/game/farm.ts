@@ -28,6 +28,9 @@ export interface FarmEnv {
   season: number;
   raining: boolean;
   isWet: (col: number) => boolean; // 湿っている（水やり・雨・水路のそば）
+  /** 住人の仕事（v0.16.1）：育つ速さの倍率（うさぎの近く）と、冬の育つ速さ（オコジョの近く。ふだんは 0） */
+  growth?: (col: number) => number;
+  winterGrowth?: (col: number) => number;
 }
 
 const HOUR = 3600 * 1000;
@@ -40,6 +43,8 @@ export class Farm {
   inventory: Record<string, number> = { turnip: 0, wheat: 0, pumpkin: 0 };
   simMs = Date.now();
   speed = 1; // 早送りの倍率（デバッグ用）
+  /** 水やりが続く時間の倍率（住人の仕事：モグラで 1.5。v0.16.1） */
+  wetMul = 1;
 
   /** 生育段階：0 芽, 1 若い, 2 育った, 3 収穫できる */
   static stage(progress: number) {
@@ -60,7 +65,7 @@ export class Farm {
     return c.kind;
   }
 
-  water(col: number) { this.wetUntil.set(col, this.simMs + WET_HOURS * HOUR); }
+  water(col: number) { this.wetUntil.set(col, this.simMs + WET_HOURS * HOUR * this.wetMul); }
 
   plantSapling(col: number, variant: number, rot: number) {
     this.saplings.push({ col, variant, rot, progress: 0 });
@@ -78,10 +83,10 @@ export class Farm {
       if (c.progress >= 1) continue;
       const def = CROPS[c.kind];
       // 季節外れはとてもゆっくり、冬は育たない。乾いた畑は半分の速さ
-      const seasonRate = env.season === 3 ? 0 : def.seasons.includes(env.season) ? 1 : 0.35;
+      const seasonRate = env.season === 3 ? env.winterGrowth?.(c.col) ?? 0 : def.seasons.includes(env.season) ? 1 : 0.35;
       const wetRate = env.isWet(c.col) ? 1 : 0.5;
       const before = Farm.stage(c.progress);
-      c.progress = Math.min(1, c.progress + (hours / def.hours) * seasonRate * wetRate);
+      c.progress = Math.min(1, c.progress + (hours / def.hours) * seasonRate * wetRate * (env.growth?.(c.col) ?? 1));
       if (Farm.stage(c.progress) !== before) changed = true;
     }
     for (const s of this.saplings) {

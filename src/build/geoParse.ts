@@ -21,6 +21,11 @@ export interface BuildingDesign {
   cubes: BuildingCube[];
   /** 外形（ボクセル単位） */
   bounds: { min: [number, number, number]; max: [number, number, number] };
+  /**
+   * 家か飾りか（v0.16.1。棚に入れる時にプレイヤーが選ぶ。無ければ家）。
+   * 飾りは住人の住まいにならず（家の数・好きな家に数えない）、性格は弱め（灯りの届く距離が星 1 つぶん短く、野生度を下げる重みが半分）
+   */
+  kind?: 'deco';
 }
 
 export type ParseResult = { ok: true; design: BuildingDesign } | { ok: false; issues: ParseIssue[] };
@@ -354,5 +359,8 @@ export function sanitizeDesign(d: unknown): BuildingDesign | null {
     .slice(0, LIMITS.cubes)
     .map((c) => ({ m: [...c.m], color: c.color }));
   if (!cubes.length) return null;
-  return { id: d.id, name: typeof d.name === 'string' ? d.name : '名前のない建物', cubes, bounds: { min: [...(b.min as Vec3)] as Vec3, max: [...(b.max as Vec3)] as Vec3 } };
+  return {
+    id: d.id, name: typeof d.name === 'string' ? d.name : '名前のない建物', cubes, bounds: { min: [...(b.min as Vec3)] as Vec3, max: [...(b.max as Vec3)] as Vec3 },
+    ...(d.kind === 'deco' ? { kind: 'deco' as const } : {}),
+  };
 }

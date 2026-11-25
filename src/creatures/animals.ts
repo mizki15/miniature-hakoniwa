@@ -96,6 +96,8 @@ export class Animal {
   readonly favorite: string;
   readonly id: number;
   activity: Activity = 'rest';
+  /** おすそ分けの効き目が続く期限（箱庭の時計 simMs。v0.16.1） */
+  treatedUntil = 0;
   private model: THREE.Group;
   private pos = new THREE.Vector2();
   private target: THREE.Vector2 | null = null;
