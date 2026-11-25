@@ -146,6 +146,18 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .rights-row b { font-size: 15px; }
 .rights-row span { white-space: nowrap; }
 .rights-next { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; text-align: right; }
+.goals-box { margin: 0 0 12px; padding: 7px 9px; border-radius: 10px; background: rgba(255,255,255,0.3); font-size: 12px; }
+.goals-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: 12.5px; margin-bottom: 4px; }
+.goals-head small { color: var(--muted); font-size: 11px; }
+.goals-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.goal { display: flex; align-items: flex-start; gap: 6px; padding: 4px 5px; border-radius: 8px; background: rgba(255,255,255,0.35); cursor: default; line-height: 1.35; }
+.goal-tier { flex: none; font-size: 10px; padding: 1px 5px; border-radius: 6px; color: #fff; margin-top: 1px; }
+.goal-tier.t0 { background: #6aa84f; } .goal-tier.t1 { background: #3d85c6; } .goal-tier.t2 { background: #b4637a; }
+.goal-text { flex: 1; }
+.goal-prog { display: block; color: var(--muted); font-size: 10.5px; }
+.goal-check { flex: none; color: #4a9a3c; font-weight: 700; }
+.goal.done .goal-text { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(0,0,0,0.25); }
+body.night .goals-box, body.night .goal { background: rgba(255, 255, 255, 0.08); }
 .rights-gauge { height: 7px; margin-top: 5px; border-radius: 4px; background: rgba(0, 0, 0, 0.12); overflow: hidden; }
 .rights-gauge i { display: block; height: 100%; width: 0; border-radius: 4px; background: linear-gradient(90deg, #e0b54a, #f2d36b); transition: width 0.4s ease; }
 

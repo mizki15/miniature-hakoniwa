@@ -91,6 +91,10 @@ export class EcoManager {
   private nextId = 0;
   /** デバッグ：全部の生き物に、透かして見える目印を付ける */
   private highlight = false;
+  /** 季節の目標にある「まれ」の訪問者（来る確率を上げる。v0.17） */
+  goalBoost: ReadonlySet<string> = new Set();
+  /** 雪が降っているか（住人が家のそばで暖まる。v0.17） */
+  private snowing = false;
 
   constructor(private deps: EcoDeps) {}
 
@@ -190,7 +194,7 @@ export class EcoManager {
     // 訪問者のいる場所が、まだ合っているか（埋めた水・耕した花など）。ホタルは場所を持たない
     const input = { world: this.world!, ...this.deps.envInput() };
     const visitors = this.visitors.map((v) => ({ id: v.def.id, leavesAt: v.leavesAt, homeOk: v.def.motion === 'glow' ? undefined : fitsHabitat(input, v.def.habitat, v.home) }));
-    const state: EcoState = { visitors, residents: this.animals.map((a) => a.species), openPlots: countOpen(this.world!.plots), abundance: this.abundance, liked: input.liked };
+    const state: EcoState = { visitors, residents: this.animals.map((a) => a.species), openPlots: countOpen(this.world!.plots), abundance: this.abundance, liked: input.liked, boost: this.goalBoost };
     const r = checkEcosystem(state, this.env(), moment, nowReal, rand);
     let arrived = 0, movedIn = false;
     for (const id of r.leave) this.removeVisitor(id);
@@ -225,7 +229,49 @@ export class EcoManager {
     else if (came.length === 1) this.deps.toast(`${came[0]}が引っ越してきた`);
     else if (came.length > 1) this.deps.toast(`${came[0]}など ${came.length} 匹が引っ越してきた`);
     if (r.leave.length || arrived || movedIn) this.deps.onChanged();
+    if (this.snowing) this.assignWarmSpots(); // 家が建った・住人が来た
     return { arrived, left: r.leave.length, movedIn };
+  }
+
+  /** 雪が降り始めた・やんだ（v0.17）。降っている間、家のそばの住人は家に寄り添って暖まる */
+  setSnowing(on: boolean) {
+    if (on === this.snowing) return;
+    this.snowing = on;
+    if (on) this.assignWarmSpots();
+    else for (const a of this.animals) a.warmSpot = null;
+  }
+
+  /**
+   * 暖まる所を決める：家（飾りは除く）の足元のすぐ外の、歩ける列。住人ごとに近い所を 1 つ（重ならないように）。
+   * 家から 40 列より遠い住人は行かない。決まっている所がまだ使えるなら、そのまま
+   */
+  private assignWarmSpots() {
+    const w = this.world;
+    if (!w) return;
+    const N = w.size;
+    const homes = this.deps.envInput().homeCols;
+    const spots: { x: number; z: number; face: number }[] = [];
+    for (const col of homes ?? []) {
+      const hx = col % N, hz = Math.floor(col / N);
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const x = hx + dx, z = hz + dz, n = x + z * N;
+        if (x < 0 || z < 0 || x >= N || z >= N || homes!.has(n) || w.walkable[n] !== 1) continue;
+        if (!spots.some((s) => s.x === x && s.z === z)) spots.push({ x, z, face: Math.atan2(dx, dz) });
+      }
+    }
+    const used = new Set<string>();
+    const ok = (s: { x: number; z: number }) => spots.some((p) => p.x === s.x && p.z === s.z) && !used.has(`${s.x},${s.z}`);
+    for (const a of this.animals) if (a.warmSpot && ok(a.warmSpot)) used.add(`${a.warmSpot.x},${a.warmSpot.z}`); else a.warmSpot = null;
+    for (const a of this.animals) {
+      if (a.warmSpot) continue;
+      const [ax, az] = a.colXZ;
+      let best: (typeof spots)[number] | null = null, bd = 40;
+      for (const s of spots) {
+        const d = Math.hypot(s.x - ax, s.z - az);
+        if (d < bd && !used.has(`${s.x},${s.z}`)) { bd = d; best = s; }
+      }
+      if (best) { a.warmSpot = best; used.add(`${best.x},${best.z}`); }
+    }
   }
 
   /** 訪問者を足す。現れる場所が無ければ来ない。初めてなら「何かの気配がする…」 */

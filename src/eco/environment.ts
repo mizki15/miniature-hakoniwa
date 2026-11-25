@@ -40,6 +40,8 @@ export interface EnvInput {
   litHouses?: number;
   /** 建ち終わった家のどれかを気に入る住人の種類（v0.16.1。eco/residents.ts の likedBy） */
   liked?: ReadonlySet<string>;
+  /** 建ち終わった家（飾りは除く）の足元の列（v0.17：雪の日に住人が暖まる所） */
+  homeCols?: ReadonlySet<number>;
 }
 
 export interface Light { x: number; z: number; r: number }

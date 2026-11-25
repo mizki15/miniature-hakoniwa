@@ -78,8 +78,8 @@ export function mergeModel(g: THREE.Group): THREE.Group {
   return out;
 }
 
-export type Activity = 'walk' | 'rest' | 'sleep';
-export const ACTIVITY_NAMES: Record<Activity, string> = { walk: '散歩中', rest: 'ひと休み', sleep: '眠っている' };
+export type Activity = 'walk' | 'rest' | 'sleep' | 'warm';
+export const ACTIVITY_NAMES: Record<Activity, string> = { walk: '散歩中', rest: 'ひと休み', sleep: '眠っている', warm: '家で暖まっている' };
 
 /** 種ごとの歩き方 */
 const GAIT_OF: Record<Species, Gait> = {
@@ -98,6 +98,12 @@ export class Animal {
   activity: Activity = 'rest';
   /** おすそ分けの効き目が続く期限（箱庭の時計 simMs。v0.16.1） */
   treatedUntil = 0;
+  /**
+   * 雪の間に暖まりに行く所（v0.17）：家の足元のすぐ外の列と、家に背を向けた向き。null なら行かない。
+   * まっすぐ行けなければ寄り道し、何度も行けなければその場へ移る
+   */
+  warmSpot: { x: number; z: number; face: number } | null = null;
+  private warmTries = 0;
   private model: THREE.Group;
   private pos = new THREE.Vector2();
   private target: THREE.Vector2 | null = null;
@@ -182,6 +188,21 @@ export class Animal {
     if (first) this.target = first;
   }
 
+  /** 寄り道：まっすぐ行けない時、行き先に近づく、まっすぐ歩いて行ける所へ */
+  private pickToward(tx: number, tz: number) {
+    const base = Math.atan2(tx - this.pos.x, tz - this.pos.y);
+    let best: THREE.Vector2 | null = null, bd = Infinity;
+    for (let i = 0; i < 16; i++) {
+      const a = base + (Math.random() - 0.5) * Math.PI * (i < 8 ? 1 : 2);
+      const r = 2 + Math.random() * 6;
+      const x = this.pos.x + Math.sin(a) * r, z = this.pos.y + Math.cos(a) * r;
+      if (!this.clearPath(x, z)) continue;
+      const d = Math.hypot(tx - x, tz - z);
+      if (d < bd) { bd = d; best = new THREE.Vector2(x, z); }
+    }
+    if (best) this.target = best;
+  }
+
   /** まっすぐ歩いて行けるか（途中に水・木・高い段差がない）。崖の前で行ったり来たりしないように、道を先に確かめる */
   private clearPath(tx: number, tz: number) {
     const dx = tx - this.pos.x, dz = tz - this.pos.y, n = Math.ceil(Math.hypot(dx, dz) / 0.4);
@@ -214,7 +235,17 @@ export class Animal {
     const gait = GAIT_OF[this.species];
     let want = 0; // 出したい速さ
 
-    if (!asleep && this.idle <= 0 && !this.target) this.pickTarget();
+    const ws = this.warmSpot;
+    const atWarm = !!ws && Math.hypot(ws.x + 0.5 - this.pos.x, ws.z + 0.5 - this.pos.y) < 0.35;
+    if (!ws) this.warmTries = 0;
+    if (!asleep && this.idle <= 0 && !this.target) {
+      if (ws && !atWarm) {
+        const tx = ws.x + 0.5, tz = ws.z + 0.5;
+        if (this.clearPath(tx, tz)) this.target = new THREE.Vector2(tx, tz);
+        else if (++this.warmTries > 10) { this.moveTo(ws.x, ws.z); this.warmTries = 0; }
+        else this.pickToward(tx, tz);
+      } else if (!ws) this.pickTarget();
+    }
     if (this.idle > 0) this.idle -= dt;
 
     if (this.target && !asleep) {
@@ -222,7 +253,7 @@ export class Animal {
       const dist = d.length();
       if (dist < 0.1) {
         this.target = null;
-        this.idle = 1 + Math.random() * 4;
+        this.idle = this.warmSpot ? 0.2 : 1 + Math.random() * 4; // 暖まりに行く途中は止まらない
       } else {
         // 行き先へ向きを変えてから歩き出す（大きく向きを変える時はその場で回る）
         const face = Math.atan2(d.x, d.y);
@@ -249,7 +280,9 @@ export class Animal {
         this.phase += step * (gait === 'hop' ? 4.2 : gait === 'waddle' ? 7 : 5.5);
       }
     }
-    this.activity = asleep ? 'sleep' : moving ? 'walk' : 'rest';
+    this.activity = asleep ? 'sleep' : moving ? 'walk' : atWarm ? 'warm' : 'rest';
+    // 暖まっている間は、家に背を向けて（外を眺めて）じっとする
+    if (this.activity === 'warm') this.heading = turnToward(this.heading, ws!.face, dt * 2);
 
     // 止まっている時のしぐさ
     if (!moving && !asleep) {
@@ -271,7 +304,7 @@ export class Animal {
 
     const pose = gaitPose(gait, this.phase, hopH, Math.min(1, this.vel / speed));
     // 眠っている時は少し縮こまり、ゆっくり息をする
-    const breathe = asleep ? 0.85 + Math.sin(this.t * 1.6) * 0.025 : 1;
+    const breathe = asleep ? 0.85 + Math.sin(this.t * 1.6) * 0.025 : this.activity === 'warm' ? 0.92 + Math.sin(this.t * 2.2) * 0.02 : 1;
     this.model.position.y = pose.lift;
     this.model.scale.set(1 + (1 - pose.squash) * 0.5, breathe * pose.squash, 1);
     this.model.rotation.set(pose.pitch + this.sniff - slope * 0.25, asleep ? 0 : this.look, pose.roll);

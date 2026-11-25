@@ -1,6 +1,7 @@
 import type { Species } from '../creatures/animals';
 import type { EnvCounts } from './environment';
 import { LIKED_RELAX } from './residents';
+import { GOAL_BOOST } from './goals';
 import { RARITY_CHANCE, RESIDENT_ORDER, RESIDENT_RULES, VISITOR, VISITORS, type Moment, type VisitorId } from './species';
 
 /**
@@ -16,8 +17,9 @@ export const residentCap = (openPlots: number) => Math.min(24, openPlots * 3);
 
 /** homeOk：訪問者のいる場所が、まだその生き物に合っているか（埋めた水・耕した花など。false なら去る） */
 /** abundance：生き物の多さの倍率（デバッグ、1 が普通）。来る確率・訪問者と住人の上限・1 回に引っ越してくる数をこの倍にする */
+/** boost：季節の目標にある「まれ」の訪問者（v0.17。来る確率が GOAL_BOOST 倍） */
 /** liked：好きな家がある住人の種類（v0.16.1。条件の割合の下限が 2 割ゆるく、引っ越しの順番で先になる） */
-export interface EcoState { visitors: { id: VisitorId; leavesAt: number; homeOk?: boolean }[]; residents: Species[]; openPlots: number; abundance?: number; liked?: ReadonlySet<string> }
+export interface EcoState { visitors: { id: VisitorId; leavesAt: number; homeOk?: boolean }[]; residents: Species[]; openPlots: number; abundance?: number; liked?: ReadonlySet<string>; boost?: ReadonlySet<string> }
 
 /** 読み込んだ住人が 1 匹もいない時（段階 ① の保存データには住人が無い）は、新しい箱庭と同じくうさぎを置く */
 export const needsStarterRabbits = (restored: Species[]) => restored.length === 0;
@@ -38,7 +40,7 @@ export function checkEcosystem(s: EcoState, e: EnvCounts, m: Moment, nowReal: nu
     if (stay.has(def.id) || !def.needs(e) || !def.when(m)) continue;
     // カワセミは魚のいる時だけ（同じ判定で魚が来た時も含む）
     if (def.id === 'kingfisher' && !stay.has('fish') && !arrive.includes('fish')) continue;
-    const chance = Math.min(1, RARITY_CHANCE[def.rarity] * (def.id === 'frog' && m.raining ? 2 : 1) * k);
+    const chance = Math.min(1, RARITY_CHANCE[def.rarity] * (def.id === 'frog' && m.raining ? 2 : 1) * (s.boost?.has(def.id) ? GOAL_BOOST : 1) * k);
     if (rand() < chance) arrive.push(def.id);
   }
   // 引っ越し：上限に達していなければ、条件を満たす種類を 1 つだけ（1 匹）。

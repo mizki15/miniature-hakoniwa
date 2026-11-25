@@ -2,6 +2,7 @@ import type { TerrainParams } from '../world/terrain';
 import type { CropKind } from '../game/farm';
 import type { BuildingDesign } from '../build/geoParse';
 import type { Rot } from '../build/placement';
+import type { GoalsState } from '../eco/goals';
 import { FIELD_SHIFT, FRAME, OLD_FRAME, PLOT, PLOTS_PER_SIDE } from '../world/plots';
 
 /**
@@ -55,6 +56,8 @@ export interface SaveData {
    *  progress は建設の進み具合（0〜1）。建ち終わった建物と古い記録には無い（＝完成）。
    *  paid は素材と発見ポイントを払って建てた印（1。v0.14〜。片付けると戻す） */
   buildings: { designs: BuildingDesign[]; placed: [designId: string, x: number, z: number, rot: Rot, progress?: number, paid?: number][] };
+  /** 季節の目標（v0.17。eco/goals.ts。無ければ、読み込んだ時の季節で作る） */
+  goals?: GoalsState;
 }
 
 /** v1（大きさを選んで作った箱庭）のデータ。地形の作り方が変わったので引き継げない */

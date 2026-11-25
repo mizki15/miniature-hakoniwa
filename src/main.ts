@@ -20,7 +20,9 @@ import { createDaylight } from './render/daylight';
 import { createShadowSystem } from './render/shadows';
 import { SKY, createPrecipitation, createSkyNode } from './render/sky';
 import { SEASON_COLORS, SEASON_NAMES, seasonAt } from './calendar';
-import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, weatherAt, type WeatherKind } from './weather';
+import { WEATHER_NAMES, WEATHER_PARAMS, approachWeather, isSnowDay, weatherAt, type WeatherKind } from './weather';
+import { TIER_NAMES, TIER_POINTS, boostedVisitors, checkGoals, condProgress, ensureSeason, goalHint, goalReward, goalText, logLook, sanitizeGoals, seasonKey, seasonOfKey, updatePairs, type Goal, type GoalsState } from './eco/goals';
+import { mementoDesign } from './build/mementos';
 import { ACTIVITY_NAMES, SPECIES, type Animal } from './creatures/animals';
 import { EcoManager } from './creatures/ecoManager';
 import { RARITY_STARS, VISITOR, type DexId, type Moment, type VisitorId } from './eco/species';
@@ -1135,18 +1137,31 @@ async function main() {
   /** 観察：同じ生き物にカーソルを 1.5 秒合わせ続けると図鑑に「観察した」と載る */
   const OBSERVE_SECONDS = 1.5;
   let observing: { key: string; t: number } | null = null;
+  /** 観察し終えた対象（カーソルを外すまで、もう一度は数えない） */
+  let looked: string | null = null;
   let hoverTarget: Target | null = null;
   const updateObserve = (dt: number) => {
     const t = mode === 'view' ? hoverTarget : null;
     const id = dexIdOf(t);
-    if (!t || !id || !eco.needsObserving(id, lastMoment.season)) { observing = null; return; }
+    if (!t || !id) { observing = null; looked = null; return; }
     const key = targetKey(t);
+    if (looked === key) return;
     if (!observing || observing.key !== key) observing = { key, t: 0 };
     observing.t += dt;
     if (observing.t >= OBSERVE_SECONDS) {
       observing = null;
-      const pts = eco.observe(id, lastMoment.season);
-      if (pts > 0) { progress.points += pts; refreshGhosts(); }
+      looked = key;
+      if (eco.needsObserving(id, lastMoment.season)) {
+        const pts = eco.observe(id, lastMoment.season);
+        if (pts > 0) { progress.points += pts; refreshGhosts(); }
+      }
+      // 季節の目標（観察した生き物・家で暖まっている住人）は、図鑑で観察済みでも数える
+      if (goals) {
+        logLook(goals.log, id, t.kind === 'animal' && t.animal.activity === 'warm', Date.now());
+        updatePairs(goals);
+        game.unsaved = true;
+        goalsAt = -Infinity;
+      }
     }
   };
 
@@ -1205,6 +1220,103 @@ async function main() {
 
   // 図鑑
   const refreshDex = () => { hoverTip.hide(); renderDex($('dexGrid'), eco.dex, eco.animals, eco.visitors, eco.env(), (card, html) => hoverTip.attach(card, html, 'left', true, $('right'))); };
+
+  // ---------- 季節の目標（v0.17。eco/goals.ts。右のパネルの図鑑の上） ----------
+  let goals: GoalsState | null = null;
+  /** 始めたばかりの箱庭か（最初の 3 つを、操作を覚える目標にする） */
+  let goalsTutorial = false;
+  const goalCtx = () => ({ env: eco.env(), residents: eco.animals.map((a) => a.species) });
+  const knownDex = (id: DexId) => dexStage(eco.dex, id) === 'observed';
+  let goalsHtml = '';
+  const renderGoals = () => {
+    const now = new Date();
+    const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+    $('goalsLeft').textContent = `${SEASON_NAMES[seasonAt(now).season]}・あと ${Math.max(1, Math.ceil((end - now.getTime()) / 86_400_000))} 日`;
+    const c = goalCtx();
+    const html = (goals?.goals ?? []).map((g, i) => {
+      // まだ観察していない生き物（「？？？」）は、図鑑と同じヒントを小さく添える
+      const unknownHint = !g.done && g.conds.some((k) => (k.k === 'see' || k.k === 'sameDay' || k.k === 'resident') && (k.k === 'resident' ? [k.sp] : k.ids).some((id) => !knownDex(id))) ? goalHint(g, knownDex) : '';
+      const prog = g.done ? '' : [...g.conds.map((k) => condProgress(k, goals!.log, c)), unknownHint].filter(Boolean).join('・');
+      return `<li class="goal${g.done ? ' done' : ''}" data-i="${i}"><span class="goal-tier t${g.tier}">${TIER_NAMES[g.tier]}</span>` +
+        `<span class="goal-text">${esc(goalText(g, knownDex))}${prog ? `<small class="goal-prog">${esc(prog)}</small>` : ''}</span>${g.done ? '<span class="goal-check">✓</span>' : ''}</li>`;
+    }).join('');
+    if (html === goalsHtml) return; // 変わっていなければ描き直さない（説明の表示が途切れないように）
+    goalsHtml = html;
+    const box = $('goalsList');
+    box.innerHTML = html;
+    box.querySelectorAll<HTMLElement>('li').forEach((li) => {
+      const i = Number(li.dataset.i);
+      hoverTip.attach(li, () => {
+        const g = goals?.goals[i];
+        if (!g) return '';
+        const hint = goalHint(g, knownDex);
+        const reward = `ほうび：発見ポイント ${TIER_POINTS[g.tier]}・手に入りにくい原料${g.tier === 2 ? '・季節の記念の飾り' : ''}`;
+        return `<div class="tt-title">🎯 ${esc(goalText(g, knownDex))}</div>${hint ? `<div class="tt-line">${esc(hint)}</div>` : ''}<div class="tt-line tt-muted">${g.done ? '達成しました' : reward}</div>`;
+      }, 'left', true, $('right'));
+    });
+  };
+  /** 達成した：発見ポイント・原料（その箱庭で手に入りにくいもの）・難しいものは記念の飾り */
+  const rewardGoal = (g: Goal) => {
+    const r = goalReward(g, eco.env(), Math.random);
+    progress.points += r.points;
+    refreshGhosts();
+    gain(game.farm.inventory, r.raw, r.n);
+    let extra = '';
+    if (r.memento && goals) {
+      const d = mementoDesign(goals.key);
+      if (game.addDesign(d) === 'added') extra = `。記念の飾り「${d.name}」を棚に入れました`;
+    }
+    toast(`🎯 今季の目標を達成！「${goalText(g, knownDex)}」 +${r.points}・${RAW[r.raw].name} ×${r.n}${extra}`, 6000);
+    if (bagIsOpen()) renderBagNow();
+    game.unsaved = true;
+  };
+  let goalsAt = -Infinity;
+  let snowDayTold = false;
+  /** 2 秒ごと（何かあればすぐ）：季節が変わっていれば新しい 3 つにし、達成を確かめる */
+  const tickGoals = () => {
+    if (!world || regenerating) return;
+    const nowR = performance.now();
+    if (nowR - goalsAt < 2000) return;
+    goalsAt = nowR;
+    const c = goalCtx();
+    const r = ensureSeason(goals, seasonKey(new Date()), { ...c, dex: eco.dex }, Math.random, goalsTutorial);
+    const had = goals !== null;
+    goals = r.state;
+    if (r.changed) {
+      goalsTutorial = false;
+      game.unsaved = true;
+      if (had) toast(`🎯 ${SEASON_NAMES[seasonOfKey(goals.key)]}になりました。今季の目標が新しく 3 つ出ています`, 5000);
+    }
+    eco.goalBoost = boostedVisitors(goals);
+    for (const g of checkGoals(goals, c, Date.now())) rewardGoal(g);
+    renderGoals();
+    if (!snowDayTold && isSnowDay(new Date())) {
+      snowDayTold = true;
+      toast('❄ 今日は雪の日。家のそばの住人が、家に寄り添って暖まっています', 5000);
+    }
+  };
+  // 収穫・耕す・花を植える・建物が建ち終わった（記念の飾りは数えない）
+  game.onGoalEvent = (e) => {
+    if (!goals) return;
+    const log = goals.log;
+    if (e.k === 'harvest') log.harvest[e.crop] = (log.harvest[e.crop] ?? 0) + 1;
+    else if (e.k === 'till') log.till = true;
+    else if (e.k === 'flower') log.flower = true;
+    else if (!e.design.memento) {
+      const ch = game.characterOf?.(e.design);
+      log.builds.push({ nature: ch?.nature ?? 1, straw: (ch?.areas.thatch ?? 0) > 0, ...(e.design.kind === 'deco' ? { deco: true } : {}) });
+    }
+    game.unsaved = true;
+    goalsAt = -Infinity;
+  };
+  $('goalsReset').addEventListener('click', () => {
+    if (!world) return;
+    const prev = goals?.goals.map((g) => g.id) ?? [];
+    goals = { ...ensureSeason(null, seasonKey(new Date()), { ...goalCtx(), dex: eco.dex }, Math.random).state, prev };
+    goalsAt = -Infinity;
+    game.unsaved = true;
+    toast('今季の目標を作り直しました');
+  });
 
   // 魚がはねる・虫が落ちる：ときどき勝手に波紋
   let nextAmbient = 1;
@@ -1364,7 +1476,7 @@ async function main() {
   const updateStatus = (hh: number, mm: number, season: number, calendarSeason: number) => {
     $('st-time').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
     $('st-season').textContent = SEASON_NAMES[season] + (season !== calendarSeason ? '（手動）' : '');
-    $('st-weather').textContent = WEATHER_NAMES[weatherOverride ?? weatherAt(new Date(), season)];
+    $('st-weather').textContent = WEATHER_NAMES[weatherOverride ?? weatherAt(new Date(), season)] + (weatherOverride === null && isSnowDay(new Date()) ? '（雪の日）' : '');
     // 発見ポイント（図鑑の上）：持っている数と、区画を開ける 30 までのたまり具合
     const pts = points();
     $('rightsCount').textContent = String(pts);
@@ -1461,6 +1573,7 @@ async function main() {
   const buildSave = (): SaveData => ({
     version: SAVE_VERSION, savedAt: Date.now(), world: worldSettings!, plots: world!.plots,
     ...game.exportState(), progress: { ...progress }, dex: structuredClone(eco.dex), residents: eco.residentsSave(),
+    ...(goals ? { goals: structuredClone(goals) } : {}),
   });
 
   // 閉じていた間の季節と天気（オフライン進行で使う）
@@ -1477,6 +1590,9 @@ async function main() {
     settingsToUI(save.world);
     const s = save.world;
     progress = { ...save.progress };
+    goals = sanitizeGoals(save.goals); // 無ければ、読み込んだ時の季節でふつうの 3 つを作る
+    goalsTutorial = false;
+    goalsHtml = '';
     await startWorld(s.seed, s.detail, s.params, s.flowerStyle, save.plots, save.edits);
     worldSettings = { ...s };
     game.restore(save);
@@ -1520,6 +1636,9 @@ async function main() {
     } else {
       const s = settingsFromUI();
       progress = { points: 0, rightsUsed: 0, unlocks: [], firsts: [], newMarks: [] };
+      goals = null; // 始めたばかりの箱庭：最初の 3 つは操作を覚える目標
+      goalsTutorial = true;
+      goalsHtml = '';
       await startWorld(s.seed, s.detail, s.params, s.flowerStyle, 1 << START_PLOT);
       eco.restore({}, null);
       worldSettings = s;
@@ -1960,6 +2079,9 @@ async function main() {
 
     lastMoment = { season: s, seasonProgress: seasonOverride === null ? st.progress : 0.3, hour, raining: weatherNow.rain > 0.5 };
     eco.update(dt, hour, lastMoment, game.farm.simMs, performance.now());
+    // 雪の間（冬）は、家のそばの住人が家に寄り添って暖まる（v0.17）
+    eco.setSnowing(s === 3 && weatherNow.snow > 0.5);
+    tickGoals();
 
     // 畑・植林の時間を進める。道具を持っている時はカーソルを更新
     lastEnv = { season: s, raining: weatherNow.rain > 0.5 };
@@ -2062,7 +2184,8 @@ async function main() {
     return { msPerFrame: +ms.toFixed(2), fps: +(1000 / ms).toFixed(0), resolution: `${w}x${h}`, quality, backend: backendName };
   };
   const adapterInfo = async () => { const a = await (navigator as N).gpu?.requestAdapter(); return a?.info ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null; };
-  Object.assign((window as N).__hakoniwa, { spawnAll: () => eco.spawnAll(), camera, controls, shadows, setAntialias, setRenderStyle, uLine, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.defineProperty((window as N).__hakoniwa, 'goals', { get: () => goals, configurable: true }); // Object.assign では今の値しか写らない
+  Object.assign((window as N).__hakoniwa, { tickGoals: () => { goalsAt = -Infinity; tickGoals(); }, spawnAll: () => eco.spawnAll(), camera, controls, shadows, setAntialias, setRenderStyle, uLine, get aa() { return { mode: aaMode, scale: renderScale }; }, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {

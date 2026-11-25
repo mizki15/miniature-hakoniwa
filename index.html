@@ -135,6 +135,7 @@
             </select>
             <label title="生き物の来る確率・住人と訪問者の上限・1 回に引っ越してくる数を、この倍にする（保存しない）">生き物の多さ <input type="range" id="ecoAbundance" min="1" max="10" step="1" value="5" /></label>
             <span id="ecoAbundanceLabel">×5</span>
+            <button id="goalsReset" title="今季の目標を、いまの箱庭の様子で選び直す（テスト用）">🎯 目標を作り直す</button>
             <button id="spawnAll" title="全種類の生き物を、条件を見ずに一気に出す（住人は種類ごとに 1 匹ずつ引っ越してきて、保存される。訪問者は 30 分いる。テスト用）">🦊 全種類を出す</button>
             <label>小物
               <select id="detail" title="木や花のボクセルの細かさ（地面に対する比）">
@@ -251,6 +252,10 @@
             <div class="rights-row"><span>✨ 発見ポイント</span><b id="rightsCount">0</b></div>
             <div class="rights-gauge"><i id="rightsGauge"></i></div>
             <small id="rightsNext" class="rights-next"></small>
+          </div>
+          <div class="goals-box">
+            <div class="goals-head"><span>🎯 今季の目標</span><small id="goalsLeft"></small></div>
+            <ul class="goals-list" id="goalsList"></ul>
           </div>
           <div class="dex-grid" id="dexGrid"></div>
         </div>

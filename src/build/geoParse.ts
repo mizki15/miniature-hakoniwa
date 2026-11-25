@@ -26,6 +26,8 @@ export interface BuildingDesign {
    * 飾りは住人の住まいにならず（家の数・好きな家に数えない）、性格は弱め（灯りの届く距離が星 1 つぶん短く、野生度を下げる重みが半分）
    */
   kind?: 'deco';
+  /** 季節の記念の飾り（v0.17。季節の目標のほうび）。素材も発見ポイントも要らない */
+  memento?: true;
 }
 
 export type ParseResult = { ok: true; design: BuildingDesign } | { ok: false; issues: ParseIssue[] };
@@ -362,5 +364,6 @@ export function sanitizeDesign(d: unknown): BuildingDesign | null {
   return {
     id: d.id, name: typeof d.name === 'string' ? d.name : '名前のない建物', cubes, bounds: { min: [...(b.min as Vec3)] as Vec3, max: [...(b.max as Vec3)] as Vec3 },
     ...(d.kind === 'deco' ? { kind: 'deco' as const } : {}),
+    ...(d.memento === true ? { memento: true as const } : {}),
   };
 }

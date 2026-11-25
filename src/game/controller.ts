@@ -194,6 +194,8 @@ export class GameController {
   private siteTime = 0;
   /** 建物が建ち終わった時（main が知らせを出す） */
   onBuildingDone: ((name: string) => void) | null = null;
+  /** 季節の目標に数えること（v0.17）：収穫・耕す・花を植える・建物が建ち終わった（閉じていた間に建ち終わった分も） */
+  onGoalEvent: ((e: { k: 'harvest'; crop: CropKind } | { k: 'till' } | { k: 'flower' } | { k: 'built'; design: BuildingDesign }) => void) | null = null;
   world: WorldData | null = null;
   /** 生成した状態からの変更（保存は「シード＋この差分」で行う） */
   edits = new Map<number, number>();
@@ -487,6 +489,7 @@ export class GameController {
     const base = {
       flowerCols, treeCols: this.treeCols as ReadonlySet<number>, farmland: this.farmland as ReadonlySet<number>, crops: this.farm.crops.size,
       buildingCols: this.buildingCols as ReadonlySet<number>, buildingWildCols, lights, houses, litHouses,
+      homeCols: new Set(homes.flatMap((h) => h.cols)) as ReadonlySet<number>,
     };
     // 家を気に入る住人（形と建つ場所）
     const liked = new Set<string>();
@@ -498,6 +501,8 @@ export class GameController {
   wallet: { get(): number; add(n: number): void } = { get: () => 0, add: () => {} };
   /** 建物のコスト（性格がまだ計算できていなければ null） */
   costOf(d: BuildingDesign): BuildCost | null {
+    // 季節の記念の飾り（v0.17。目標のほうび）は、素材も発見ポイントも要らない
+    if (d.memento) return { mats: {}, points: 0 };
     const c = this.characterOf?.(d);
     return c ? buildCost(c) : null;
   }
@@ -1249,6 +1254,7 @@ export class GameController {
         this.removeFlowersAt(x, z);
         this.setVoxel(x, y, z, FARMLAND);
         this.farmland.add(col);
+        this.onGoalEvent?.({ k: 'till' });
         return '耕しました';
       case 'seed':
         this.farm.plant(col, this.seed);
@@ -1261,6 +1267,7 @@ export class GameController {
       case 'harvest': {
         const kind = this.farm.harvest(col);
         this.rebuildCrops();
+        if (kind) this.onGoalEvent?.({ k: 'harvest', crop: kind });
         // ひつじがいると、わらが 1 つ多い（住人の仕事）
         if (kind === 'wheat') { const n = 1 + this.jobs().extraStraw; gain(this.farm.inventory, 'straw', n); return `小麦を収穫しました（わら +${n}）`; }
         return kind ? `${CROPS[kind].name}を収穫しました` : null;
@@ -1276,6 +1283,7 @@ export class GameController {
       }
       case 'flower':
         this.addFlower(col, this.flowerVariant);
+        this.onGoalEvent?.({ k: 'flower' });
         return `${FLOWER_KINDS.find((f) => f.variant === this.flowerVariant)?.name ?? '花'}を植えました`;
       case 'path': {
         if (BLOCK_COST[this.pathBlock]) {
@@ -1569,7 +1577,7 @@ export class GameController {
       const d = this.designs.get(p.id);
       if (!d) continue;
       p.progress = advanceProgress(p.progress, dtMs, d);
-      if (p.progress >= 1) { finished = true; this.onBuildingDone?.(d.name); }
+      if (p.progress >= 1) { finished = true; this.onBuildingDone?.(d.name); this.onGoalEvent?.({ k: 'built', design: d }); }
     }
     if (finished) { this.rebuildBuildings(); this.env(); }
     else for (const st of this.sites) this.updateSite(st);
