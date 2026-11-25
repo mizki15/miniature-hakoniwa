@@ -12,7 +12,10 @@ import type { RemoteInfo } from './cloudSync';
 
 const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const FILE_NAME = 'hakoniwa-save.bin';
-export const DRIVE_CLIENT_ID: string | undefined = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+/** デスクトップ版（Electron）か。file:// やアプリの窓では Google のログイン（GIS）が通らないので、同期を出さない */
+const isDesktopApp = import.meta.env.MODE === 'electron' || /\bElectron\//.test(navigator.userAgent) || location.protocol === 'file:';
+/** 同期に使う Client ID。ない時（設定がない・デスクトップ版）は「この版では Google 同期は使えません」と出す */
+export const DRIVE_CLIENT_ID: string | undefined = isDesktopApp ? undefined : import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare const google: any;

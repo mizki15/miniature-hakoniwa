@@ -6,3 +6,7 @@ dist-portfolio
 
 # 広報の撮影素材（画像・動画は大きいので git に入れない）
 docs/広報/素材/
+
+# デスクトップ版（Electron）の出力。配る exe は GitHub の Releases に置く
+dist-electron
+release
