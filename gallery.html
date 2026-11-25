@@ -11,6 +11,12 @@
   </head>
   <body>
     <div id="labels"></div>
+    <!-- ファイルを直接開いた時（file://）は TypeScript を読めないので、開き方を出す -->
+    <script>
+      if (location.protocol === 'file:') document.body.insertAdjacentHTML('beforeend',
+        '<p style="margin:24px;font-size:15px;line-height:1.8">このページは開発サーバーで開いてください。<br>' +
+        '<code>npm run dev</code> を動かしてから、<code>http://localhost:5173/gallery.html</code> を開きます。</p>');
+    </script>
     <!-- 開発用：全種類の生き物のモデルを並べて見る（本番のビルドには入らない）。?flap で羽ばたかせる -->
     <script type="module" src="/src/gallery.ts"></script>
   </body>
