@@ -38,6 +38,7 @@ import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
 import { FLOWER_KINDS, GameController, PATH_KINDS, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
 import { HoverTip } from './ui/hoverTip';
+import { applyDefaultsToUI } from './ui/defaultsUI';
 import { CROP_ICONS, registryOptions } from './game/tools';
 import { createHud } from './ui/hud';
 import { buildMinutes } from './build/construction';
@@ -62,6 +63,8 @@ const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
 
 
 async function main() {
+  // 初期値（src/defaults.ts）を画面に入れる。端末に覚えた値・保存した箱庭の値は、この後で上書きする（v0.18.1）
+  applyDefaultsToUI(F_STOPS);
   // ---------- レンダラー ----------
   // ?webgl を付けると WebGL2 で動かす（WebGPU 非対応の端末での動作確認用）
   const forceWebGL = new URLSearchParams(location.search).has('webgl');
@@ -1331,6 +1334,8 @@ async function main() {
   styleSelect.value = renderStyle;
   styleSelect.addEventListener('change', () => setRenderStyle(isStyle(styleSelect.value) ? styleSelect.value : 'standard'));
   lineInput.addEventListener('input', () => { uLine.value = parseFloat(lineInput.value); });
+  // 初期値（src/defaults.ts）をシェーダーへ
+  U.blend.value = parseFloat(blendInput.value); U.bump.value = parseFloat(bumpInput.value); uAO.value = parseFloat(aoInput.value); uLine.value = parseFloat(lineInput.value);
   $('toonLineRow').hidden = renderStyle !== 'toon';
 
   // ---------- 画質プリセット ----------
@@ -1907,6 +1912,7 @@ async function main() {
   let gpuMs = 0;
   const fpsWindow: number[] = [];
   let lastQualityChange = performance.now();
+  /** 影の範囲の真ん中：カメラの注目点（v0.18.1。前は箱庭の真ん中に固定で、近づくと真ん中から離れた区画の影が消えていた） */
   const focusPoint = new THREE.Vector3(0, 10, 0);
 
   let cpuLogic = 0, cpuRender = 0;
@@ -1998,6 +2004,7 @@ async function main() {
     const size = extent;
     // 影の範囲は箱庭全体ではなく、注目点のまわり（カメラとの距離で決める）。広くなっても影が粗くならない
     const shadowR = Math.min(160, Math.max(48, camera.position.distanceTo(controls.target) * 0.9));
+    focusPoint.copy(controls.target);
     daylight.apply(hour, focusPoint, shadowR, weatherNow);
     U.windowGlow.value = windowGlowAt(hour);
     shadows.update();

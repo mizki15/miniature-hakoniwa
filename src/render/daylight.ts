@@ -39,6 +39,7 @@ export function createDaylight(scene: THREE.Scene): Daylight {
   scene.add(hemi);
 
   const tmp = new THREE.Color();
+  const snapped = new THREE.Vector3();
   const mixSet = (out: THREE.Color, key: 'top' | 'bottom' | 'light' | 'hemiSky' | 'hemiGround', day: number, dusk: number) => {
     out.copy(NIGHT[key]).lerp(DAY[key], day);
     tmp.copy(DUSK[key]);
@@ -63,8 +64,10 @@ export function createDaylight(scene: THREE.Scene): Daylight {
       const e = isDay ? Math.max(0.12, elev) : Math.max(0.35, -elev);
       const dir = new THREE.Vector3(Math.cos(az) * Math.sqrt(1 - e * e), e, Math.sin(az) * Math.sqrt(1 - e * e));
       if (!isDay) dir.x *= -1, dir.z *= -1;
-      sun.position.copy(focus).addScaledVector(dir, radius * 2);
-      sun.target.position.copy(focus);
+      // 影の範囲の真ん中（注目点）を、影の地図の 1 画素の格子にそろえる（カメラを動かしても影の縁がちらつかないように。v0.18.1）
+      const center = snapToShadowTexel(focus, dir, (2 * radius) / sun.shadow.mapSize.x, snapped);
+      sun.position.copy(center).addScaledVector(dir, radius * 2);
+      sun.target.position.copy(center);
       mixSet(sun.color, 'light', day, dusk);
       const base = isDay ? 0.4 + 2.4 * smooth(-0.05, 0.35, elev) : 0.55;
       // 夜の明るさ：昼は 1、夜になるほど nightBrightness に近づく
@@ -96,4 +99,21 @@ export function createDaylight(scene: THREE.Scene): Daylight {
       U.wind.value = weather.wind;
     },
   };
+}
+
+const _right = new THREE.Vector3(), _up = new THREE.Vector3(), _ref = new THREE.Vector3();
+/**
+ * 点 p を、光の向き dir から見た平面の上で texel の格子にそろえる（光の向きの成分はそのまま）。
+ * 影の地図は光から見た正射影なので、こうすると注目点が動いても影の地図の画素の並びが変わらず、縁がちらつかない
+ */
+export function snapToShadowTexel(p: THREE.Vector3, dir: THREE.Vector3, texel: number, out = new THREE.Vector3()): THREE.Vector3 {
+  out.copy(p);
+  if (!(texel > 0)) return out;
+  _ref.set(0, 1, 0);
+  if (Math.abs(dir.y) > 0.99) _ref.set(0, 0, 1);
+  _right.crossVectors(dir, _ref).normalize();
+  _up.crossVectors(_right, dir).normalize();
+  const rx = p.dot(_right), uy = p.dot(_up);
+  out.addScaledVector(_right, Math.round(rx / texel) * texel - rx).addScaledVector(_up, Math.round(uy / texel) * texel - uy);
+  return out;
 }

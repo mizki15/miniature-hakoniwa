@@ -1,3 +1,4 @@
+import { DEFAULTS } from '../defaults';
 import { hash2, makeNoise2D } from './noise';
 import { DIRT, GRASS, MUD, SAND, STONE, WATER, isWalkableTop } from './blocks';
 import { DEFAULT_LAND_COUNTS, landWeight, plotLands } from './landPlan';
@@ -97,15 +98,8 @@ export function islandDist(mask: number, x: number, z: number): number {
 }
 
 /** 地形のパラメータの初期値（「標準に戻す」もこの値） */
-export const DEFAULT_PARAMS: TerrainParams = {
-  // v0.16.2 で今の値に（それまで：起伏 0.4・山 0.8・水 1・岩場 0.8・森 0.5・花 1.6・湖 1・崖 1・湿地の広さ 1・水たまり 1・砂浜の広さ 1・縁の削れ方 1・縁の細かさ 1・バイオームの大きさ 1）
-  relief: 0.2, mountains: 0.2, water: 0.4, rocks: 0.4, forest: 0.9, flowers: 1.4,
-  lakes: 0.4, river: 1, bare: 1, shoreSand: 1, conifer: 1,
-  rockPlots: DEFAULT_LAND_COUNTS.rock, wetPlots: DEFAULT_LAND_COUNTS.wetland, beachPlots: DEFAULT_LAND_COUNTS.beach,
-  cliffs: 0.2, wetland: 0.8, pools: 0.7, beachWidth: 0.7,
-  islandEdge: 0.5, islandDetail: 2.6, islandDepth: 1, biomeSize: 0.7,
-  land: LAND_VERSION,
-};
+/** 新しく作る箱庭の地形の初期値。値は src/defaults.ts（GitHub で直接編集できるようにまとめた。v0.18.1） */
+export const DEFAULT_PARAMS: TerrainParams = { ...DEFAULTS.terrain, land: LAND_VERSION };
 
 /** パラメータから区画の土地の型の数（無ければ標準） */
 export const landCountsOf = (P: TerrainParams) => ({
