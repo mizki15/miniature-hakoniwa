@@ -90,6 +90,9 @@ const water: ToolDef<'water'> = {
   id: 'water', name: '水やり', icon: '💧', help: '畑に水をやる（6 時間、倍の速さで育つ）', group: 'life',
   check(ctx, a) {
     if (!isFarm(a.block) || !a.isTop) return no('畑に水をやれます');
+    // 収穫できるようになった作物には、もう水をやらない（v0.20.2。見るモードのクリックで収穫と水やりをまとめたので）
+    const c = ctx.farm.crops.get(a.col);
+    if (c && c.progress >= 1) return no('収穫できます');
     return ok(ctx.farm.isWateredNow(a.col) ? 'もう湿っています（延長）' : '水をやる');
   },
   apply(ctx, a) {

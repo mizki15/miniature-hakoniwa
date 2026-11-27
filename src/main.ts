@@ -987,21 +987,52 @@ async function main() {
     }
     if (!downAt || !world || e.button !== 0 || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
     setMouse(e.clientX, e.clientY);
-    // 住人をクリック：収穫物をおすそ分けする（v0.16.1。好きなものがあればそれ）
-    const t = targetAtMouse();
-    if (t?.kind === 'animal' && !viewOnly) {
-      const crop = eco.share(t.animal, game.farm.inventory, game.farm.simMs);
-      if (!crop) { toast('おすそ分けできる収穫物がありません（作物を収穫すると持ち物に入る）'); return; }
-      game.unsaved = true; playerChanged();
-      const liked = CROPS[crop as CropKind].name === t.animal.favorite;
-      toast(`${t.animal.name}に${CROPS[crop as CropKind].name}をおすそ分けした${liked ? '（大好物！）' : ''}。しばらく素材を多く拾ってくる`);
-      return;
+    // 見るモードのクリック（v0.20.2）：住人を撫でる、作物に水をやる・収穫する
+    if (mode === 'view' && !viewOnly) {
+      const t = targetAtMouse();
+      if (t?.kind === 'animal') { t.animal.pet(); return; }
+      const r = game.viewUse(pickAtMouse(), 'click');
+      if (r) { toast(r); if (bagIsOpen()) renderBagNow(); return; }
     }
     // 見る・ステータス：水面をクリックすると波紋
     raycaster.setFromCamera(mouse, camera);
     const hit = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -(world.waterLevel - 0.15)), new THREE.Vector3());
     if (hit && isWaterAt(hit.x, hit.z)) addRipple(hit.x, hit.z, 1);
   });
+
+  // 見るモードのダブルクリック（v0.20.2）：住人に餌（収穫物）をあげる、耕す・花を摘む・葦を刈る・木を切る
+  renderer.domElement.addEventListener('dblclick', (e) => {
+    if (mode !== 'view' || viewOnly || !world || e.button !== 0) return;
+    setMouse(e.clientX, e.clientY);
+    const t = targetAtMouse();
+    if (t?.kind === 'animal') {
+      // 餌：収穫物を 1 つ（好きなものがあればそれ）。おすそ分けと同じく、しばらく素材を多く拾ってくる
+      const crop = eco.share(t.animal, game.farm.inventory, game.farm.simMs);
+      if (!crop) { toast('あげられる収穫物がありません（作物を収穫すると持ち物に入る）'); return; }
+      t.animal.pet();
+      game.unsaved = true; playerChanged();
+      const liked = CROPS[crop as CropKind].name === t.animal.favorite;
+      toast(`${t.animal.name}に${CROPS[crop as CropKind].name}をあげた${liked ? '（大好物！）' : ''}。しばらく素材を多く拾ってくる`);
+      return;
+    }
+    const r = game.viewUse(pickAtMouse(), 'dbl');
+    if (r) { toast(r); if (bagIsOpen()) renderBagNow(); }
+  });
+
+  /**
+   * 見るモードで、カーソルの先にできる操作（v0.20.2）。カーソルの近くに出す。
+   * 住人：クリックで撫でる・ダブルクリックで餌。地面・作物・木・花：使える道具（controller.viewAction）
+   */
+  const actionsOf = (t: Target | null): { click: string | null; dbl: string | null; hit: ReturnType<typeof pickAtMouse> } | null => {
+    if (viewOnly || !world) return null;
+    if (t?.kind === 'animal') return { click: '撫でる', dbl: '餌（収穫物）をあげる', hit: null };
+    if (t && t.kind !== 'crop') return null;
+    const hit = pickAtMouse();
+    const c = game.viewAction(hit, 'click'), d = game.viewAction(hit, 'dbl');
+    return c || d ? { click: c?.msg ?? null, dbl: d?.msg ?? null, hit } : null;
+  };
+  const actionsHtml = (a: NonNullable<ReturnType<typeof actionsOf>>) =>
+    `<div class="tt-actions">${a.click ? `<div><kbd>クリック</kbd>${esc(a.click)}</div>` : ''}${a.dbl ? `<div><kbd>ダブルクリック</kbd>${esc(a.dbl)}</div>` : ''}</div>`;
 
   // 見るモード：作物・動物にホバーすると情報を小さく出す。右クリックで固定（他の所を触るまで）
   type Target = { kind: 'animal'; animal: Animal } | { kind: 'crop'; col: number } | { kind: 'visitor'; visitor: Visitor } | { kind: 'firefly'; pos: THREE.Vector3 } | { kind: 'site'; key: string };
@@ -1063,7 +1094,7 @@ async function main() {
       return `<div class="tt-title">${info.icon} ${a.name}</div><div class="tt-sub">${info.name}</div>` +
         `<div class="tt-line">いま：${ACTIVITY_NAMES[a.activity]}</div><div class="tt-line">好きなもの：${a.favorite}</div><div class="tt-line">仕事：${JOB_TEXT[a.species]}</div>` +
         (a.treatedUntil > game.farm.simMs ? `<div class="tt-line">🧺 おすそ分けをもらってうれしそう（あと約 ${Math.ceil((a.treatedUntil - game.farm.simMs) / 3600_000)} 時間）</div>` : '') +
-        (viewOnly ? '' : '<div class="tt-line tt-muted">クリック：収穫物をおすそ分け</div>') + ringHtml(t);
+        ringHtml(t);
     }
     if (t.kind === 'visitor' || t.kind === 'firefly') {
       // 去った訪問者・消えたホタルは対象から外す
@@ -1134,13 +1165,23 @@ async function main() {
     if (pinned && !targetHtml(pinned)) pinned = null;
     const t = pinned ?? (mouseInside ? targetAtMouse() : null);
     hoverTarget = t;
-    const html = t ? targetHtml(t) : null;
-    if (!t || !html) { tooltipEl.style.display = 'none'; game.cursor.visible = false; return; }
+    const info = t ? targetHtml(t) : null;
+    // できる操作（固定中は出さない）。地面・木・花など、情報の無い所でも出す
+    const acts = !pinned && mouseInside ? actionsOf(info ? t : null) : null;
+    const html = (info ?? '') + (acts ? actionsHtml(acts) : '');
+    if (!html) { tooltipEl.style.display = 'none'; game.cursor.visible = false; return; }
     tooltipEl.innerHTML = (pinned ? '<span class="pin">📌 固定中</span>' : '') + html;
+    tooltipEl.classList.toggle('only-actions', !info);
     tooltipEl.classList.toggle('pinned', !!pinned);
     tooltipEl.style.display = 'block';
-    // 作物のマスは水色の枠で示す
-    if (t.kind === 'crop') {
+    // 作物のマス・操作できるマスは水色の枠で示す
+    const actHit = !info && acts?.hit ? acts.hit : null;
+    if (actHit) {
+      game.cursor.visible = true;
+      game.cursor.position.copy(game.colTop(actHit.x + actHit.z * world.size)).add(tmpV.set(0, -0.5, 0));
+      game.cursor.scale.set(1, 1, 1);
+      (game.cursor.material as THREE.LineBasicMaterial).color.copy(statusCursorColor);
+    } else if (t?.kind === 'crop') {
       game.cursor.visible = true;
       game.cursor.position.copy(game.colTop(t.col)).add(tmpV.set(0, -0.5, 0));
       game.cursor.scale.set(1, 1, 1); // 「建物を置く」で建物の大きさにした枠を、1 マスに戻す

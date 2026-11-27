@@ -80,6 +80,8 @@ export function mergeModel(g: THREE.Group): THREE.Group {
 }
 
 export type Activity = 'walk' | 'rest' | 'sleep' | 'warm';
+/** 撫でられた動きの長さ（秒。潰れて戻るを 2 回） */
+const PET_SECONDS = 0.7;
 export const ACTIVITY_NAMES: Record<Activity, string> = { walk: '散歩中', rest: 'ひと休み', sleep: '眠っている', warm: '家で暖まっている' };
 
 /** 種ごとの歩き方 */
@@ -104,6 +106,8 @@ export class Animal {
    * まっすぐ行けなければ寄り道し、何度も行けなければその場へ移る
    */
   warmSpot: { x: number; z: number; face: number } | null = null;
+  /** 撫でられた動き（v0.20.2）：残り時間（秒）。0 なら撫でられていない */
+  private petT = 0;
   private warmTries = 0;
   private model: THREE.Group;
   private pos = new THREE.Vector2();
@@ -142,6 +146,14 @@ export class Animal {
   get info() { return SPECIES[this.species]; }
   /** いる列（保存用。枠の座標） */
   get colXZ(): [number, number] { return [Math.floor(this.pos.x), Math.floor(this.pos.y)]; }
+
+  /** 撫でる（v0.20.2）：ちょっと潰れて戻る、を 2 回。その間は立ち止まる */
+  pet() {
+    this.petT = PET_SECONDS;
+    this.target = null;
+    this.vel = 0;
+    this.idle = Math.max(this.idle, PET_SECONDS + 0.4);
+  }
 
   /** 別の列へ移す（建物が足元に置かれた時など）。向かっていた先は考え直す */
   moveTo(x: number, z: number) {
@@ -306,8 +318,16 @@ export class Animal {
     const pose = gaitPose(gait, this.phase, hopH, Math.min(1, this.vel / speed));
     // 眠っている時は少し縮こまり、ゆっくり息をする
     const breathe = asleep ? 0.85 + Math.sin(this.t * 1.6) * 0.025 : this.activity === 'warm' ? 0.92 + Math.sin(this.t * 2.2) * 0.02 : 1;
-    this.model.position.y = pose.lift;
-    this.model.scale.set(1 + (1 - pose.squash) * 0.5, breathe * pose.squash, 1);
+    // 撫でられた：0.35 秒ずつ 2 回、縦に潰れて横にふくらみ、少し跳ねて戻る
+    let pet = 1;
+    if (this.petT > 0) {
+      this.petT = Math.max(0, this.petT - dt);
+      const u = (PET_SECONDS - this.petT) / (PET_SECONDS / 2); // 0..2
+      const k = Math.sin(Math.PI * (u % 1)); // 1 回ごとに 0 → 1 → 0
+      pet = 1 - 0.28 * k * (u < 1 ? 1 : 0.75);
+    }
+    this.model.position.y = pose.lift + (pet < 1 ? (1 - pet) * 0.06 : 0);
+    this.model.scale.set((1 + (1 - pose.squash) * 0.5) * (1 + (1 - pet) * 0.55), breathe * pose.squash * pet, 1 + (1 - pet) * 0.55);
     this.model.rotation.set(pose.pitch + this.sniff - slope * 0.25, asleep ? 0 : this.look, pose.roll);
     this.object.rotation.y = this.heading;
     this.sync();

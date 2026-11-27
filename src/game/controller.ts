@@ -1120,8 +1120,8 @@ export class GameController {
       }
       case 'pick': {
         if (!isTop) return res(false, '地面の上を選んでください');
-        if (this.hasFlower(col)) return res(true, '花を摘む（花 +1）');
-        if (this.hasReed(col)) return res(true, '葦を刈る（葦 +1）');
+        if (this.hasFlower(col)) return res(true, '花を摘む（繊維 +1）');
+        if (this.hasReed(col)) return res(true, '葦を刈る（繊維 +1）');
         if (t === MUD && isReedSpot(col)) return res(false, '葦は刈ったばかりです（数日で生え戻る）');
         return res(false, '花か葦を選んでください');
       }
@@ -1635,6 +1635,33 @@ export class GameController {
     let g = this.cropGeoCache.get(key);
     if (!g) { g = buildCropGeometry(kind, stage); this.cropGeoCache.set(key, g); }
     return g;
+  }
+
+  /**
+   * 見るモードの操作（v0.20.2）：クリックで水やり・収穫、ダブルクリックで木を切る・摘む・刈る・耕す。
+   * 指した所に使える道具を、この順に確かめて最初の 1 つ（使えなければ無し）。msg はカーソルの近くに出す文
+   */
+  static readonly VIEW_CLICK: Tool[] = ['harvest', 'water'];
+  static readonly VIEW_DBL: Tool[] = ['fell', 'pick', 'till'];
+  viewAction(hit: VoxelHit | null, which: 'click' | 'dbl'): { tool: Tool; msg: string } | null {
+    if (!hit || !this.world || this.locked) return null;
+    const prev = this.tool;
+    try {
+      for (const t of which === 'click' ? GameController.VIEW_CLICK : GameController.VIEW_DBL) {
+        this.tool = t;
+        const c = this.check(hit);
+        if (c?.ok) return { tool: t, msg: c.msg };
+      }
+      return null;
+    } finally { this.tool = prev; }
+  }
+  /** 見るモードの操作をする。結果の文（できなければ null） */
+  viewUse(hit: VoxelHit | null, which: 'click' | 'dbl'): string | null {
+    const a = this.viewAction(hit, which);
+    if (!a) return null;
+    const prev = this.tool;
+    this.tool = a.tool;
+    try { return this.use(hit); } finally { this.tool = prev; }
   }
 
   /** 道具のレジストリ（game/tools.ts）に渡す、箱庭の操作 */

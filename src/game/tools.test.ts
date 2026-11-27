@@ -62,3 +62,14 @@ describe('tool registry (v0.18)', () => {
     expect(harvest.check(ctx, at(WET_FARMLAND)).msg).toBe('作物がありません');
   });
 });
+
+describe('watering stops when the crop is ripe (v0.20.2)', () => {
+  it('a ripe crop can be harvested but not watered', () => {
+    const { ctx } = fakeCtx();
+    ctx.farm.plant(5, 'carrot');
+    expect(toolDef('water')!.check(ctx, at(FARMLAND)).ok).toBe(true);
+    ctx.farm.crops.get(5)!.progress = 1;
+    expect(toolDef('water')!.check(ctx, at(FARMLAND))).toEqual({ ok: false, msg: '収穫できます' });
+    expect(toolDef('harvest')!.check(ctx, at(FARMLAND)).ok).toBe(true);
+  });
+});
