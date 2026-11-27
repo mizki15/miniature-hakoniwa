@@ -2,7 +2,8 @@
  * 画面下の選択バー（v0.20.1）：カテゴリ（植栽。v0.20.3 からブロック配置・道作りも）を選ぶと、画面の下に横一列で並ぶ。
  * アイコンは物のプレビュー（ui/thumb.ts）。いま選んでいるものに印。名前はアイコンの下に小さく、説明はヒントの欄に出す
  */
-export interface PickItem { id: string; name: string; img: string; help?: string; disabled?: boolean }
+/** section：区切りの見出し（v0.20.5。植栽の「農作物・木・花」など。前の項目と違う時に見出しを入れる） */
+export interface PickItem { id: string; name: string; img: string; help?: string; disabled?: boolean; section?: string }
 
 export class PickBar {
   private items: PickItem[] = [];
@@ -14,7 +15,11 @@ export class PickBar {
     this.items = items;
     this.current = current;
     this.el.hidden = items.length === 0;
-    this.el.replaceChildren(...items.map((it) => {
+    let sec: string | undefined;
+    this.el.replaceChildren(...items.flatMap((it) => {
+      const out: HTMLElement[] = [];
+      if (it.section && it.section !== sec) out.push(Object.assign(document.createElement('span'), { className: 'pick-sec', textContent: it.section }));
+      sec = it.section;
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'pick-item' + (it.id === current ? ' on' : '');
@@ -26,7 +31,8 @@ export class PickBar {
       b.addEventListener('click', () => this.onPick(it.id));
       b.addEventListener('pointerenter', () => this.onHover?.(it));
       b.addEventListener('pointerleave', () => this.onHover?.(null));
-      return b;
+      out.push(b);
+      return out;
     }));
   }
   hide() { this.show([], ''); }

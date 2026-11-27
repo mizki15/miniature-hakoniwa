@@ -36,7 +36,7 @@ import type { InitResult, PlotResult, RemeshResult } from './world/worker';
 import { FRAME, OPEN_PLOT_POINTS, PLOT, PLOTS_PER_SIDE, PLOT_COUNT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect } from './world/plots';
 import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
-import { FLOWER_KINDS, GameController, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
+import { CURSOR_PAD, FLOWER_KINDS, GameController, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
 import { HoverTip } from './ui/hoverTip';
 import { myBlockThumb } from './ui/myBlockThumb';
 import { PATTERN_NAME, buildMyBlockPrompt, parseMyBlock, type MyBlockLook } from './world/myBlocks';
@@ -497,15 +497,18 @@ async function main() {
   const SEASON_SHORT = ['春', '夏', '秋', '冬'];
   const CATS: Category[] = [
     {
-      opt: { id: 'cat:planting', icon: '🌱', name: '植栽', help: '作物の種をまく・苗木を植える。選ぶと画面の下に、植えるもの（作物 10 種類と苗木 2 種類）が並ぶ' },
-      group: 'g:life', match: (id) => id.startsWith('seed:') || id.startsWith('sapling:'), def: 'seed:turnip',
+      opt: { id: 'cat:planting', icon: '🌱', name: '植栽', help: '作物の種をまく・苗木を植える・花を植える。選ぶと画面の下に、植えるもの（農作物 10・木 2・花 3）が並ぶ' },
+      group: 'g:life', match: (id) => id.startsWith('seed:') || id.startsWith('sapling:') || id.startsWith('flower:'), def: 'seed:turnip',
       items: () => [
         ...CROP_KINDS.map((k) => ({
+          section: '農作物',
           id: `seed:${k}`, name: CROPS[k].name, img: thumbOf(`crop:${k}`, () => buildCropGeometry(k, 3)),
           help: `${CROPS[k].name}の種をまく（畑に）。育つまで約 ${CROPS[k].hours} 時間・旬は ${CROPS[k].seasons.map((x) => SEASON_SHORT[x]).join('・')}`,
         })),
-        { id: 'sapling:broad', name: '広葉樹', img: thumbOf('sapling:broad', () => buildSaplingGeometry('broad')), help: '広葉樹の苗木を植える（草地か土に）。約 1 日で丸い葉の木になる' },
-        { id: 'sapling:conifer', name: '針葉樹', img: thumbOf('sapling:conifer', () => buildSaplingGeometry('conifer')), help: '針葉樹の苗木を植える（草地か土に）。約 1 日でとがった葉の木になる' },
+        { section: '木', id: 'sapling:broad', name: '広葉樹', img: thumbOf('sapling:broad', () => buildSaplingGeometry('broad')), help: '広葉樹の苗木を植える（草地か土に）。約 1 日で丸い葉の木になる' },
+        { section: '木', id: 'sapling:conifer', name: '針葉樹', img: thumbOf('sapling:conifer', () => buildSaplingGeometry('conifer')), help: '針葉樹の苗木を植える（草地か土に）。約 1 日でとがった葉の木になる' },
+        // 花（v0.20.5 で Life から移した）
+        ...FLOWER_KINDS.map((f) => ({ section: '花', id: `flower:${f.variant}`, name: f.name, img: thumbOf(`flower:${f.variant}`, () => buildLowPolyFlower(f.variant)), help: `${f.name}を植える（草地に）。花は虫や鳥を呼ぶ` })),
       ],
     },
     {
@@ -546,11 +549,9 @@ async function main() {
       { id: 'unbuild', icon: '🧹', name: '片付ける', help: help('unbuild') },
     ] },
     { id: 'g:life', name: 'Life', options: () => [
-      // 耕す・植栽（作物と苗木。画面下で選ぶ。v0.20.1）・水やり・収穫（game/tools.ts）
-      ...registryOptions('life').filter((o) => !o.id.startsWith('seed:')).flatMap((o) => (o.id === 'till' ? [o, catOpt('cat:planting')] : [o])),
-      ...FLOWER_KINDS.map((f) => ({ id: `flower:${f.variant}`, icon: f.icon, name: f.name, help: help('flower') })),
-      { id: 'pick', icon: '✂', name: '摘む・刈る', help: help('pick') },
-      { id: 'fell', icon: '🪓', name: '木を切る', help: help('fell') },
+      // v0.20.5：耕すと植栽（農作物・木・花。画面下で選ぶ）だけ。水やり・収穫・摘む・刈る・木を切るは、見るモードのクリック・ダブルクリックで
+      ...registryOptions('life').filter((o) => o.id === 'till'),
+      catOpt('cat:planting'),
     ] },
     // 造成（掘る・ならす）・ブロック配置・道作り（v0.20.3。中身は画面下の選択バーで選ぶ）
     { id: 'g:terrain', name: 'Terrain', options: () => [catOpt('cat:shape'), catOpt('cat:blocks'), catOpt('cat:paths')] },
@@ -905,6 +906,7 @@ async function main() {
     if (m === 'edit') selectTool(editTool);
     hoverTip.hide();
     game.cursor.visible = false;
+    game.showObjCursor(null);
     tooltipEl.style.display = 'none';
     pinned = null;
     ghosts.group.visible = m === 'edit';
@@ -925,6 +927,7 @@ async function main() {
       hoverTip.hide();
       tooltipEl.style.display = 'none';
       game.cursor.visible = false;
+      game.showObjCursor(null);
       showSaveStatus();
     }
   };
@@ -1079,7 +1082,7 @@ async function main() {
     if (stroke) strokeAt(e.clientX, e.clientY);
     setMouse(e.clientX, e.clientY);
   });
-  renderer.domElement.addEventListener('pointerleave', () => { mouseInside = false; game.cursor.visible = false; tooltipEl.style.display = 'none'; });
+  renderer.domElement.addEventListener('pointerleave', () => { mouseInside = false; hideCursors(); tooltipEl.style.display = 'none'; });
   renderer.domElement.addEventListener('pointerup', (e) => {
     if (stroke) {
       // 複数マスに使った時はまとめて知らせる
@@ -1094,7 +1097,12 @@ async function main() {
     // 見るモードのクリック（v0.20.2）：住人を撫でる、作物に水をやる・収穫する
     if (mode === 'view' && !viewOnly) {
       const t = targetAtMouse();
-      if (t?.kind === 'animal') { t.animal.pet(); return; }
+      if (t?.kind === 'animal') {
+        const a = t.animal;
+        clearTimeout(petTimer);
+        petTimer = window.setTimeout(() => a.pet(), PET_WAIT_MS);
+        return;
+      }
       const r = game.viewUse(pickAtMouse(), 'click');
       if (r) { toast(r); if (bagIsOpen()) renderBagNow(); return; }
     }
@@ -1104,10 +1112,14 @@ async function main() {
     if (hit && isWaterAt(hit.x, hit.z)) addRipple(hit.x, hit.z, 1);
   });
 
+  /** クリックで撫でるのは、ダブルクリックでないと分かってから（v0.20.5：ダブルクリックで 4 回撫でていた） */
+  const PET_WAIT_MS = 260;
+  let petTimer = 0;
   // 見るモードのダブルクリック（v0.20.2）：住人に餌（収穫物）をあげる、耕す・花を摘む・葦を刈る・木を切る
   renderer.domElement.addEventListener('dblclick', (e) => {
     if (mode !== 'view' || viewOnly || !world || e.button !== 0) return;
     setMouse(e.clientX, e.clientY);
+    clearTimeout(petTimer); // ダブルクリック：前のクリックで撫でるのは取りやめる（v0.20.5）
     const t = targetAtMouse();
     if (t?.kind === 'animal') {
       // 餌：収穫物を 1 つ（好きなものがあればそれ）。おすそ分けと同じく、しばらく素材を多く拾ってくる
@@ -1127,14 +1139,19 @@ async function main() {
    * 見るモードで、カーソルの先にできる操作（v0.20.2）。カーソルの近くに出す。
    * 住人：クリックで撫でる・ダブルクリックで餌。地面・作物・木・花：使える道具（controller.viewAction）
    */
-  const actionsOf = (t: Target | null): { click: string | null; dbl: string | null; hit: ReturnType<typeof pickAtMouse> } | null => {
+  type ActBox = ReturnType<typeof game.actionBox>;
+  const actionsOf = (t: Target | null): { click: string | null; dbl: string | null; hit: ReturnType<typeof pickAtMouse>; box: ActBox } | null => {
     if (viewOnly || !world) return null;
-    if (t?.kind === 'animal') return { click: '撫でる', dbl: '餌（収穫物）をあげる', hit: null };
+    if (t?.kind === 'animal') return { click: '撫でる', dbl: '餌（収穫物）をあげる', hit: null, box: null };
     if (t && t.kind !== 'crop') return null;
     const hit = pickAtMouse();
     const c = game.viewAction(hit, 'click'), d = game.viewAction(hit, 'dbl');
-    return c || d ? { click: c?.msg ?? null, dbl: d?.msg ?? null, hit } : null;
+    // 指している物（木・作物・花・葦）を黄色い箱で囲む（v0.20.5）。物が無ければ（作物の無い畑など）ブロックの枠
+    const a = c ?? d;
+    return c || d ? { click: c?.msg ?? null, dbl: d?.msg ?? null, hit, box: a ? game.actionBox(a) : null } : null;
   };
+  /** 枠をしまう（ブロックの枠と、物を囲む枠） */
+  const hideCursors = () => { game.cursor.visible = false; game.showObjCursor(null); };
   const actionsHtml = (a: NonNullable<ReturnType<typeof actionsOf>>) =>
     `<div class="tt-actions">${a.click ? `<div><kbd>クリック</kbd>${esc(a.click)}</div>` : ''}${a.dbl ? `<div><kbd>ダブルクリック</kbd>${esc(a.dbl)}</div>` : ''}</div>`;
 
@@ -1273,22 +1290,19 @@ async function main() {
     // できる操作（固定中は出さない）。地面・木・花など、情報の無い所でも出す
     const acts = !pinned && mouseInside ? actionsOf(info ? t : null) : null;
     const html = (info ?? '') + (acts ? actionsHtml(acts) : '');
-    if (!html) { tooltipEl.style.display = 'none'; game.cursor.visible = false; return; }
+    if (!html) { tooltipEl.style.display = 'none'; hideCursors(); return; }
     tooltipEl.innerHTML = (pinned ? '<span class="pin">📌 固定中</span>' : '') + html;
     tooltipEl.classList.toggle('only-actions', !info);
     tooltipEl.classList.toggle('pinned', !!pinned);
     tooltipEl.style.display = 'block';
-    // 作物のマス・操作できるマスは水色の枠で示す
-    const actHit = !info && acts?.hit ? acts.hit : null;
+    // 木・作物・花・葦は、その物を黄色い箱で囲む（v0.20.5）。囲む物の無い操作（作物の無い畑の水やり）は、そのブロックの枠
+    const box = acts?.box ?? (t?.kind === 'crop' ? game.actionBox({ tool: 'harvest', col: t.col }) : null);
+    game.showObjCursor(box);
+    const actHit = !box && acts?.hit ? acts.hit : null;
     if (actHit) {
       game.cursor.visible = true;
-      game.cursor.position.copy(game.colTop(actHit.x + actHit.z * world.size)).add(tmpV.set(0, -0.5, 0));
-      game.cursor.scale.set(1, 1, 1);
-      (game.cursor.material as THREE.LineBasicMaterial).color.copy(statusCursorColor);
-    } else if (t?.kind === 'crop') {
-      game.cursor.visible = true;
-      game.cursor.position.copy(game.colTop(t.col)).add(tmpV.set(0, -0.5, 0));
-      game.cursor.scale.set(1, 1, 1); // 「建物を置く」で建物の大きさにした枠を、1 マスに戻す
+      game.cursor.position.set(actHit.x + 0.5 - world.size / 2, actHit.y + 0.5, actHit.z + 0.5 - world.size / 2);
+      game.cursor.scale.setScalar(CURSOR_PAD);
       (game.cursor.material as THREE.LineBasicMaterial).color.copy(statusCursorColor);
     } else game.cursor.visible = false;
     // 位置：固定中は対象の横（動物は動くのでついていく）、ホバー中はマウスの横

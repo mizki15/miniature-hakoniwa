@@ -141,6 +141,8 @@ export interface ControllerDeps {
 }
 
 const isFarm = (t: number) => t === FARMLAND || t === WET_FARMLAND;
+/** ブロックの枠を、ブロックより少しだけ大きくする倍率（面と線が重なってちらつかないように） */
+export const CURSOR_PAD = 1.012;
 const HOUR = 3600 * 1000;
 /** 区画を開いた時に、どれだけ下からせり上がるか（ボクセル）と、かかる秒数 */
 const RISE_DEPTH = 6;
@@ -238,6 +240,8 @@ export class GameController {
   /** 開いたばかりの区画のせり上がり（t: 0→1） */
   private rising: { objs: THREE.Object3D[]; t: number; done?: () => void }[] = [];
   readonly cursor: THREE.LineSegments;
+  /** 木・作物・花・葦を囲む黄色い枠（v0.20.5） */
+  readonly objCursor: THREE.LineSegments;
   /** 「建物を置く」の時の、少し透かした建物の見本。置ける時は元の色、置けない時は赤みを帯びる */
   readonly ghost: THREE.Mesh;
   private ghostMat = new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false, roughness: 0.85, metalness: 0 });
@@ -246,9 +250,15 @@ export class GameController {
 
   constructor(private deps: ControllerDeps) {
     const box = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.04, 1.04, 1.04));
-    this.cursor = new THREE.LineSegments(box, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false }));
+    // ブロックの枠（v0.20.5）：マインクラフトのように、実際に見えている辺だけを描く（奥行きで隠す）。
+    // 面とぴったり重なると線がちらつくので、ブロックより少しだけ大きい箱にする
+    this.cursor = new THREE.LineSegments(box, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, depthTest: true, depthWrite: false }));
     this.cursor.renderOrder = 10;
     this.cursor.visible = false;
+    // 木・作物・花・葦を指す枠（v0.20.5）：根元のブロックではなく、その物を黄色い箱で囲む
+    this.objCursor = new THREE.LineSegments(box, new THREE.LineBasicMaterial({ color: 0xffd84a, transparent: true, opacity: 0.95, depthTest: true, depthWrite: false }));
+    this.objCursor.renderOrder = 10;
+    this.objCursor.visible = false;
     this.ghost = new THREE.Mesh(new THREE.BufferGeometry(), this.ghostMat);
     this.ghost.renderOrder = 9;
     this.ghost.visible = false;
@@ -333,7 +343,7 @@ export class GameController {
     this.flowerShared = !!lowPolyFlowers;
     if (lowPolyFlowers) this.flowerGeos = lowPolyFlowers;
     for (const p of placements) { this.addTreeCols(p); this.addDecor(p); }
-    this.deps.diorama.add(this.cursor);
+    this.deps.diorama.add(this.cursor, this.objCursor);
     this.deps.diorama.add(this.ghost);
   }
 
@@ -1765,7 +1775,7 @@ export class GameController {
       this.cursor.scale.set(Math.max(c.box.size.x, 0.05), Math.max(c.box.size.y, 0.05), Math.max(c.box.size.z, 0.05));
     } else {
       this.cursor.position.set(c.x + 0.5 - half, c.y + 0.5, c.z + 0.5 - half);
-      this.cursor.scale.set(1, 1, 1);
+      this.cursor.scale.setScalar(CURSOR_PAD);
     }
     (this.cursor.material as THREE.LineBasicMaterial).color.set(c.ok || neutral ? 0xffffff : 0xff6a5a);
     return c.msg;
@@ -1785,19 +1795,59 @@ export class GameController {
    * 指した所に使える道具を、この順に確かめて最初の 1 つ（使えなければ無し）。msg はカーソルの近くに出す文
    */
   static readonly VIEW_CLICK: Tool[] = ['harvest', 'water'];
-  static readonly VIEW_DBL: Tool[] = ['fell', 'pick', 'till'];
-  viewAction(hit: VoxelHit | null, which: 'click' | 'dbl'): { tool: Tool; msg: string } | null {
+  /** v0.20.5：耕すはダブルクリックから外した（道具の「耕す」で） */
+  static readonly VIEW_DBL: Tool[] = ['fell', 'pick'];
+  viewAction(hit: VoxelHit | null, which: 'click' | 'dbl'): { tool: Tool; msg: string; col: number } | null {
     if (!hit || !this.world || this.locked) return null;
     const prev = this.tool;
     try {
       for (const t of which === 'click' ? GameController.VIEW_CLICK : GameController.VIEW_DBL) {
         this.tool = t;
         const c = this.check(hit);
-        if (c?.ok) return { tool: t, msg: c.msg };
+        if (c?.ok) return { tool: t, msg: c.msg, col: c.x + c.z * this.world.size };
       }
       return null;
     } finally { this.tool = prev; }
   }
+  /**
+   * 見るモードの操作の対象を囲む箱（v0.20.5）：収穫・水やりは作物、木を切るは木、摘む・刈るは花・葦。
+   * 作物の無い畑など、囲む物が無ければ null（ブロックの枠で示す）
+   */
+  actionBox(a: { tool: Tool; col: number }): { center: THREE.Vector3; size: THREE.Vector3 } | null {
+    const w = this.world;
+    if (!w) return null;
+    const N = w.size, half = N / 2;
+    const cx = (a.col % N) + 0.5 - half, cz = Math.floor(a.col / N) + 0.5 - half, ground = w.heights[a.col] + ((w.paths?.[a.col] ?? 0) > 0 ? 1 / 8 : 0);
+    const box = (wd: number, y0: number, y1: number) => ({ center: new THREE.Vector3(cx, (y0 + y1) / 2, cz), size: new THREE.Vector3(wd, Math.max(0.2, y1 - y0), wd) });
+    if (a.tool === 'harvest' || a.tool === 'water') {
+      const crop = this.farm.crops.get(a.col);
+      if (!crop) return null;
+      const g = this.cropGeo(crop.kind, Farm.stage(crop.progress));
+      if (!g.boundingBox) g.computeBoundingBox();
+      const b = g.boundingBox!;
+      // 株は列ごとに向きと大きさを少し変えて置くので、横は大きい方の幅、少しだけ余裕を持たせる
+      const r = Math.max(Math.abs(b.min.x), Math.abs(b.max.x), Math.abs(b.min.z), Math.abs(b.max.z)) * 1.08;
+      return box(Math.max(0.4, r * 2 + 0.1), ground, ground + b.max.y * 1.08 + 0.05);
+    }
+    if (a.tool === 'fell') {
+      const t = this.treeShape(a.col);
+      if (t) return box(t.radius * 2 + 0.2, t.ground, t.top + 0.1);
+      return box(1, ground, ground + 2);
+    }
+    if (a.tool === 'pick') {
+      if (this.hasFlower(a.col)) return box(0.7, ground, ground + 0.62);
+      if (this.hasReed(a.col)) return box(0.95, ground - 0.3, ground + 1.1);
+    }
+    return null;
+  }
+  /** 囲む枠を出す（null ならしまう） */
+  showObjCursor(b: { center: THREE.Vector3; size: THREE.Vector3 } | null) {
+    this.objCursor.visible = !!b;
+    if (!b) return;
+    this.objCursor.position.copy(b.center);
+    this.objCursor.scale.copy(b.size);
+  }
+
   /** 見るモードの操作をする。結果の文（できなければ null） */
   viewUse(hit: VoxelHit | null, which: 'click' | 'dbl'): string | null {
     const a = this.viewAction(hit, which);
