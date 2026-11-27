@@ -130,6 +130,19 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe6f5; fon
 .now-line dd { margin: 0; white-space: nowrap; }
 
 /* エディタ：指している所の判定（画面下中央。空なら出さない） */
+/* 画面下の選択バー（v0.20.1）：植えるものなどを横一列に。アイコンはプレビューの絵 */
+.pick-bar { position: absolute; left: 50%; bottom: calc(var(--gap) + 40px); transform: translateX(-50%); z-index: 4; display: flex; gap: 4px; padding: 6px; border-radius: 16px; max-width: calc(100vw - 2 * var(--gap)); overflow-x: auto; }
+.pick-bar[hidden] { display: none; }
+#layout:not(.mode-edit) .pick-bar { display: none; }
+.pick-item { flex: none; width: 64px; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px 2px 3px; border: 2px solid transparent; border-radius: 12px; background: rgba(255, 255, 255, 0.35); cursor: pointer; font: inherit; font-size: 10.5px; color: #1f2933; }
+.pick-item img { width: 46px; height: 46px; object-fit: contain; pointer-events: none; }
+.pick-item span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60px; }
+.pick-item:hover { background: rgba(255, 255, 255, 0.7); }
+.pick-item.on { border-color: #2f6fb0; background: rgba(255, 255, 255, 0.85); }
+.pick-item:disabled { opacity: 0.45; cursor: default; }
+body.night .pick-item { color: #eef2f5; background: rgba(255, 255, 255, 0.1); }
+body.night .pick-item.on { background: rgba(255, 255, 255, 0.25); border-color: #8cc4ff; }
+#layout.has-pickbar #toast { bottom: 150px; }
 .hint-bar { position: absolute; left: 50%; bottom: var(--gap); transform: translateX(-50%); z-index: 3; display: none; max-width: min(640px, 70vw); padding: 7px 16px; border-radius: 14px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 #layout.mode-edit .hint-bar:not(:empty) { display: block; }
 

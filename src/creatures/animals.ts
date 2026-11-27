@@ -45,7 +45,8 @@ export const SPECIES: Record<Species, SpeciesInfo> = {
 export const SPECIES_LIST = Object.keys(SPECIES) as Species[];
 
 export const NAMES = ['こむぎ', 'もち', 'あずき', 'きなこ', 'まめ', 'くるみ', 'ゆず', 'しらたま', 'ごま', 'おこげ', 'みかん', 'さくら', 'つくし', 'どんぐり', 'ひなた', 'ふき', 'よもぎ', 'あんず', 'ちゃい', 'ぽこ', 'てまり', 'わかば', 'つぶ', 'こはる'];
-const FAVORITES = ['カブ', '小麦', 'かぼちゃ', '花畑', '水辺', '日なたぼっこ', '雨上がり', '朝の散歩', '星空', '木かげ'];
+/** 好きなもの（作物の名前なら、おすそ分けで「大好物！」） */
+const FAVORITES = ['カブ', '小麦', 'かぼちゃ', 'にんじん', 'いちご', 'とうもろこし', 'トマト', '花畑', '水辺', '日なたぼっこ', '雨上がり', '朝の散歩', '星空', '木かげ'];
 
 /** 1 匹ぶんの部品をまとめた後の材質（色は頂点ごとに持つ。全部の動物で共有） */
 const mergedMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.85 });

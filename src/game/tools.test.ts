@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TOOL_DEFS, registryOptions, toolDef, type ToolAt, type ToolCtx } from './tools';
-import { Farm } from './farm';
+import { CROP_KINDS, Farm } from './farm';
 import { DIRT, FARMLAND, GRASS, STONE, WET_FARMLAND } from '../world/blocks';
 
 /** 道具を試すための、小さな箱庭の操作 */
@@ -26,7 +26,7 @@ const at = (block: number, o: Partial<ToolAt> = {}): ToolAt => ({ x: 1, y: 12, z
 describe('tool registry (v0.18)', () => {
   it('the four farm tools, in order, with seed split by crop', () => {
     expect(TOOL_DEFS.map((d) => d.id)).toEqual(['till', 'seed', 'water', 'harvest']);
-    expect(registryOptions('life').map((o) => o.id)).toEqual(['till', 'seed:turnip', 'seed:wheat', 'seed:pumpkin', 'water', 'harvest']);
+    expect(registryOptions('life').map((o) => o.id)).toEqual(['till', ...CROP_KINDS.map((k) => `seed:${k}`), 'water', 'harvest']);
     expect(registryOptions('terrain')).toEqual([]);
     expect(toolDef('dig')).toBeUndefined();
   });

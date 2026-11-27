@@ -8,7 +8,7 @@ import { canSetCol, floodAllowed } from './edgeRules';
 import { CROPS, Farm, type Crop, type CropKind, type FarmEnv, type Sapling } from './farm';
 import { UndoStack } from './undoStack';
 import { TOOL_DEFS, toolDef, type ToolAt, type ToolCtx } from './tools';
-import { buildCropGeometry, buildSaplingGeometry } from './cropModels';
+import { buildCropGeometry, buildSaplingGeometry, type SaplingKind } from './cropModels';
 import { raycastVoxels, type VoxelHit } from './picking';
 import { GRASS_VARIANTS, PEBBLE_VARIANTS, REED_VARIANTS, buildGrassTuft, buildPebble, buildReed, isReedSpot, placeGround } from '../creatures/groundDecor';
 import type { SaveData } from '../save/format';
@@ -209,7 +209,10 @@ export class GameController {
   private remeshId = 0;
   private cropMeshes: THREE.InstancedMesh[] = [];
   private cropGeoCache = new Map<string, THREE.BufferGeometry>();
-  private saplingGeo = buildSaplingGeometry();
+  private saplingGeo = buildSaplingGeometry('broad');
+  private saplingConiferGeo = buildSaplingGeometry('conifer');
+  /** 植栽で植える苗木の種類（v0.20.1：広葉樹・針葉樹を選ぶ） */
+  saplingKind: SaplingKind = 'broad';
   private growingMeshes: THREE.InstancedMesh[] = [];
   private irrigatedCache = new Map<number, boolean>();
   private wetCheck = 0;
@@ -1106,7 +1109,7 @@ export class GameController {
         for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
           if (this.treeCols.has(x + dx + (z + dz) * w.size)) return res(false, '近くに木があります');
         }
-        return res(true, '苗木を植える');
+        return res(true, `${this.saplingKind === 'conifer' ? '針葉樹' : '広葉樹'}の苗木を植える`);
       }
       case 'flower': {
         if (!topFace || !isTop) return res(false, '地面の上面を選んでください');
@@ -1228,12 +1231,13 @@ export class GameController {
       }
       case 'plant': {
         this.removeFlowersAt(x, z);
-        const variant = y + 1 > 19 ? 4 + Math.floor(Math.random() * 2) : Math.floor(Math.random() * 4);
+        // 広葉樹は 0〜3 番、針葉樹は 4・5 番の木の形に育つ（v0.20.1 から選べる）
+        const variant = this.saplingKind === 'conifer' ? 4 + Math.floor(Math.random() * 2) : Math.floor(Math.random() * 4);
         this.farm.plantSapling(col, variant, Math.floor(Math.random() * 4) * (Math.PI / 2));
         this.treeCols.add(col);
         w.walkable[col] = 0;
         this.markGrowing();
-        return '苗木を植えました';
+        return `${this.saplingKind === 'conifer' ? '針葉樹' : '広葉樹'}の苗木を植えました`;
       }
       case 'flower':
         this.addFlower(col, this.flowerVariant);
@@ -1681,6 +1685,7 @@ export class GameController {
   }
 
   private rebuildCrops() {
+    const tmpScale = new THREE.Vector3();
     const w = this.world!;
     const half = w.size / 2;
     for (const m of this.cropMeshes) { this.deps.diorama.remove(m); m.dispose(); }
@@ -1697,7 +1702,9 @@ export class GameController {
       const im = new THREE.InstancedMesh(this.cropGeo(g.kind, g.stage), this.deps.flowerMat, g.cols.length);
       g.cols.forEach((col, i) => {
         const x = col % w.size, z = Math.floor(col / w.size);
-        mtx.makeTranslation(x + 0.5 - half, w.heights[col], z + 0.5 - half);
+        // 株ごとに向き（90° 刻み＋少し）と大きさを少し変える（列から決まる。毎回同じ）
+        const hsh = ((col * 2654435761) >>> 0) / 4294967296;
+        mtx.makeRotationY(Math.floor(hsh * 4) * (Math.PI / 2) + (hsh * 7 % 1 - 0.5) * 0.5).scale(tmpScale.setScalar(0.92 + (hsh * 13 % 1) * 0.16)).setPosition(x + 0.5 - half, w.heights[col], z + 0.5 - half);
         im.setMatrixAt(i, mtx);
       });
       im.castShadow = true;
@@ -1719,8 +1726,9 @@ export class GameController {
       const pos = new THREE.Vector3(x + 0.5 - half, w.heights[s.col], z + 0.5 - half);
       q.setFromAxisAngle(up, s.rot);
       let geo: THREE.BufferGeometry, scale: number;
-      if (s.progress < 0.25) { geo = this.saplingGeo; scale = 1 + s.progress * 2.4; }
-      else { geo = this.treeGeos[s.variant] ?? this.saplingGeo; scale = 0.25 + 0.75 * ((s.progress - 0.25) / 0.75); }
+      const sapGeo = s.variant >= 4 ? this.saplingConiferGeo : this.saplingGeo;
+      if (s.progress < 0.25) { geo = sapGeo; scale = 0.8 + s.progress * 1.6; }
+      else { geo = this.treeGeos[s.variant] ?? sapGeo; scale = 0.25 + 0.75 * ((s.progress - 0.25) / 0.75); }
       const m = new THREE.Matrix4().compose(pos, q, new THREE.Vector3(scale, scale, scale));
       if (!byGeo.has(geo)) byGeo.set(geo, []);
       byGeo.get(geo)!.push(m);
@@ -1739,7 +1747,7 @@ export class GameController {
     for (const m of this.growingMeshes) { this.deps.diorama.remove(m); m.dispose(); }
     this.growingMeshes = [];
     for (const [geo, mats] of byGeo) {
-      const im = new THREE.InstancedMesh(geo, geo === this.saplingGeo ? this.deps.flowerMat : this.deps.detailMat, mats.length);
+      const im = new THREE.InstancedMesh(geo, geo === this.saplingGeo || geo === this.saplingConiferGeo ? this.deps.flowerMat : this.deps.detailMat, mats.length);
       mats.forEach((m, i) => im.setMatrixAt(i, m));
       im.castShadow = true;
       im.receiveShadow = true;

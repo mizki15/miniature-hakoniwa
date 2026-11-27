@@ -58,7 +58,7 @@ describe('choosing goals', () => {
   });
   it('crops only in their season; none in winter', () => {
     expect(goalCandidates(ctx(3)).some((c) => c.type === 'harvest')).toBe(false);
-    expect(goalCandidates(ctx(1)).filter((c) => c.type === 'harvest').map((c) => c.id).sort()).toEqual(['harvest:pumpkin', 'harvest:wheat']);
+    expect(goalCandidates(ctx(1)).filter((c) => c.type === 'harvest').map((c) => c.id).sort()).toEqual(['harvest:corn', 'harvest:eggplant', 'harvest:pumpkin', 'harvest:sunflower', 'harvest:tomato', 'harvest:wheat']);
   });
   it('winter likes the snow-day goal for the easy one', () => {
     let n = 0;

@@ -253,7 +253,8 @@ export function compatible(a: Needs, b: Needs): boolean {
   return true;
 }
 
-const HARVEST_N: Record<CropKind, number> = { turnip: 5, wheat: 10, pumpkin: 5 };
+/** 旬の作物を何個収穫するか（育つのが早いものほど多く） */
+const HARVEST_N: Record<CropKind, number> = { turnip: 5, carrot: 5, strawberry: 6, cabbage: 4, wheat: 10, tomato: 6, eggplant: 5, sunflower: 4, corn: 4, pumpkin: 3 };
 interface Cand extends Goal { w: number }
 
 /** 選ぶ時の材料 */

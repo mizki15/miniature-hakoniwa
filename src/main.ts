@@ -38,6 +38,9 @@ import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
 import { FLOWER_KINDS, GameController, PATH_KINDS, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
 import { HoverTip } from './ui/hoverTip';
+import { PickBar, type PickItem } from './ui/pickBar';
+import { thumbOf } from './ui/thumb';
+import { buildCropGeometry, buildSaplingGeometry } from './game/cropModels';
 import { applyDefaultsToUI } from './ui/defaultsUI';
 import { CROP_ICONS, registryOptions } from './game/tools';
 import { createHud } from './ui/hud';
@@ -480,6 +483,8 @@ async function main() {
   /** 道具の選択肢 1 つ。id：'till'・'seed:wheat'・'block:3'・'flower:1'・'path:15'・'build:<建物>' など */
   type ToolOption = { id: string; icon: string; name: string; help: string };
   const help = (t: Tool) => TOOLS.find((x) => x.id === t)!.help;
+  /** 植栽（v0.20.1）：左の一覧では 1 つ。選ぶと画面下に植えるものが並ぶ */
+  const PLANTING: ToolOption = { id: 'planting', icon: '🌱', name: '植栽', help: '作物の種をまく・苗木を植える。選ぶと画面の下に、植えるもの（作物 10 種類と苗木 2 種類）が並ぶ' };
   /** グループ（1〜3 キーもこの順） */
   const GROUPS: { id: string; name: string; options: () => ToolOption[] }[] = [
     { id: 'g:build', name: 'Build', options: () => [
@@ -487,8 +492,8 @@ async function main() {
       { id: 'unbuild', icon: '🧹', name: '片付ける', help: help('unbuild') },
     ] },
     { id: 'g:life', name: 'Life', options: () => [
-      ...registryOptions('life'), // 耕す・種（作物ごと）・水やり・収穫（game/tools.ts）
-      { id: 'plant', icon: '🌳', name: '苗木', help: help('plant') },
+      // 耕す・植栽（作物と苗木。画面下で選ぶ。v0.20.1）・水やり・収穫（game/tools.ts）
+      ...registryOptions('life').filter((o) => !o.id.startsWith('seed:')).flatMap((o) => (o.id === 'till' ? [o, PLANTING] : [o])),
       ...FLOWER_KINDS.map((f) => ({ id: `flower:${f.variant}`, icon: f.icon, name: f.name, help: help('flower') })),
       { id: 'pick', icon: '✂', name: '摘む・刈る', help: help('pick') },
       { id: 'fell', icon: '🪓', name: '木を切る', help: help('fell') },
@@ -504,6 +509,25 @@ async function main() {
   const groupOf = (id: string) => (id.startsWith('build:') ? GROUPS[0] : GROUPS.find((g) => g.options().some((o) => o.id === id)) ?? GROUPS[1]);
   /** グループごとに、最後に選んだ道具 */
   const lastByGroup = new Map<string, string>();
+  /** 植栽（v0.20.1）：作物の種と苗木を 1 つの道具にまとめ、何を植えるかは画面下の選択バーで選ぶ */
+  const isPlanting = (id: string) => id === 'planting' || id.startsWith('seed:') || id.startsWith('sapling:');
+  let lastPlant = 'seed:turnip';
+  const SEASON_SHORT = ['春', '夏', '秋', '冬'];
+  const plantItems = (): PickItem[] => [
+    ...CROP_KINDS.map((k) => ({
+      id: `seed:${k}`, name: CROPS[k].name, img: thumbOf(`crop:${k}`, () => buildCropGeometry(k, 3)),
+      help: `${CROPS[k].name}の種をまく（畑に）。育つまで約 ${CROPS[k].hours} 時間・旬は ${CROPS[k].seasons.map((x) => SEASON_SHORT[x]).join('・')}`,
+    })),
+    { id: 'sapling:broad', name: '広葉樹', img: thumbOf('sapling:broad', () => buildSaplingGeometry('broad')), help: '広葉樹の苗木を植える（草地か土に）。約 1 日で丸い葉の木になる' },
+    { id: 'sapling:conifer', name: '針葉樹', img: thumbOf('sapling:conifer', () => buildSaplingGeometry('conifer')), help: '針葉樹の苗木を植える（草地か土に）。約 1 日でとがった葉の木になる' },
+  ];
+  const pickBar = new PickBar($('pickBar'), (id) => pickTool(id), (it) => { if (it) hintEl.textContent = it.help ?? it.name; });
+  /** 画面下の選択バーを、いまの道具に合わせる（エディタで植栽を持っている時だけ出す） */
+  const syncPickBar = () => {
+    const on = mode === 'edit' && isPlanting(editPick);
+    if (on) pickBar.show(plantItems(), editPick); else pickBar.hide();
+    layoutEl.classList.toggle('has-pickbar', on);
+  };
   let editPick = 'till';
   /** 道具を持つ。グループの id（'g:life' など）なら、そのグループで最後に使った道具 */
   const pickTool = (id: string | null) => {
@@ -512,10 +536,12 @@ async function main() {
       const g = GROUPS.find((x) => x.id === id)!;
       const opts = g.options();
       const last = lastByGroup.get(id);
-      id = last && opts.some((o) => o.id === last) ? last : opts[0].id;
+      id = last && (opts.some((o) => o.id === last) || isPlanting(last)) ? last : opts[0].id;
     }
+    if (id === 'planting') id = lastPlant;
     let t: Tool;
-    if (id.startsWith('seed:')) { game.seed = id.slice(5) as CropKind; t = 'seed'; }
+    if (id.startsWith('seed:')) { game.seed = id.slice(5) as CropKind; t = 'seed'; lastPlant = id; }
+    else if (id.startsWith('sapling:')) { game.saplingKind = id.slice(8) === 'conifer' ? 'conifer' : 'broad'; t = 'plant'; lastPlant = id; }
     else if (id.startsWith('block:')) { game.block = parseInt(id.slice(6), 10); t = 'raise'; }
     else if (id.startsWith('flower:')) { game.flowerVariant = parseInt(id.slice(7), 10); t = 'flower'; }
     else if (id.startsWith('path:')) { game.pathBlock = parseInt(id.slice(5), 10); t = 'path'; }
@@ -542,13 +568,14 @@ async function main() {
       const ic = Object.assign(document.createElement('span'), { className: 'ic', textContent: o.icon });
       const nm = Object.assign(document.createElement('span'), { className: 'n', textContent: o.name }); // 建物の名前は読み込んだ物なので textContent で
       b.append(ic, nm);
-      b.classList.toggle('on', o.id === editPick);
+      b.classList.toggle('on', o.id === (isPlanting(editPick) ? 'planting' : editPick));
       b.addEventListener('click', () => pickTool(o.id));
       hoverTip.attach(b, () => o.help, 'right', false, $('editor'));
       return b;
     }));
     $('openBuildings').hidden = g.id !== 'g:build';
     hintEl.textContent = '';
+    syncPickBar();
   };
   const renderChip = renderEditor;
   document.querySelectorAll<HTMLButtonElement>('[data-group]').forEach((b) => b.addEventListener('click', () => pickTool(b.dataset.group!)));
@@ -779,6 +806,7 @@ async function main() {
     pinned = null;
     ghosts.group.visible = m === 'edit';
     ghosts.setHover(-1);
+    syncPickBar();
     if (m === 'view') refreshDex();
   };
 
@@ -963,7 +991,7 @@ async function main() {
     const t = targetAtMouse();
     if (t?.kind === 'animal' && !viewOnly) {
       const crop = eco.share(t.animal, game.farm.inventory, game.farm.simMs);
-      if (!crop) { toast('おすそ分けできる収穫物（カブ・小麦・かぼちゃ）がありません'); return; }
+      if (!crop) { toast('おすそ分けできる収穫物がありません（作物を収穫すると持ち物に入る）'); return; }
       game.unsaved = true; playerChanged();
       const liked = CROPS[crop as CropKind].name === t.animal.favorite;
       toast(`${t.animal.name}に${CROPS[crop as CropKind].name}をおすそ分けした${liked ? '（大好物！）' : ''}。しばらく素材を多く拾ってくる`);

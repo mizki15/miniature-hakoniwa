@@ -7,6 +7,7 @@
  * - おすそ分け：収穫物をあげると、その住人がしばらく（箱庭の 3 日）素材を多く拾ってくる
  * - 訪問者の贈り物：その箱庭にない素材を、来た訪問者がたまに少し運んでくる（運が悪くても詰まらないように）
  */
+import { CROPS, CROP_KINDS, type CropKind } from '../game/farm';
 import type { Species } from '../creatures/animals';
 import type { MatId } from '../game/materials';
 import type { BuildingCharacter } from '../build/character';
@@ -105,14 +106,15 @@ export const TREAT_PICKUP: Record<Species, Partial<Record<MatId, number>>> = {
 /** おすそ分けの効き目が続く時間（箱庭の時計で 3 日） */
 export const TREAT_MS = 3 * 24 * 3600_000;
 /** おすそ分けにあげられる収穫物 */
-export const SHARE_CROPS = ['turnip', 'wheat', 'pumpkin'] as const;
-const CROP_NAME: Record<string, string> = { カブ: 'turnip', 小麦: 'wheat', かぼちゃ: 'pumpkin' };
+/** おすそ分けにあげられる収穫物：作物すべて（v0.20.1 で 10 種類） */
+export const SHARE_CROPS = CROP_KINDS;
+const CROP_NAME: Record<string, CropKind> = Object.fromEntries(CROP_KINDS.map((k) => [CROPS[k].name, k]));
 
 /** あげる収穫物を選ぶ：好きなものが収穫物で手持ちにあればそれ、無ければいちばん多いもの。何も無ければ null */
-export function pickShareCrop(inv: Record<string, number>, favorite: string): (typeof SHARE_CROPS)[number] | null {
+export function pickShareCrop(inv: Record<string, number>, favorite: string): CropKind | null {
   const fav = CROP_NAME[favorite];
-  if (fav && (inv[fav] ?? 0) > 0) return fav as (typeof SHARE_CROPS)[number];
-  let best: (typeof SHARE_CROPS)[number] | null = null;
+  if (fav && (inv[fav] ?? 0) > 0) return fav;
+  let best: CropKind | null = null;
   for (const k of SHARE_CROPS) if ((inv[k] ?? 0) > 0 && (!best || (inv[k] ?? 0) > (inv[best] ?? 0))) best = k;
   return best;
 }

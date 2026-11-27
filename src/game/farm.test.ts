@@ -22,3 +22,13 @@ describe('Farm.advance tells what changed (v0.18)', () => {
     expect(f.advance(HOUR, env)).toEqual({ crops: false, saplings: false, matured: false });
   });
 });
+
+describe('ten crops (v0.20.1)', () => {
+  it('each has a name, a growing time and seasons (none grow in winter)', async () => {
+    const { CROPS, CROP_KINDS } = await import('./farm');
+    expect(CROP_KINDS.length).toBe(10);
+    for (const k of CROP_KINDS) { expect(CROPS[k].name).toBeTruthy(); expect(CROPS[k].hours).toBeGreaterThan(0); expect(CROPS[k].seasons.length).toBeGreaterThan(0); expect(CROPS[k].seasons).not.toContain(3); }
+    // どの季節（冬以外）にも、旬の作物が 3 つ以上
+    for (const s of [0, 1, 2]) expect(CROP_KINDS.filter((k) => CROPS[k].seasons.includes(s)).length).toBeGreaterThanOrEqual(3);
+  });
+});

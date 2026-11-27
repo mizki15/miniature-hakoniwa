@@ -51,7 +51,7 @@ export interface ToolDef<Id extends string = string> {
 
 const isFarm = (t: number) => t === FARMLAND || t === WET_FARMLAND;
 const ok = (msg: string) => ({ ok: true, msg }), no = (msg: string) => ({ ok: false, msg });
-export const CROP_ICONS: Record<CropKind, string> = { turnip: '🥬', wheat: '🌾', pumpkin: '🎃' };
+export const CROP_ICONS: Record<CropKind, string> = { turnip: '⚪', carrot: '🥕', strawberry: '🍓', cabbage: '🥬', wheat: '🌾', tomato: '🍅', eggplant: '🍆', sunflower: '🌻', corn: '🌽', pumpkin: '🎃' };
 
 const till: ToolDef<'till'> = {
   id: 'till', name: '耕す', icon: '⛏', help: '草地や土を耕して畑にする', group: 'life',

@@ -4,14 +4,24 @@
  * 時間は箱庭内の時計（simMs）で数える。ふだんは現実の時間と同じ速さ、デバッグで早送りできる。
  */
 
-export type CropKind = 'turnip' | 'wheat' | 'pumpkin';
+export type CropKind = 'turnip' | 'wheat' | 'pumpkin' | 'carrot' | 'cabbage' | 'strawberry' | 'tomato' | 'corn' | 'sunflower' | 'eggplant';
 
 export interface CropDef { name: string; hours: number; seasons: number[]; }
 
-/** 作物：育つまでの時間（現実の時間）と、育つ季節（0 春, 1 夏, 2 秋, 3 冬） */
+/**
+ * 作物（v0.20.1 で 10 種類に）：育つまでの時間（現実の時間）と、育つ季節（0 春, 1 夏, 2 秋, 3 冬）。
+ * 季節外れはとてもゆっくり（0.35 倍）、冬は育たない（オコジョの近くを除く）
+ */
 export const CROPS: Record<CropKind, CropDef> = {
   turnip: { name: 'カブ', hours: 1.5, seasons: [0, 2] },
+  carrot: { name: 'にんじん', hours: 2, seasons: [0, 2] },
+  strawberry: { name: 'いちご', hours: 3, seasons: [0] },
+  cabbage: { name: 'キャベツ', hours: 4, seasons: [0, 2] },
   wheat: { name: '小麦', hours: 6, seasons: [0, 1, 2] },
+  tomato: { name: 'トマト', hours: 4, seasons: [1] },
+  eggplant: { name: 'なす', hours: 4, seasons: [1, 2] },
+  sunflower: { name: 'ひまわり', hours: 5, seasons: [1] },
+  corn: { name: 'とうもろこし', hours: 6, seasons: [1] },
   pumpkin: { name: 'かぼちゃ', hours: 8, seasons: [1, 2] },
 };
 export const CROP_KINDS = Object.keys(CROPS) as CropKind[];
@@ -40,8 +50,8 @@ export class Farm {
   crops = new Map<number, Crop>();
   saplings: Sapling[] = [];
   wetUntil = new Map<number, number>(); // 列 → 湿っている期限（simMs）
-  /** 持ち物：収穫物・原料・素材（game/materials.ts）。上限は付けない */
-  inventory: Record<string, number> = { turnip: 0, wheat: 0, pumpkin: 0 };
+  /** 持ち物：収穫物と素材（game/materials.ts）。上限は付けない */
+  inventory: Record<string, number> = {};
   simMs = Date.now();
   speed = 1; // 早送りの倍率（デバッグ用）
   /** 水やりが続く時間の倍率（住人の仕事：モグラで 1.5。v0.16.1） */
