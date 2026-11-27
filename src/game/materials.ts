@@ -43,6 +43,8 @@ export const BLOCK_YIELD: Record<number, MatAmounts> = {
   [LOG]: { wood: 1 },
   [LEAVES]: { fiber: 1 }, [CONIFER]: { fiber: 1 },
 };
+/** マイブロック（v0.20.4）の割合を足す・消す */
+export function setBlockYield(block: number, mats: MatAmounts | null) { if (mats) BLOCK_YIELD[block] = { ...mats }; else delete BLOCK_YIELD[block]; }
 /** ブロックを置く・道を敷くのに要る素材（割合のいちばん大きい素材を 1 つ） */
 export function blockCost(block: number): MatAmounts | null {
   const y = BLOCK_YIELD[block];

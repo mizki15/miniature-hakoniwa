@@ -288,6 +288,34 @@
       </div>
     </div>
 
+    <!-- マイブロック（v0.20.4）：AI に色と模様を考えてもらう 1 × 1 × 1 のブロック -->
+    <div id="myBlock" aria-hidden="true">
+      <div class="viewer-panel bag-panel" role="dialog" aria-label="マイブロック">
+        <header class="viewer-head">
+          <span>🧊 マイブロック</span>
+          <button id="myBlockClose" type="button" title="閉じる（Esc）">×</button>
+        </header>
+        <div class="viewer-body bag-body">
+          <section class="bag-col">
+            <h3>1. AI に頼む <small>ChatGPT・Claude など</small></h3>
+            <textarea id="mbIdea" class="mb-text" rows="3" placeholder="作りたいブロック（例：苔むした石、青いタイル、木箱）"></textarea>
+            <button id="mbCopyPrompt" type="button" class="open-viewer">📋 AI に渡す文をコピー</button>
+            <h3>2. AI の返事を貼る</h3>
+            <textarea id="mbPaste" class="mb-text" rows="7" placeholder="AI が出した JSON を、そのまま貼り付け"></textarea>
+            <ul id="mbIssues" class="mb-issues"></ul>
+          </section>
+          <section class="bag-col">
+            <h3>見本 <small>形は立方体。面ごとの色と模様だけ</small></h3>
+            <img id="mbPreview" class="mb-preview" alt="" hidden />
+            <p id="mbInfo" class="mb-info"></p>
+            <button id="mbAdd" type="button" class="primary mb-add" disabled>ブロック配置に入れる</button>
+            <h3>マイブロックの棚</h3>
+            <div id="mbList" class="bag-raws mb-list"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
     <div id="viewer" aria-hidden="true">
       <div class="viewer-panel" role="dialog" aria-label="建物">
         <header class="viewer-head">

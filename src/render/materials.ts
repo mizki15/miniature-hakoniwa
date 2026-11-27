@@ -4,9 +4,10 @@ import {
   int, ivec3, length, max, mix, mx_noise_float as noiseT, mx_noise_vec3, normalize, normalGeometry, normalLocal, normalWorldGeometry, perspectiveDepthToViewZ,
   positionGeometry, positionLocal, positionView, positionWorld, pow, screenUV, sin, cos, smoothstep as smoothstepT, step, texture3DLoad, time,
   transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture, Fn, If, Loop,
-  normalView, BRDF_Lambert, diffuseColor,
+  normalView, BRDF_Lambert, diffuseColor, mod,
 } from 'three/tsl';
-import { COBBLE, FARMLAND, LOG, PATH, WATER, WET_FARMLAND, paletteFlat } from '../world/blocks';
+import { COBBLE, FARMLAND, LOG, PATH, WATER, WET_FARMLAND, hexToLinear, paletteFlat } from '../world/blocks';
+import { MYBLOCK_BASE, PATTERNS, hexNum, type MyBlockDef } from '../world/myBlocks';
 import { cloudShadowAt } from './sky';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -127,12 +128,48 @@ function finishSurface(m: SurfaceMaterial, albedo: N, extraEmissive: N = null, c
   m.emissiveNode = extraEmissive ? extraEmissive.add(glow) : glow;
 }
 
-const palette = uniformArray(paletteFlat().map(([r, g, b]) => new THREE.Color(r, g, b)), 'color');
+/** ブロックの種類の数の上限（マイブロックの 64〜127 まで。v0.20.4） */
+const MAX_TYPES = 128;
+const BASE_PALETTE = paletteFlat();
+const palette = uniformArray(Array.from({ length: MAX_TYPES * 3 }, (_, i) => { const c = BASE_PALETTE[i] ?? [0.5, 0.5, 0.5]; return new THREE.Color(c[0], c[1], c[2]); }), 'color');
+/** マイブロック（v0.20.4）：面ごとのアクセントの色と模様の番号（world/myBlocks.ts の PATTERNS の順）。棚に入れた時に書き込む（毎フレーム GPU へ送られる） */
+const accentPal = uniformArray(Array.from({ length: MAX_TYPES * 3 }, () => new THREE.Color(0, 0, 0)), 'color');
+const patternPal = uniformArray(new Array(MAX_TYPES * 3).fill(0), 'float');
+/** マイブロックの見た目を、地形のシェーダーの表に書き込む（上 0・下 1・横 2） */
+export function setMyBlockLook(def: MyBlockDef) {
+  ([[0, def.top], [1, def.bottom], [2, def.side]] as const).forEach(([k, f]) => {
+    const i = def.id * 3 + k;
+    const [r, g, b] = hexToLinear(hexNum(f.base));
+    (palette.array[i] as THREE.Color).setRGB(r, g, b);
+    const [ar, ag, ab] = hexToLinear(hexNum(f.accent));
+    (accentPal.array[i] as THREE.Color).setRGB(ar, ag, ab);
+    (patternPal.array as number[])[i] = PATTERNS.indexOf(f.pattern);
+  });
+}
+/**
+ * マイブロックの模様（world/myBlocks.ts の patternMask と同じ式）：面の座標 uv（0〜1）でアクセントの色を使うか
+ */
+function myPattern(p: N, uv: N): N {
+  const u: N = uv.x, v: N = uv.y;
+  const hash2 = (x: N, y: N) => fractT(sin(x.mul(12.9898).add(y.mul(78.233))).mul(43758.5453));
+  const speckle = hash2(floor(u.mul(6)), floor(v.mul(6))).greaterThan(0.68);
+  const stripes = mod(floor(v.mul(4)), 2).greaterThan(0.5);
+  const row = floor(v.mul(4));
+  const bricks = fractT(v.mul(4)).lessThan(0.14).or(fractT(u.mul(2).add(mod(row, 2).mul(0.5))).lessThan(0.07));
+  const planks = fractT(u.mul(4)).lessThan(0.1);
+  const checker = mod(floor(u.mul(2)).add(floor(v.mul(2))), 2).greaterThan(0.5);
+  const dots = length(fractT(uv.mul(3)).sub(0.5)).lessThan(0.22);
+  const border = u.lessThan(0.1).or(u.greaterThan(0.9)).or(v.lessThan(0.1)).or(v.greaterThan(0.9));
+  const at = (i: number) => p.sub(i).abs().lessThan(0.5);
+  return at(1).select(speckle, at(2).select(stripes, at(3).select(bricks, at(4).select(planks, at(5).select(checker, at(6).select(dots, at(7).and(border)))))));
+}
 
 const hash3 = (p: N) => fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))).mul(43758.5453));
 const near = (a: N, b: number) => abs(a.sub(b)).lessThan(0.5);
 
 /** 面の向きから、面内の座標系（u, v）を決める */
+/** 面の上の座標（X の面は (z, y)、Y の面は (x, z)、Z の面は (x, y)） */
+const faceUVof = (pL: N, nL: N): N => faceFrame(pL, nL).faceUV;
 function faceFrame(pL: N, nL: N) {
   const absN: N = abs(nL);
   const isX = absN.x.greaterThan(0.5);
@@ -221,13 +258,16 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   };
   const isOpaque = (t: N): N => t.greaterThan(0.5).and(near(t, WATER).not());
   // 人工物（石畳・丸太・道・畑）：となりと色を混ぜない（境目をくっきり）
-  const isArtificial = (t: N): N => near(t, COBBLE).or(near(t, LOG)).or(near(t, PATH)).or(near(t, FARMLAND)).or(near(t, WET_FARMLAND));
+  const isArtificial = (t: N): N => near(t, COBBLE).or(near(t, LOG)).or(near(t, PATH)).or(near(t, FARMLAND)).or(near(t, WET_FARMLAND)).or(t.greaterThan(MYBLOCK_BASE - 0.5));
 
   const kind = nL.y.greaterThan(0.5).select(float(0), nL.y.lessThan(-0.5).select(float(1), float(2)));
   const surfaceColor = (t: N): N => {
-    const base = palette.element(int(t.mul(3).add(kind)));
+    const idx = int(t.mul(3).add(kind));
+    const base = palette.element(idx);
     const grassTop = near(t, 1).and(kind.lessThan(0.5));
-    return grassTop.select(U.grassColor, base);
+    // マイブロック（v0.20.4）：面の模様でアクセントの色に
+    const mine = t.greaterThan(MYBLOCK_BASE - 0.5).and(myPattern(patternPal.element(idx), fractT(faceUVof(pL, nL))));
+    return grassTop.select(U.grassColor, mine.select(accentPal.element(idx), base));
   };
 
   const { faceUV, tU, tV } = faceFrame(pL, nL);

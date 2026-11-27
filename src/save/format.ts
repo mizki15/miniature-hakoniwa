@@ -61,6 +61,8 @@ export interface SaveData {
   goals?: GoalsState;
   /** 道のタイル（v0.20.3）：[列, 道の種類の番号（1 土の道・2 砂利道・3 石畳・4 板の道・5 れんが道）] */
   paths?: [col: number, kind: number][];
+  /** マイブロック（v0.20.4。world/myBlocks.ts の MyBlockDef。読む時に確かめる） */
+  myBlocks?: unknown[];
 }
 
 /** v1（大きさを選んで作った箱庭）のデータ。地形の作り方が変わったので引き継げない */

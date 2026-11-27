@@ -38,6 +38,9 @@ import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
 import { FLOWER_KINDS, GameController, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
 import { HoverTip } from './ui/hoverTip';
+import { myBlockThumb } from './ui/myBlockThumb';
+import { PATTERN_NAME, buildMyBlockPrompt, parseMyBlock, type MyBlockLook } from './world/myBlocks';
+import type { MatId } from './game/materials';
 import { PATHS, PATH_DEF, buildPathTile, type PathKind } from './game/paths';
 import { blockPreviewGeometry, emojiIcon } from './ui/thumb';
 import { blockCost, matsText } from './game/materials';
@@ -516,10 +519,15 @@ async function main() {
     {
       opt: { id: 'cat:blocks', icon: '🧱', name: 'ブロック配置', help: 'ブロックを置く。選ぶと画面の下に、置けるブロックが並ぶ' },
       group: 'g:terrain', match: (id) => id.startsWith('block:'), def: `block:${PLACE_BLOCKS[0].id}`,
-      items: () => PLACE_BLOCKS.map((b) => {
-        const c = blockCost(b.id);
-        return { id: `block:${b.id}`, name: b.name, img: thumbOf(`block:${b.id}`, () => blockPreviewGeometry(b.id)), help: `${b.name}のブロックを置く${c ? `（${matsText(c)}）` : ''}。道のタイルの上に置くと、道は消える` };
-      }),
+      items: () => [
+        ...PLACE_BLOCKS.map((b) => {
+          const c = blockCost(b.id);
+          return { id: `block:${b.id}`, name: b.name, img: thumbOf(`block:${b.id}`, () => blockPreviewGeometry(b.id)), help: `${b.name}のブロックを置く${c ? `（${matsText(c)}）` : ''}。道のタイルの上に置くと、道は消える` };
+        }),
+        // マイブロック（v0.20.4）と、作る窓を開くボタン
+        ...[...game.myBlocks.values()].map((d) => ({ id: `block:${d.id}`, name: d.name, img: myBlockThumb(d), help: `マイブロック「${d.name}」を置く（${matsText(blockCost(d.id) ?? {})}）。掘ると ${ratioOf(d.mats)}` })),
+        { id: 'myblock:new', name: '＋ つくる', img: emojiIcon('🧊'), help: 'マイブロックを作る（AI に色と模様を考えてもらう）' },
+      ],
     },
     {
       opt: { id: 'cat:paths', icon: '🛤', name: '道作り', help: '道を敷く（地面から 1/8 ブロック盛り上がったタイル）。選ぶと画面の下に、道の種類が並ぶ' },
@@ -563,6 +571,7 @@ async function main() {
   /** 道具を持つ。グループの id（'g:life' など）なら、そのグループで最後に使った道具 */
   const pickTool = (id: string | null) => {
     if (!id || viewOnly) return;
+    if (id === 'myblock:new') { setMyBlockWin(true); return; }
     if (id.startsWith('g:')) {
       const g = GROUPS.find((x) => x.id === id)!;
       const opts = g.options();
@@ -698,6 +707,66 @@ async function main() {
   };
   $('openBag').addEventListener('click', () => setBag(true));
   $('bagClose').addEventListener('click', () => setBag(false));
+
+  // ---------- マイブロックの窓（v0.20.4。world/myBlocks.ts） ----------
+  const mbEl = $('myBlock');
+  const myBlockOpen = () => mbEl.classList.contains('open');
+  /** 貼り付けた JSON から読んだ見た目（読めなければ null） */
+  let mbLook: MyBlockLook | null = null;
+  const ratioOf = (m: Partial<Record<MatId, number>>) => MAT_IDS.filter((k) => m[k]).map((k) => `${MAT_NAME[k]} ${Math.round((m[k] ?? 0) * 100)}%`).join('・');
+  const renderMyBlockWin = () => {
+    const prev = $<HTMLImageElement>('mbPreview');
+    prev.hidden = !mbLook;
+    if (mbLook) prev.src = myBlockThumb(mbLook, 160);
+    $('mbInfo').textContent = mbLook
+      ? `${mbLook.name}　素材：${ratioOf(mbLook.mats)}　模様：上 ${PATTERN_NAME[mbLook.top.pattern]}・横 ${PATTERN_NAME[mbLook.side.pattern]}・下 ${PATTERN_NAME[mbLook.bottom.pattern]}`
+      : 'AI の返事を貼り付けると、ここに見本が出ます';
+    $<HTMLButtonElement>('mbAdd').disabled = !mbLook;
+    const list = $('mbList');
+    list.replaceChildren(...[...game.myBlocks.values()].map((d) => {
+      const row = document.createElement('div');
+      row.className = 'bag-raw';
+      const img = Object.assign(document.createElement('img'), { src: myBlockThumb(d), alt: '' });
+      img.className = 'mb-thumb';
+      const name = Object.assign(document.createElement('span'), { className: 'bag-name', textContent: `${d.name}（${ratioOf(d.mats)}）` });
+      const del = Object.assign(document.createElement('button'), { type: 'button', textContent: '消す', className: 'mb-del' });
+      del.addEventListener('click', () => {
+        const why = game.removeMyBlock(d.id);
+        toast(why ?? `「${d.name}」を棚から消しました`);
+        renderMyBlockWin(); syncPickBar();
+      });
+      row.append(img, name, del);
+      return row;
+    }));
+    if (!game.myBlocks.size) list.textContent = 'まだありません';
+  };
+  const setMyBlockWin = (open: boolean) => {
+    if (open && viewOnly) return;
+    mbEl.classList.toggle('open', open);
+    mbEl.setAttribute('aria-hidden', String(!open));
+    hoverTip.hide();
+    if (open) renderMyBlockWin();
+  };
+  $('myBlockClose').addEventListener('click', () => setMyBlockWin(false));
+  mbEl.addEventListener('pointerdown', (e) => { if (e.target === mbEl) setMyBlockWin(false); });
+  $('mbCopyPrompt').addEventListener('click', () => copyText(buildMyBlockPrompt($<HTMLTextAreaElement>('mbIdea').value)));
+  $('mbPaste').addEventListener('input', () => {
+    const text = $<HTMLTextAreaElement>('mbPaste').value;
+    const r = text.trim() ? parseMyBlock(text) : null;
+    mbLook = r?.ok ? r.look : null;
+    $('mbIssues').replaceChildren(...(r && !r.ok ? r.issues : []).map((i) => Object.assign(document.createElement('li'), { textContent: i.message })));
+    renderMyBlockWin();
+  });
+  $('mbAdd').addEventListener('click', () => {
+    if (!mbLook) return;
+    const r = game.addMyBlock(mbLook);
+    if (typeof r === 'string') { toast(r); return; }
+    toast(`「${r.name}」をブロック配置に入れました`);
+    $<HTMLTextAreaElement>('mbPaste').value = '';
+    mbLook = null;
+    setMyBlockWin(false);
+    pickTool(`block:${r.id}`);
+  });
   bagEl.addEventListener('pointerdown', (e) => { if (e.target === bagEl) setBag(false); });
 
   /** 建物の性格（星 3 行と、遠のく生き物。まだ観察していない生き物は「？」） */
@@ -897,6 +966,7 @@ async function main() {
   window.addEventListener('keydown', (e) => {
     if (viewerIsOpen()) { if (e.key === 'Escape') void setViewer(false); return; } // 建物の窓を開いている間は、Esc で閉じるだけ
     if (bagIsOpen()) { if (e.key === 'Escape' || e.code === 'KeyI') setBag(false); return; } // 持ち物の窓も同じ
+    if (myBlockOpen()) { if (e.key === 'Escape') setMyBlockWin(false); return; } // マイブロックの窓も同じ
     if (e.key === 'Escape') { setMenu(!menuOpen()); return; }
     if (menuOpen()) return; // メニューを開いている間は他のキーを受け付けない
     if ((e.target as HTMLElement).closest?.('input[type="text"], input[type="number"], textarea, select')) return;

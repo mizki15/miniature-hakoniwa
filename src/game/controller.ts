@@ -7,6 +7,8 @@ import { FRAME, PLOT, plotOfCol, plotRect } from '../world/plots';
 import { canSetCol, floodAllowed } from './edgeRules';
 import { CROPS, Farm, type Crop, type CropKind, type FarmEnv, type Sapling } from './farm';
 import { UndoStack } from './undoStack';
+import { MYBLOCK_MAX, freeMyBlockId, sameLook, sanitizeMyBlock, type MyBlockDef, type MyBlockLook } from '../world/myBlocks';
+import { setMyBlockLook } from '../render/materials';
 import { PATH_DEF, buildPathTile, pathIndex, pathOfIndex, type PathKind } from './paths';
 import { TOOL_DEFS, toolDef, type ToolAt, type ToolCtx } from './tools';
 import { buildCropGeometry, buildSaplingGeometry, type SaplingKind } from './cropModels';
@@ -16,7 +18,7 @@ import type { SaveData } from '../save/format';
 import { sanitizeDesign, type BuildingDesign } from '../build/geoParse';
 import { buildBuildingMesh } from '../build/geoMesh';
 import { DAY_MS, fadeFlowers, grassDue, natureDays, spreadTrees } from './nature';
-import { BLOCK_YIELD, MAT_NAME, TREE_YIELD, addFractional, addPickup, blockCost, buildCost, gain, matsText, missingMats, payMats, pickupPerDay, refundMats, type BuildCost, type MatAmounts, type MatId } from './materials';
+import { BLOCK_YIELD, MAT_NAME, setBlockYield, TREE_YIELD, addFractional, addPickup, blockCost, buildCost, gain, matsText, missingMats, payMats, pickupPerDay, refundMats, type BuildCost, type MatAmounts, type MatId } from './materials';
 import type { BuildingCharacter } from '../build/character';
 import { buildingWildWeight, countEnvironment, houseSite, lightReach, type Light } from '../eco/environment';
 import { jobEffects, likedBy, residentPickupPerDay, type ResidentInfo } from '../eco/residents';
@@ -290,6 +292,8 @@ export class GameController {
     this.chunks.clear();
     this.farmland.clear();
     this.pathTiles.clear();
+    for (const id of this.myBlocks.keys()) setBlockYield(id, null);
+    this.myBlocks.clear();
     w.paths = new Uint8Array(w.size * w.size);
     this.pathsDirty = true;
     this.irrigatedCache.clear();
@@ -1475,7 +1479,46 @@ export class GameController {
   /** そのブロックに要る素材の名前（足りない時の知らせ） */
 
   /** 「ブロックを置く」で選んでいるブロックの名前 */
-  blockName() { return PLACE_BLOCKS.find((b) => b.id === this.block)?.name ?? 'ブロック'; }
+  blockName() { return this.myBlocks.get(this.block)?.name ?? PLACE_BLOCKS.find((b) => b.id === this.block)?.name ?? 'ブロック'; }
+
+  // ---------- マイブロック（v0.20.4。world/myBlocks.ts） ----------
+  /** 番号 → 定義（この箱庭の棚。保存する） */
+  myBlocks = new Map<number, MyBlockDef>();
+  /** 地形のシェーダーと、掘った時の素材の表に書き込む */
+  private registerMyBlock(def: MyBlockDef) {
+    this.myBlocks.set(def.id, def);
+    setMyBlockLook(def);
+    setBlockYield(def.id, def.mats);
+  }
+  /** 棚に入れる。同じ見た目のものがあればそれを返す。いっぱいなら理由の文 */
+  addMyBlock(look: MyBlockLook): MyBlockDef | string {
+    for (const d of this.myBlocks.values()) if (sameLook(d, look)) return d;
+    const id = freeMyBlockId(this.myBlocks.keys());
+    if (id === null) return `マイブロックは ${MYBLOCK_MAX} 種類までです`;
+    const def: MyBlockDef = { id, ...look };
+    this.registerMyBlock(def);
+    this.unsaved = true; this.onPlayerChange?.();
+    return def;
+  }
+  /** 箱庭に置いてある数 */
+  countMyBlock(id: number): number {
+    const v = this.world?.voxels;
+    if (!v) return 0;
+    let n = 0;
+    for (let i = 0; i < v.length; i++) if (v[i] === id) n++;
+    return n;
+  }
+  /** 棚から消す（置いてある間は消せない。理由の文を返す） */
+  removeMyBlock(id: number): string | null {
+    if (!this.myBlocks.has(id)) return null;
+    const n = this.countMyBlock(id);
+    if (n > 0) return `箱庭に ${n} 個置いてあるので消せません（先に掘ってください）`;
+    this.myBlocks.delete(id);
+    setBlockYield(id, null);
+    if (this.block === id) this.block = DIRT;
+    this.unsaved = true; this.onPlayerChange?.();
+    return null;
+  }
 
   // ---------- 建物の棚 ----------
 
@@ -1987,7 +2030,7 @@ export class GameController {
   // ---------- 保存・読み込み ----------
 
   /** 保存用：地形の差分と畑の状態 */
-  exportState(): Pick<SaveData, 'edits' | 'farm' | 'buildings' | 'paths'> {
+  exportState(): Pick<SaveData, 'edits' | 'farm' | 'buildings' | 'paths' | 'myBlocks'> {
     const edits: number[] = [];
     for (const [i, t] of this.edits) edits.push(i, t);
     const f = this.farm;
@@ -2011,6 +2054,7 @@ export class GameController {
         placed: this.placed.map((p): [string, number, number, Rot, number?, number?] => (p.paid ? [p.id, p.x, p.z, p.rot, +Math.min(1, p.progress).toFixed(5), 1] : p.progress >= 1 ? [p.id, p.x, p.z, p.rot] : [p.id, p.x, p.z, p.rot, +p.progress.toFixed(5)])),
       },
       paths: [...this.pathTiles].map(([col, k]): [number, number] => [col, pathIndex(k)]),
+      ...(this.myBlocks.size ? { myBlocks: [...this.myBlocks.values()].map((d) => structuredClone(d)) } : {}),
     };
   }
 
@@ -2072,6 +2116,8 @@ export class GameController {
     // 進み具合のない古い記録は、建ち終わった建物として読む
     this.placed = save.buildings.placed.filter(([id]) => this.designs.has(id)).map(([id, x, z, rot, progress, paid]) => ({ id, x, z, rot, progress: progress ?? 1, paid: paid === 1 }));
     if (this.selectedDesign && !this.designs.has(this.selectedDesign)) this.selectedDesign = null;
+    // マイブロック（v0.20.4）
+    for (const v of save.myBlocks ?? []) { const d = sanitizeMyBlock(v); if (d) this.registerMyBlock(d); }
     // 道のタイル（v0.20.3）。昔の道のブロックはタイルに移す
     const savedPaths = new Map<number, PathKind>();
     for (const [col, k] of save.paths ?? []) { const kind = pathOfIndex(k); if (kind && col >= 0 && col < w.size * w.size) savedPaths.set(col, kind); }
