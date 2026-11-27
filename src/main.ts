@@ -50,7 +50,7 @@ import { designStats } from './build/stats';
 import { CharacterStore } from './build/characterStore';
 import { buildingTraits } from './build/traits';
 import { renderBag } from './ui/bag';
-import { MATERIALS, MATERIAL_NAME, RAW, RAWS, buildCost, craft, gain, matKey } from './game/materials';
+import { MAT_IDS, MAT_NAME, buildCost, gain } from './game/materials';
 import { JOB_TEXT, SITE_NAMES, likelyResidents } from './eco/residents';
 import { CROPS, CROP_KINDS, type CropKind } from './game/farm';
 
@@ -196,12 +196,12 @@ async function main() {
     diorama, envInput: () => game.envInput(), toast: (m, ms) => toast(m, ms), fireflies, treeShape: (c) => game.treeShape(c),
     onChanged: () => { game.unsaved = true; refreshDex(); },
     onPoints: (n) => { progress.points += n; refreshGhosts(); },
-    // 訪問者が、その箱庭でとれない原料を運んできた（v0.16.1）
-    onGift: (id, raw, n) => {
-      gain(game.farm.inventory, raw, n);
+    // 訪問者が、その箱庭でとりにくい素材を運んできた（v0.16.1。v0.20 から素材）
+    onGift: (id, mat, n) => {
+      gain(game.farm.inventory, mat, n);
       game.unsaved = true;
       const who = dexStage(eco.dex, id) === 'observed' ? VISITOR[id].name : '訪問者';
-      toast(`${who}が${RAW[raw].name}を ${n} 個運んできた`);
+      toast(`${who}が${MAT_NAME[mat]}を ${n} 個運んできた`);
       if (bagIsOpen()) renderBagNow();
     },
   });
@@ -627,12 +627,7 @@ async function main() {
   // ---------- 持ち物・加工の窓（I キー） ----------
   const bagEl = $('bag');
   const bagIsOpen = () => bagEl.classList.contains('open');
-  const renderBagNow = () => renderBag($('bagRaws'), $('bagMats'), game.farm.inventory, (r, all) => {
-    const n = craft(game.farm.inventory, r, all ? Infinity : 1);
-    if (n) { game.unsaved = true; playerChanged(); toast(`${MATERIAL_NAME[r.mat]}を ${r.out * n} 個作りました`); }
-    renderBagNow();
-    if (viewerIsOpen()) renderViewer();
-  }, (el, html) => hoverTip.attach(el, html, 'left', true, bagEl));
+  const renderBagNow = () => renderBag($('bagMats'), $('bagCrops'), game.farm.inventory, (el, html) => hoverTip.attach(el, html, 'left', true, bagEl));
   const setBag = (open: boolean) => {
     if (open && viewOnly) return;
     bagEl.classList.toggle('open', open);
@@ -660,9 +655,9 @@ async function main() {
     // コスト：素材ごとの必要量と手持ち、発見ポイント、時間（数字で）
     const cost = buildCost(c);
     const inv = game.farm.inventory;
-    const matRows = Object.entries(cost.mats).sort((a, b) => b[1] - a[1]).map(([m, n]) => {
-      const have = inv[matKey(m)] ?? 0;
-      return `<span class="tr-cost${have >= n ? '' : ' lack'}">${esc(MATERIAL_NAME[m] ?? m)} ${have}/${n}</span>`;
+    const matRows = MAT_IDS.filter((m) => (cost.mats[m] ?? 0) > 0).sort((a, b) => (cost.mats[b] ?? 0) - (cost.mats[a] ?? 0)).map((m) => {
+      const n = cost.mats[m] ?? 0, have = Math.floor(inv[m] ?? 0);
+      return `<span class="tr-cost${have >= n ? '' : ' lack'}">${esc(MAT_NAME[m])} ${have}/${n}</span>`;
     }).join('');
     const pts = progress.points;
     box.innerHTML = t.rows.map((r) => `<div class="tr-row"><span class="tr-label">${esc(r.label)}</span><span class="tr-stars">${esc(r.stars)}</span><span class="tr-note">${esc(r.note)}</span></div>`).join('') +
@@ -971,7 +966,7 @@ async function main() {
       if (!crop) { toast('おすそ分けできる収穫物（カブ・小麦・かぼちゃ）がありません'); return; }
       game.unsaved = true; playerChanged();
       const liked = CROPS[crop as CropKind].name === t.animal.favorite;
-      toast(`${t.animal.name}に${CROPS[crop as CropKind].name}をおすそ分けした${liked ? '（大好物！）' : ''}。しばらく原料を多く拾ってくる`);
+      toast(`${t.animal.name}に${CROPS[crop as CropKind].name}をおすそ分けした${liked ? '（大好物！）' : ''}。しばらく素材を多く拾ってくる`);
       return;
     }
     // 見る・ステータス：水面をクリックすると波紋
@@ -1188,23 +1183,23 @@ async function main() {
         const g = goals?.goals[i];
         if (!g) return '';
         const hint = goalHint(g, knownDex);
-        const reward = `ほうび：発見ポイント ${TIER_POINTS[g.tier]}・手に入りにくい原料${g.tier === 2 ? '・季節の記念の飾り' : ''}`;
+        const reward = `ほうび：発見ポイント ${TIER_POINTS[g.tier]}・手に入りにくい素材${g.tier === 2 ? '・季節の記念の飾り' : ''}`;
         return `<div class="tt-title">🎯 ${esc(goalText(g, knownDex))}</div>${hint ? `<div class="tt-line">${esc(hint)}</div>` : ''}<div class="tt-line tt-muted">${g.done ? '達成しました' : reward}</div>`;
       }, 'left', true, $('right'));
     });
   };
-  /** 達成した：発見ポイント・原料（その箱庭で手に入りにくいもの）・難しいものは記念の飾り */
+  /** 達成した：発見ポイント・素材（その箱庭で手に入りにくいもの）・難しいものは記念の飾り */
   const rewardGoal = (g: Goal) => {
     const r = goalReward(g, eco.env(), Math.random);
     progress.points += r.points;
     refreshGhosts();
-    gain(game.farm.inventory, r.raw, r.n);
+    gain(game.farm.inventory, r.mat, r.n);
     let extra = '';
     if (r.memento && goals) {
       const d = mementoDesign(goals.key);
       if (game.addDesign(d) === 'added') extra = `。記念の飾り「${d.name}」を棚に入れました`;
     }
-    toast(`🎯 今季の目標を達成！「${goalText(g, knownDex)}」 +${r.points}・${RAW[r.raw].name} ×${r.n}${extra}`, 6000);
+    toast(`🎯 今季の目標を達成！「${goalText(g, knownDex)}」 +${r.points}・${MAT_NAME[r.mat]} ×${r.n}${extra}`, 6000);
     if (bagIsOpen()) renderBagNow();
     game.unsaved = true;
   };
@@ -1242,7 +1237,7 @@ async function main() {
     else if (e.k === 'flower') log.flower = true;
     else if (!e.design.memento) {
       const ch = game.characterOf?.(e.design);
-      log.builds.push({ nature: ch?.nature ?? 1, straw: (ch?.areas.thatch ?? 0) > 0, ...(e.design.kind === 'deco' ? { deco: true } : {}) });
+      log.builds.push({ nature: ch?.nature ?? 1, straw: (ch?.areas.fiber ?? 0) > 0, ...(e.design.kind === 'deco' ? { deco: true } : {}) });
     }
     game.unsaved = true;
     goalsAt = -Infinity;
@@ -1517,11 +1512,11 @@ async function main() {
     const season = seasonAt(d).season;
     return { season, raining: weatherAt(d, season) === 'rain' };
   };
-  /** 留守の間に起きたこと（catchUp の結果と、拾った原料） */
+  /** 留守の間に起きたこと（catchUp の結果と、拾った素材） */
   const awayNews = (r: { ripened: number; grown: number; built: number }) => {
     const picked = game.pickedSince;
     game.pickedSince = 0;
-    return [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : '', r.built > 0 ? `${r.built} 棟の建物が完成しました` : '', picked > 0 ? `原料を ${picked} 個拾いました` : ''].filter(Boolean).join('・');
+    return [r.ripened > 0 ? `${r.ripened} マスの作物が実りました` : '', r.grown > 0 ? `${r.grown} 本の木が育ちました` : '', r.built > 0 ? `${r.built} 棟の建物が完成しました` : '', picked > 0 ? `素材を ${picked} 個拾いました` : ''].filter(Boolean).join('・');
   };
   const fmtHours = (h: number) => (h >= 24 ? `${Math.floor(h / 24)}日${Math.round(h % 24)}時間` : h >= 1 ? `${Math.floor(h)}時間${Math.round((h % 1) * 60)}分` : `${Math.round(h * 60)}分`);
 
@@ -1606,10 +1601,9 @@ async function main() {
   });
   $('bagPlus').addEventListener('click', () => {
     const inv = game.farm.inventory;
-    for (const r of RAWS) inv[r.id] = (inv[r.id] ?? 0) + 50;
-    for (const m of MATERIALS) inv[matKey(m.id)] = (inv[matKey(m.id)] ?? 0) + 50;
+    for (const m of MAT_IDS) inv[m] = (inv[m] ?? 0) + 50;
     game.unsaved = true;
-    toast('原料と素材を 50 ずつ足しました');
+    toast('素材を 50 ずつ足しました');
   });
   $('ecoCall').addEventListener('click', () => {
     // 確率を 1 にして 1 回判定する（時刻・季節・天気の条件はそのまま）

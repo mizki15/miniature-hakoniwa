@@ -1,14 +1,14 @@
 /**
- * 住人の好きな家・仕事・おすそ分けと、訪問者が運んでくる原料（設計メモ 0 章・10 章。v0.16.1）。three.js に頼らない。
+ * 住人の好きな家・仕事・おすそ分けと、訪問者が運んでくる素材（設計メモ 0 章・10 章。v0.16.1）。three.js に頼らない。
  *
  * - 好きな家：家の素材の割合・大きさ・建てる場所で決まる。好みに合う家があると、その種類は引っ越してきやすい
  *   （土地の割合の下限が 2 割ゆるくなり、引っ越しの順番で先になる）。引っ越してきた時に満足して、発見ポイントが入る
  * - 仕事：いるだけで効く（プレイヤーは割り当てない）
- * - おすそ分け：収穫物をあげると、その住人がしばらく（箱庭の 3 日）原料を多く拾ってくる
- * - 訪問者の贈り物：その箱庭にない原料を、来た訪問者がたまに少し運んでくる（運が悪くても詰まらないように）
+ * - おすそ分け：収穫物をあげると、その住人がしばらく（箱庭の 3 日）素材を多く拾ってくる
+ * - 訪問者の贈り物：その箱庭にない素材を、来た訪問者がたまに少し運んでくる（運が悪くても詰まらないように）
  */
 import type { Species } from '../creatures/animals';
-import type { RawId } from '../game/materials';
+import type { MatId } from '../game/materials';
 import type { BuildingCharacter } from '../build/character';
 import type { EnvCounts } from './environment';
 
@@ -18,8 +18,9 @@ export const SITE_NAMES: Record<keyof Site, string> = { water: '水辺', forest:
 
 /** 素材の割合（見える表面の広さの割合、0..1） */
 export function shares(c: Pick<BuildingCharacter, 'areas' | 'totalArea'>) {
-  const a = (...ks: string[]) => ks.reduce((s, k) => s + (c.areas[k] ?? 0), 0) / Math.max(1e-9, c.totalArea);
-  return { wood: a('wall', 'plank', 'wood'), stone: a('stone'), thatch: a('thatch'), green: a('leaf', 'flower'), brick: a('brick'), white: a('white') };
+  // v0.20：素材は 5 つ。わら・葉・花は繊維、れんが・粘土は土、しっくい・ガラスは鉱物
+  const a = (k: MatId) => (c.areas[k] ?? 0) / Math.max(1e-9, c.totalArea);
+  return { wood: a('wood'), stone: a('stone'), fiber: a('fiber'), soil: a('soil'), mineral: a('mineral') };
 }
 
 type Shape = Pick<BuildingCharacter, 'areas' | 'totalArea' | 'size' | 'height' | 'light'>;
@@ -28,21 +29,21 @@ interface HomePref { shape: (c: Shape, s: ReturnType<typeof shares>) => boolean;
 /** 好きな家（設計メモ 10 章のたたき台を、性格の値に直したもの） */
 export const HOME_PREFS: Record<Species, HomePref> = {
   rabbit: { shape: (c) => c.size <= 2 && c.height <= 4, site: 'meadow', text: '小さく低い家' },
-  tanuki: { shape: (_c, s) => s.thatch >= 0.15, site: 'forest', text: 'わらの多い家' },
+  tanuki: { shape: (_c, s) => s.fiber >= 0.15, site: 'forest', text: 'わら（繊維）の多い家' },
   fox: { shape: (c) => c.height >= 6, text: '高い家' },
   deer: { shape: (c, s) => c.size >= 3 && s.wood >= 0.3, text: '大きめの木の家' },
   duck: { shape: () => true, site: 'water', text: 'どんな家でも' },
   squirrel: { shape: (c) => c.size <= 2 && c.height >= 4, site: 'forest', text: '小さく高い家' },
-  hedgehog: { shape: (c, s) => c.size <= 2 && c.height <= 4 && s.green >= 0.08, text: '小さく低い、つたや花の多い家' },
+  hedgehog: { shape: (c, s) => c.size <= 2 && c.height <= 4 && s.fiber >= 0.08, text: '小さく低い、つたや花（繊維）の多い家' },
   sheep: { shape: (c, s) => c.size >= 3 && s.wood >= 0.3 && c.height <= 6, text: '大きめの木の小屋' },
-  bear: { shape: (c, s) => c.size >= 4 && s.wood + s.stone >= 0.45, text: '大きな丸太と石の家' },
+  bear: { shape: (c, s) => c.size >= 4 && s.wood + s.stone >= 0.45, text: '大きな、木材と石材の家' },
   otter: { shape: (_c, s) => s.stone >= 0.25, site: 'water', text: '石の家' },
   mole: { shape: (c, s) => c.height <= 4 && s.stone >= 0.12, text: '低くて土台が石の家' },
   serow: { shape: (_c, s) => s.stone >= 0.35, site: 'high', text: '石の家' },
   stoat: { shape: (c, s) => c.size <= 2 && s.stone >= 0.25, text: '小さな石の家' },
-  beaver: { shape: (_c, s) => s.wood >= 0.25 && s.brick >= 0.08, site: 'water', text: '丸太とれんがの家' },
-  capybara: { shape: (c, s) => c.size >= 3 && s.thatch >= 0.15, text: 'わらの大きめの家' },
-  cat: { shape: (c, s) => s.brick + s.white >= 0.25 && c.light >= 1, text: 'れんがかしっくいの、灯りのある家' },
+  beaver: { shape: (_c, s) => s.wood >= 0.25 && s.soil >= 0.08, site: 'water', text: '木材と、れんが（土）の家' },
+  capybara: { shape: (c, s) => c.size >= 3 && s.fiber >= 0.15, text: 'わら（繊維）の大きめの家' },
+  cat: { shape: (c, s) => s.soil + s.mineral >= 0.25 && c.light >= 1, text: 'れんが（土）かしっくい（鉱物）の、灯りのある家' },
 };
 /** 好きな家の文（図鑑） */
 export const homeText = (sp: Species) => { const p = HOME_PREFS[sp]; return p.site ? `${p.text}・${SITE_NAMES[p.site]}のそば` : p.text; };
@@ -70,35 +71,35 @@ export const JOB_TEXT: Record<Species, string> = {
   tanuki: '木のまわりに苗木が生えやすくなる（森が広がる）',
   fox: '夜の見回りで、訪問者が 2 割長くいる',
   deer: '草地が森へ移り変わるのを遅らせる',
-  duck: '水辺の小石を拾ってくる',
+  duck: '水辺の小石（石材）を拾ってくる',
   squirrel: '落ち枝と葉を拾ってくる',
   hedgehog: '花が枯れにくくなる',
   sheep: '小麦を収穫すると、わらが 1 つ多くとれる',
-  bear: '木を切ると、丸太が 1 本多くとれる',
-  otter: '貝殻と小石を拾ってくる',
+  bear: '木を切ると、木材が 1 つ多くとれる',
+  otter: '貝殻（鉱物）と小石（石材）を拾ってくる',
   mole: '水をやった畑が乾きにくくなる（1.5 倍長く湿る）',
   serow: '石を拾ってくる',
   stoat: '冬の間も、近くの畑（8 マス以内）が少し育つ',
-  beaver: '粘土を拾ってくる',
+  beaver: '粘土（土）を拾ってくる',
   capybara: 'みんなが満足しやすくなる（満足した時の発見ポイントが 2 倍）',
-  cat: 'たまに、いろいろな原料を拾ってくる',
+  cat: 'たまに、いろいろな素材を拾ってくる',
 };
 
-/** 1 匹が箱庭の 1 日に拾ってくる原料（いるだけで） */
-export const JOB_PICKUP: Partial<Record<Species, Partial<Record<RawId, number>>>> = {
-  duck: { rock: 0.5 },
-  squirrel: { log_broad: 0.6, foliage: 0.6 },
-  otter: { shell: 0.5, rock: 0.4 },
-  serow: { rock: 1 },
-  beaver: { clay: 0.8 },
-  cat: { blossom: 0.2, shell: 0.15, straw: 0.15, foliage: 0.15 },
+/** 1 匹が箱庭の 1 日に拾ってくる素材（いるだけで） */
+export const JOB_PICKUP: Partial<Record<Species, Partial<Record<MatId, number>>>> = {
+  duck: { stone: 0.5 },
+  squirrel: { wood: 0.6, fiber: 0.6 },
+  otter: { mineral: 0.5, stone: 0.4 },
+  serow: { stone: 1 },
+  beaver: { soil: 0.8 },
+  cat: { fiber: 0.5, mineral: 0.15 },
 };
-/** おすそ分けをもらった住人が、ふだんの仕事に加えて拾ってくる原料（1 日あたり） */
-export const TREAT_PICKUP: Record<Species, Partial<Record<RawId, number>>> = {
-  rabbit: { blossom: 0.5 }, tanuki: { foliage: 0.5 }, fox: { log_broad: 0.4 }, deer: { foliage: 0.5 }, duck: { rock: 0.5 },
-  squirrel: { log_broad: 0.6, foliage: 0.6 }, hedgehog: { blossom: 0.5 }, sheep: { straw: 0.5 }, bear: { log_broad: 0.6 },
-  otter: { shell: 0.5, rock: 0.4 }, mole: { soil: 0.8 }, serow: { rock: 1 }, stoat: { rock: 0.4 }, beaver: { clay: 0.8 },
-  capybara: { reed: 0.5 }, cat: { blossom: 0.2, shell: 0.15, straw: 0.15, foliage: 0.15 },
+/** おすそ分けをもらった住人が、ふだんの仕事に加えて拾ってくる素材（1 日あたり） */
+export const TREAT_PICKUP: Record<Species, Partial<Record<MatId, number>>> = {
+  rabbit: { fiber: 0.5 }, tanuki: { fiber: 0.5 }, fox: { wood: 0.4 }, deer: { fiber: 0.5 }, duck: { stone: 0.5 },
+  squirrel: { wood: 0.6, fiber: 0.6 }, hedgehog: { fiber: 0.5 }, sheep: { fiber: 0.5 }, bear: { wood: 0.6 },
+  otter: { mineral: 0.5, stone: 0.4 }, mole: { soil: 0.8 }, serow: { stone: 1 }, stoat: { stone: 0.4 }, beaver: { soil: 0.8 },
+  capybara: { fiber: 0.5 }, cat: { fiber: 0.5, mineral: 0.15 },
 };
 
 /** おすそ分けの効き目が続く時間（箱庭の時計で 3 日） */
@@ -119,11 +120,11 @@ export function pickShareCrop(inv: Record<string, number>, favorite: string): (t
 export interface ResidentInfo { species: Species; col: number; treatedUntil?: number }
 
 /**
- * 住人みんなが 1 日に拾ってくる原料。おすそ分けをもらっている間は、仕事のぶんに加えて TREAT_PICKUP を拾う
+ * 住人みんなが 1 日に拾ってくる素材。おすそ分けをもらっている間は、仕事のぶんに加えて TREAT_PICKUP を拾う
  */
-export function residentPickupPerDay(rs: readonly ResidentInfo[], now: number): Partial<Record<RawId, number>> {
-  const out: Partial<Record<RawId, number>> = {};
-  const add = (p: Partial<Record<RawId, number>> | undefined, k = 1) => { for (const [r, n] of Object.entries(p ?? {})) out[r as RawId] = (out[r as RawId] ?? 0) + (n ?? 0) * k; };
+export function residentPickupPerDay(rs: readonly ResidentInfo[], now: number): Partial<Record<MatId, number>> {
+  const out: Partial<Record<MatId, number>> = {};
+  const add = (p: Partial<Record<MatId, number>> | undefined, k = 1) => { for (const [r, n] of Object.entries(p ?? {})) out[r as MatId] = (out[r as MatId] ?? 0) + (n ?? 0) * k; };
   for (const r of rs) {
     add(JOB_PICKUP[r.species]);
     if ((r.treatedUntil ?? 0) > now) add(TREAT_PICKUP[r.species]);
@@ -163,22 +164,22 @@ export function jobEffects(rs: readonly ResidentInfo[], size: number) {
 /** 来た訪問者が贈り物を持ってくる確率 */
 export const GIFT_CHANCE = 0.3;
 
-/** その箱庭でとれない（その原料の出る土地が無い）原料 */
-export function missingRaws(e: EnvCounts): RawId[] {
-  const out: RawId[] = [];
-  if (e.wetland === 0) out.push('clay', 'reed');
-  if (e.beach === 0) out.push('sand', 'shell');
-  if (e.rock === 0 && e.waterside === 0) out.push('rock');
-  if (e.rock === 0) out.push('iron_ore');
-  if (e.forest === 0) out.push('log_broad', 'log_conifer', 'foliage');
-  if (e.flowerField === 0) out.push('blossom');
+/**
+ * その箱庭でとりにくい（その素材の出る土地が無い）素材（v0.20）：
+ * 森が無い → 木材、岩場も砂浜も無い → 鉱物、岩場も水辺も無い → 石材。繊維と土は、草地や地面を掘ればどこでもとれる
+ */
+export function scarceMats(e: EnvCounts): MatId[] {
+  const out: MatId[] = [];
+  if (e.forest === 0) out.push('wood');
+  if (e.rock === 0 && e.waterside === 0) out.push('stone');
+  if (e.rock === 0 && e.beach === 0) out.push('mineral');
   return out;
 }
 
-/** 来た訪問者の贈り物（無ければ null）。とれない原料から 1 つ、1〜2 個（鉄鉱石は 1 個） */
-export function visitorGift(e: EnvCounts, rand: () => number): { raw: RawId; n: number } | null {
-  const miss = missingRaws(e);
+/** 来た訪問者の贈り物（無ければ null）。とりにくい素材から 1 つ、1〜2 個 */
+export function visitorGift(e: EnvCounts, rand: () => number): { mat: MatId; n: number } | null {
+  const miss = scarceMats(e);
   if (!miss.length || rand() >= GIFT_CHANCE) return null;
-  const raw = miss[Math.floor(rand() * miss.length)];
-  return { raw, n: raw === 'iron_ore' ? 1 : 1 + Math.floor(rand() * 2) };
+  const mat = miss[Math.floor(rand() * miss.length)];
+  return { mat, n: 1 + Math.floor(rand() * 2) };
 }

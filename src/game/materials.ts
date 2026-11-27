@@ -1,123 +1,99 @@
 /**
- * 原料と素材（設計メモ 7 章）。three.js に頼らない。
- *   原料（12 種類）：土地の型からとる。拾う（放置で少し）か、切る・掘る・摘む（すぐ・景色が減る）
- *   素材（13 種類）：建物の色ごと。原料からボタン 1 つで加工する
- * 持ち物（Farm.inventory）のキー：原料はその id、素材は「m:」＋パレットの名前（例 m:wall）。上限は付けない。
+ * 素材（v0.20。設計メモ 7 章を簡単にした）：木材・繊維・石材・鉱物・土の 5 つだけ。three.js に頼らない。
+ *   v0.19 までの「原料 12 種類 → 加工 → 素材 13 種類（建物の色ごと）」はやめた。加工は無い
+ *   手に入れ方：ブロックを掘る（ブロックごとに素材の割合がある）・木を切る・摘む・刈る・収穫する・拾う（放置で少し）
+ *   建物：直方体ごとに素材がある（グループの名前の頭。build/palette.ts）。色は自由
+ * 持ち物（Farm.inventory）のキー：素材はその id（wood など）、収穫物は作物の id（turnip など）。上限は付けない。
  */
 import type { BuildingCharacter } from '../build/character';
+import { MAT_IDS, type MatId } from '../build/palette';
+import { COBBLE, CONIFER, DIRT, FARMLAND, GRASS, LEAVES, LOG, MUD, PATH, SAND, STONE, WET_FARMLAND } from '../world/blocks';
 
-export type RawId = 'log_broad' | 'log_conifer' | 'foliage' | 'straw' | 'soil' | 'reed' | 'blossom' | 'rock' | 'clay' | 'sand' | 'shell' | 'iron_ore';
+export { MAT_IDS, type MatId };
 
-export interface RawDef { id: RawId; name: string; icon: string; from: string }
-
-export const RAWS: RawDef[] = [
-  { id: 'log_broad', name: '広葉樹の丸太', icon: '🪵', from: '森の低い所の木を切る・落ち枝を拾う' },
-  { id: 'log_conifer', name: '針葉樹の丸太', icon: '🌲', from: '針葉樹を切る・落ち枝を拾う' },
-  { id: 'foliage', name: '葉・つる', icon: '🍃', from: '木を切る・落ち葉を拾う' },
-  { id: 'straw', name: '小麦わら', icon: '🌾', from: '小麦を収穫する' },
-  { id: 'soil', name: '土', icon: '🟫', from: '掘る・整地で削る' },
-  { id: 'reed', name: '葦', icon: '🎋', from: '湿地の葦を刈る（数日で生え戻る）' },
-  { id: 'blossom', name: '花', icon: '🌸', from: '花を摘む' },
-  { id: 'rock', name: '石', icon: '🪨', from: '岩を掘る・水辺の小石を拾う' },
-  { id: 'clay', name: '粘土', icon: '🏺', from: '湿地の泥を掘る' },
-  { id: 'sand', name: '砂', icon: '⏳', from: '砂を掘る・波打ち際で拾う' },
-  { id: 'shell', name: '貝殻', icon: '🐚', from: '波打ち際で拾う' },
-  { id: 'iron_ore', name: '鉄鉱石', icon: '⛓', from: '岩を深く掘る（まれ）' },
+export interface MatDef { id: MatId; name: string; icon: string; from: string }
+export const MATS: MatDef[] = [
+  { id: 'wood', name: '木材', icon: '🪵', from: '木を切る・森で落ち枝を拾う・丸太のブロックを掘る' },
+  { id: 'fiber', name: '繊維', icon: '🌾', from: '葉・わら・葦・花：木を切る・小麦を収穫する・葦を刈る・花を摘む・草地や葉のブロックを掘る' },
+  { id: 'stone', name: '石材', icon: '🪨', from: '岩や石畳を掘る・水辺の小石を拾う' },
+  { id: 'mineral', name: '鉱物', icon: '💎', from: '砂を掘る・岩を深く掘る（まれ）・波打ち際で砂や貝殻を拾う' },
+  { id: 'soil', name: '土', icon: '🟫', from: '土・泥・畑・道を掘る（泥は粘土を多く含む）' },
 ];
-export const RAW = Object.fromEntries(RAWS.map((r) => [r.id, r])) as Record<RawId, RawDef>;
+export const MAT = Object.fromEntries(MATS.map((m) => [m.id, m])) as Record<MatId, MatDef>;
+export const MAT_NAME = Object.fromEntries(MATS.map((m) => [m.id, m.name])) as Record<MatId, string>;
+export const isMat = (k: string): k is MatId => (MAT_IDS as string[]).includes(k);
 
-/** 素材：パレットの名前（build/palette.ts）。表示名と絵文字（アイコン画像が無い時に使う） */
-export const MATERIALS: { id: string; name: string; icon: string }[] = [
-  { id: 'wall', name: '木の壁', icon: '🟫' },
-  { id: 'plank', name: '明るい木', icon: '🪵' },
-  { id: 'wood', name: '濃い木', icon: '🚪' },
-  { id: 'thatch', name: 'かやぶき', icon: '🌾' },
-  { id: 'leaf', name: '植え込み・つた', icon: '🌿' },
-  { id: 'flower', name: '花の飾り', icon: '💐' },
-  { id: 'stone', name: '石', icon: '🧱' },
-  { id: 'roof_blue', name: '青い屋根', icon: '🟦' },
-  { id: 'roof', name: '赤い屋根', icon: '🟥' },
-  { id: 'brick', name: 'れんが', icon: '🧱' },
-  { id: 'white', name: 'しっくい', icon: '⬜' },
-  { id: 'glass', name: 'ガラス', icon: '🪟' },
-  { id: 'dark', name: '鉄', icon: '⛓' },
-];
-export const MATERIAL_NAME = Object.fromEntries(MATERIALS.map((m) => [m.id, m.name])) as Record<string, string>;
-export const matKey = (id: string) => `m:${id}`;
+/** 素材の量（素材 → 数） */
+export type MatAmounts = Partial<Record<MatId, number>>;
+/** 「木材 3・繊維 2」 */
+export const matsText = (a: MatAmounts) => MAT_IDS.filter((m) => (a[m] ?? 0) > 0).map((m) => `${MAT_NAME[m]} ${a[m]}`).join('・');
 
-/** 加工のしかた：原料 n 個 → 素材 out 個。同じ素材に 2 通りあるものもある */
-export interface Recipe { id: string; mat: string; inputs: [RawId, number][]; out: number }
-export const RECIPES: Recipe[] = [
-  { id: 'wall-broad', mat: 'wall', inputs: [['log_broad', 1]], out: 4 },
-  { id: 'wall-conifer', mat: 'wall', inputs: [['log_conifer', 1]], out: 4 },
-  { id: 'plank', mat: 'plank', inputs: [['log_broad', 1]], out: 4 },
-  { id: 'wood', mat: 'wood', inputs: [['log_conifer', 1]], out: 4 },
-  { id: 'thatch-straw', mat: 'thatch', inputs: [['straw', 2]], out: 1 },
-  { id: 'thatch-reed', mat: 'thatch', inputs: [['reed', 1]], out: 1 },
-  { id: 'leaf', mat: 'leaf', inputs: [['foliage', 1]], out: 2 },
-  { id: 'flower', mat: 'flower', inputs: [['blossom', 1]], out: 2 },
-  { id: 'stone', mat: 'stone', inputs: [['rock', 1]], out: 4 },
-  { id: 'roof_blue', mat: 'roof_blue', inputs: [['rock', 2]], out: 3 },
-  { id: 'roof', mat: 'roof', inputs: [['clay', 2]], out: 3 },
-  { id: 'brick', mat: 'brick', inputs: [['clay', 1]], out: 2 },
-  { id: 'white-shell', mat: 'white', inputs: [['shell', 1]], out: 2 },
-  { id: 'white-rock', mat: 'white', inputs: [['rock', 2]], out: 1 },
-  { id: 'glass', mat: 'glass', inputs: [['sand', 2]], out: 1 },
-  { id: 'dark', mat: 'dark', inputs: [['iron_ore', 1]], out: 2 },
-];
-export const RECIPE = Object.fromEntries(RECIPES.map((r) => [r.id, r])) as Record<string, Recipe>;
-
-export type Inventory = Record<string, number>;
-const have = (inv: Inventory, k: string) => inv[k] ?? 0;
-
-/** その加工が何回できるか */
-export const craftable = (inv: Inventory, r: Recipe) => Math.min(...r.inputs.map(([k, n]) => Math.floor(have(inv, k) / n)));
-
-/** 加工する（times 回、できる分だけ）。実際にした回数を返す */
-export function craft(inv: Inventory, r: Recipe, times = 1): number {
-  const t = Math.max(0, Math.min(times, craftable(inv, r)));
-  if (!t) return 0;
-  for (const [k, n] of r.inputs) inv[k] = have(inv, k) - n * t;
-  inv[matKey(r.mat)] = have(inv, matKey(r.mat)) + r.out * t;
-  return t;
+/**
+ * ブロックを掘る・削ると手に入る素材（ブロック 1 つあたり。割合の合計が 1）。
+ * 端数はたまっていき、1 になった所で持ち物に入る（たとえば草地を 5 回掘ると、土 4・繊維 1）
+ */
+export const BLOCK_YIELD: Record<number, MatAmounts> = {
+  [GRASS]: { soil: 0.8, fiber: 0.2 },
+  [DIRT]: { soil: 1 },
+  [FARMLAND]: { soil: 1 }, [WET_FARMLAND]: { soil: 1 }, [PATH]: { soil: 1 },
+  [MUD]: { soil: 0.8, mineral: 0.2 },
+  [STONE]: { stone: 1 },
+  [COBBLE]: { stone: 1 },
+  [SAND]: { mineral: 0.7, soil: 0.3 },
+  [LOG]: { wood: 1 },
+  [LEAVES]: { fiber: 1 }, [CONIFER]: { fiber: 1 },
+};
+/** ブロックを置く・道を敷くのに要る素材（割合のいちばん大きい素材を 1 つ） */
+export function blockCost(block: number): MatAmounts | null {
+  const y = BLOCK_YIELD[block];
+  if (!y) return null;
+  let best: MatId | null = null;
+  for (const m of MAT_IDS) if ((y[m] ?? 0) > (best ? y[best] ?? 0 : 0)) best = m;
+  return best ? { [best]: 1 } : null;
 }
+
+/** 木を 1 本切ると（くまがいると木材がもう 1） */
+export const TREE_YIELD: MatAmounts = { wood: 3, fiber: 2 };
 
 /**
  * 建物のコスト（設計メモ 0 章・9 章）：素材は見える表面の広さ（2 マス²につき 1 素材、切り上げ）、発見ポイントは体積の段階。
- * v0.16.1：1 マス²につき 1 素材だと、見本の家 1 棟に素材が約 140 個（赤い屋根だけで粘土 43 個）要って重すぎたので半分にした
+ * v0.16.1：1 マス²につき 1 素材だと重すぎたので半分にした
  */
 export const MATS_PER_AREA = 0.5;
-export interface BuildCost { mats: Record<string, number>; points: number }
+export interface BuildCost { mats: MatAmounts; points: number }
 
 /** 発見ポイント：体積（マス³）が大きいほど多く、2〜15 */
 export const buildPoints = (volume: number) => Math.max(2, Math.min(15, Math.round(2 + Math.sqrt(Math.max(0, volume)) * 0.8)));
 
-export function buildCost(c: BuildingCharacter): BuildCost {
-  const mats: Record<string, number> = {};
-  for (const [m, a] of Object.entries(c.areas)) { const n = Math.ceil(a * MATS_PER_AREA - 1e-9); if (n > 0) mats[m] = n; }
+export function buildCost(c: Pick<BuildingCharacter, 'areas' | 'volume'>): BuildCost {
+  const mats: MatAmounts = {};
+  for (const m of MAT_IDS) { const n = Math.ceil((c.areas[m] ?? 0) * MATS_PER_AREA - 1e-9); if (n > 0) mats[m] = n; }
   return { mats, points: buildPoints(c.volume) };
 }
 
+export type Inventory = Record<string, number>;
+const have = (inv: Inventory, k: string) => inv[k] ?? 0;
+
 /** 足りない素材（素材 → 足りない数）。足りていれば空 */
-export function missingMats(inv: Inventory, cost: BuildCost): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const [m, n] of Object.entries(cost.mats)) { const lack = n - have(inv, matKey(m)); if (lack > 0) out[m] = lack; }
+export function missingMats(inv: Inventory, cost: { mats: MatAmounts }): MatAmounts {
+  const out: MatAmounts = {};
+  for (const m of MAT_IDS) { const lack = (cost.mats[m] ?? 0) - have(inv, m); if (lack > 0) out[m] = lack; }
   return out;
 }
 
 /** 素材を払う（足りなければ何もしないで false） */
-export function payMats(inv: Inventory, cost: BuildCost): boolean {
+export function payMats(inv: Inventory, cost: { mats: MatAmounts }): boolean {
   if (Object.keys(missingMats(inv, cost)).length) return false;
-  for (const [m, n] of Object.entries(cost.mats)) inv[matKey(m)] = have(inv, matKey(m)) - n;
+  for (const m of MAT_IDS) if (cost.mats[m]) inv[m] = have(inv, m) - cost.mats[m]!;
   return true;
 }
 
 /** 素材を戻す（建物を片付けた時。取られるのは時間だけ） */
-export function refundMats(inv: Inventory, cost: BuildCost) {
-  for (const [m, n] of Object.entries(cost.mats)) inv[matKey(m)] = have(inv, matKey(m)) + n;
+export function refundMats(inv: Inventory, cost: { mats: MatAmounts }) {
+  for (const m of MAT_IDS) if (cost.mats[m]) inv[m] = have(inv, m) + cost.mats[m]!;
 }
 
-/** 足す（原料を手に入れた時） */
+/** 足す */
 export const gain = (inv: Inventory, k: string, n = 1) => { inv[k] = have(inv, k) + n; };
 /** 使う（足りなければ false で何もしない） */
 export function spend(inv: Inventory, k: string, n = 1): boolean {
@@ -126,26 +102,54 @@ export function spend(inv: Inventory, k: string, n = 1): boolean {
   return true;
 }
 
-/**
- * 拾う（放置で少し）：箱庭の 1 日あたりに拾える数。土地の型の列の数から
- *   森 → 落ち枝（丸太）・落ち葉、水辺 → 川原の小石、砂浜 → 砂・貝殻
- */
-export function pickupPerDay(e: { forest: number; waterside: number; beach: number }): Partial<Record<RawId, number>> {
-  return {
-    log_broad: e.forest / 800, log_conifer: e.forest / 1600, foliage: e.forest / 300,
-    rock: e.waterside / 400,
-    sand: e.beach / 300, shell: e.beach / 800,
-  };
+/** 端数のある量を足す（frac に端数をためる。キーは prefix＋素材）。持ち物に入った数を返す */
+export function addFractional(inv: Inventory, frac: Record<string, number>, amounts: MatAmounts, times = 1, prefix = ''): MatAmounts {
+  const got: MatAmounts = {};
+  for (const m of MAT_IDS) {
+    const r = amounts[m];
+    if (!r) continue;
+    const v = (frac[prefix + m] ?? 0) + r * times;
+    const whole = Math.floor(v + 1e-9);
+    frac[prefix + m] = v - whole;
+    if (whole > 0) { gain(inv, m, whole); got[m] = whole; }
+  }
+  return got;
 }
 
-/** 拾った分を足す。frac：端数のたまり（保存する）。dayFrac：進めた日数。足した原料の数を返す */
-export function addPickup(inv: Inventory, frac: Record<string, number>, perDay: Partial<Record<RawId, number>>, dayFrac: number): number {
-  let total = 0;
-  for (const [k, r] of Object.entries(perDay)) {
-    const v = (frac[k] ?? 0) + (r ?? 0) * dayFrac;
-    const whole = Math.floor(v);
-    frac[k] = v - whole;
-    if (whole > 0) { gain(inv, k, whole); total += whole; }
+/**
+ * 拾う（放置で少し）：箱庭の 1 日あたりに拾える数。土地の型の列の数から
+ *   森 → 落ち枝（木材）・落ち葉（繊維）、水辺 → 川原の小石（石材）、砂浜 → 砂と貝殻（鉱物）
+ */
+export function pickupPerDay(e: { forest: number; waterside: number; beach: number }): MatAmounts {
+  return { wood: e.forest / 600, fiber: e.forest / 300, stone: e.waterside / 400, mineral: e.beach / 250 };
+}
+
+/** 拾った分を足す。frac：端数のたまり（保存する）。dayFrac：進めた日数。足した数を返す */
+export function addPickup(inv: Inventory, frac: Record<string, number>, perDay: MatAmounts, dayFrac: number): number {
+  const got = addFractional(inv, frac, perDay, dayFrac);
+  return Object.values(got).reduce((a, b) => a + (b ?? 0), 0);
+}
+
+/**
+ * v0.19 までの持ち物（原料 12 種類・素材 13 種類「m:色」）を、5 つの素材に移す（保存の版 6）。
+ * 原料 1 つ ≒ 素材 1 つ。加工した素材は、作るのに使った原料の数に戻す（丸太 1 → 壁 4 なら、壁 4 → 木材 1）
+ */
+const OLD_TO_MAT: Record<string, [MatId, number]> = {
+  log_broad: ['wood', 1], log_conifer: ['wood', 1], foliage: ['fiber', 1], straw: ['fiber', 1], reed: ['fiber', 1], blossom: ['fiber', 1],
+  soil: ['soil', 1], clay: ['soil', 1], rock: ['stone', 1], sand: ['mineral', 1], shell: ['mineral', 1], iron_ore: ['mineral', 2],
+  'm:wall': ['wood', 0.25], 'm:plank': ['wood', 0.25], 'm:wood': ['wood', 0.25], 'm:thatch': ['fiber', 1], 'm:leaf': ['fiber', 0.5], 'm:flower': ['fiber', 0.5],
+  'm:stone': ['stone', 0.25], 'm:roof_blue': ['stone', 0.67], 'm:roof': ['soil', 0.67], 'm:brick': ['soil', 0.5],
+  'm:white': ['mineral', 0.5], 'm:glass': ['mineral', 2], 'm:dark': ['mineral', 0.5],
+};
+export function migrateInventory(inv: Inventory): Inventory {
+  const out: Inventory = {};
+  const add: Partial<Record<MatId, number>> = {};
+  for (const [k, n] of Object.entries(inv)) {
+    const to = OLD_TO_MAT[k];
+    if (to) add[to[0]] = (add[to[0]] ?? 0) + n * to[1];
+    else if (!isMat(k)) out[k] = n; // 収穫物などはそのまま
+    else add[k] = (add[k] ?? 0) + n;
   }
-  return total;
+  for (const m of MAT_IDS) { const v = Math.round(add[m] ?? 0); if (v > 0) out[m] = v; }
+  return out;
 }

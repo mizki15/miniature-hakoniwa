@@ -56,8 +56,8 @@ describe('tool registry (v0.18)', () => {
     expect(water.check(ctx, at(WET_FARMLAND)).msg).toBe('もう湿っています（延長）');
     expect(harvest.check(ctx, at(WET_FARMLAND)).msg).toBe('小麦：育ち具合 0%');
     ctx.farm.crops.get(5)!.progress = 1;
-    expect(harvest.apply(ctx, at(WET_FARMLAND))).toBe('小麦を収穫しました（わら +2）');
-    expect(inv.straw).toBe(2);
+    expect(harvest.apply(ctx, at(WET_FARMLAND))).toBe('小麦を収穫しました（わら：繊維 +2）');
+    expect(inv.fiber).toBe(2);
     expect(log).toContain('goal:harvest');
     expect(harvest.check(ctx, at(WET_FARMLAND)).msg).toBe('作物がありません');
   });

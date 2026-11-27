@@ -17,7 +17,7 @@ describe('buildPrompt example', () => {
     // 例の屋根の板 2 枚は「へ」の字：内側の端が高く、外側の端が低い（X が反転する形式なので、回転の符号を間違えやすい）
     const r = example();
     if (!r.ok) throw new Error('example failed');
-    const roofs = r.design.cubes.filter((c) => c.color === 'roof');
+    const roofs = r.design.cubes.filter((c) => c.color === '#c8403c');
     expect(roofs.length).toBe(2);
     for (const { m } of roofs) {
       const at = (x: number) => [0, 1, 2].map((k) => m[k * 4] * x + m[k * 4 + 1] * 0.5 + m[k * 4 + 2] * 0.5 + m[k * 4 + 3]);
@@ -35,7 +35,7 @@ describe('buildPrompt example roof', () => {
     if (!r.ok) throw new Error('example failed');
     const wallTop = 32 / 16, wallEdge = 20 / 16;
     for (const { m, color } of r.design.cubes) {
-      if (color !== 'roof') continue;
+      if (color !== '#c8403c') continue;
       const at = (x: number) => [0, 1, 2].map((k) => m[k * 4] * x + m[k * 4 + 1] * 0 + m[k * 4 + 2] * 0.5 + m[k * 4 + 3]);
       const [a, b] = [at(0), at(1)];
       const [inner, outer] = Math.abs(a[0]) < Math.abs(b[0]) ? [a, b] : [b, a];

@@ -5,7 +5,7 @@
  */
 import type { MeshData } from '../world/mesher';
 import { hexToLinear } from '../world/blocks';
-import { paletteHex } from './palette';
+import { cubeGlass, cubeHex } from './palette';
 import type { BuildingDesign } from './geoParse';
 
 type V = [number, number, number];
@@ -20,8 +20,8 @@ export function buildBuildingMesh(d: BuildingDesign): MeshData {
     const apply = (p: V): V => [0, 1, 2].map((r) => m[r * 4] * p[0] + m[r * 4 + 1] * p[1] + m[r * 4 + 2] * p[2] + m[r * 4 + 3]) as V;
     // 行列が裏返し（行列式が負）なら、三角形の向きを逆にする
     const det = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8]) + m[2] * (m[4] * m[9] - m[5] * m[8]);
-    const rgb = hexToLinear(paletteHex(c.color) ?? 0xff00ff);
-    const kind = c.color === 'glass' ? WINDOW_VEG : 0;
+    const rgb = hexToLinear(cubeHex(c));
+    const kind = cubeGlass(c) ? WINDOW_VEG : 0;
     for (let a = 0; a < 3; a++) {
       const u = (a + 1) % 3, v = (a + 2) % 3;
       for (const s of [0, 1]) {

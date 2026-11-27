@@ -13,7 +13,7 @@ const v3 = (): SaveData => ({
 
 describe('save v5', () => {
   it('versionIs5', () => {
-    expect(SAVE_VERSION).toBe(5);
+    expect(SAVE_VERSION).toBe(6);
   });
   it('roundtrips', async () => {
     const d = v3();
@@ -30,7 +30,7 @@ describe('save v5', () => {
   it('migratesV2', async () => {
     const { buildings: _, ...old } = v3();
     const loaded = await decodeSave(await encodeSave({ ...old, version: 2 } as SaveData));
-    expect(loaded.version).toBe(5);
+    expect(loaded.version).toBe(6);
     expect(loaded.buildings).toEqual({ designs: [], placed: [] });
   });
   it('rejects v1 with OldSaveError', async () => {
@@ -50,7 +50,7 @@ describe('v3 → v4: the 4×4 frame becomes 5×5 with the start in the middle', 
       buildings: { designs: [], placed: [['abcd', 90, 100, 1], ['efgh', 91, 101, 0, 0.5]] },
     };
     const d = await decodeSave(await encodeSave(old));
-    expect(d.version).toBe(5);
+    expect(d.version).toBe(6);
     expect(d.plots).toBe((1 << START_PLOT) | (1 << 13) | (1 << 6));
     expect(d.edits).toEqual([164 + 154 * 320 + 12 * 320 * 320, 2]);
     expect(d.residents).toEqual([['rabbit', 134.5, 154.25, 'こむぎ']]);
@@ -67,10 +67,22 @@ describe('v4 → v5: land rights become discovery points (×10)', () => {
     const d = await decodeSave(await encodeSave(old));
     expect(d.progress.points).toBe(70 - 60);
     expect(d.progress.rightsUsed).toBe(0);
-    expect(d.farm.inventory).toEqual({ wheat: 2, log_broad: 6 });
+    // v5 で広葉樹の丸太に、v6（v0.20）で木材に
+    expect(d.farm.inventory).toEqual({ wheat: 2, wood: 6 });
   });
   it('never goes below zero', async () => {
     const d = await decodeSave(await encodeSave({ ...v3(), version: 4, progress: { points: 2, rightsUsed: 1, unlocks: [], firsts: [], newMarks: [] } }));
     expect(d.progress.points).toBe(0);
+  });
+});
+
+describe('v5 → v6: raws and 13 materials become the five (v0.20)', () => {
+  it('moves the inventory and clears pickup fractions', async () => {
+    const { decodeSave: dec, encodeSave: enc } = await import('./format');
+    const base = { version: 5, savedAt: 0, world: { seed: 1, height: 64, detail: 3, flowerStyle: 'lowpoly', params: {} as never }, plots: 1, edits: [], progress: { points: 0, rightsUsed: 0, unlocks: [], firsts: [], newMarks: [] }, dex: {}, residents: [], buildings: { designs: [], placed: [] } };
+    const d = await dec(await enc({ ...base, farm: { simMs: 0, inventory: { log_broad: 2, 'm:wall': 4, rock: 3, turnip: 1 }, crops: [], saplings: [], wet: [], pickup: { at: 0, frac: { rock: 0.5 } } } } as never));
+    expect(d.version).toBe(6);
+    expect(d.farm.inventory).toEqual({ wood: 3, stone: 3, turnip: 1 });
+    expect(d.farm.pickup?.frac).toEqual({});
   });
 });

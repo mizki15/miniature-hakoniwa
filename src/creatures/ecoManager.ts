@@ -10,7 +10,7 @@ import { SPECIES, SPECIES_LIST, NAMES, makeResident, type Animal, type Species }
 import { pickName, placeResident, restorePlace } from './place';
 import { Visitor, type TreeShape, type VisitorPlace } from './visitors';
 import { SATISFIED_POINTS, TREAT_MS, jobEffects, pickShareCrop, visitorGift, type ResidentInfo } from '../eco/residents';
-import type { RawId } from '../game/materials';
+import type { MatId } from '../game/materials';
 import type { Fireflies } from './fireflies';
 
 export interface EcoDeps {
@@ -25,8 +25,8 @@ export interface EcoDeps {
   onChanged: () => void;
   /** 発見ポイントが入った（訪問者が来た時など） */
   onPoints?: (n: number) => void;
-  /** 訪問者が、その箱庭でとれない原料を運んできた（v0.16.1） */
-  onGift?: (id: VisitorId, raw: RawId, n: number) => void;
+  /** 訪問者が、その箱庭でとれない素材を運んできた（v0.16.1） */
+  onGift?: (id: VisitorId, mat: MatId, n: number) => void;
 }
 
 /**
@@ -203,9 +203,9 @@ export class EcoManager {
     for (const id of r.arrive) {
       if (!this.addVisitor(id, nowReal + stayMs(Math.random) * jobs.stayMul)) continue;
       arrived++;
-      // その箱庭でとれない原料を、たまに運んでくる
+      // その箱庭でとれない素材を、たまに運んでくる
       const gift = visitorGift(this.env(), Math.random);
-      if (gift) this.deps.onGift?.(id, gift.raw, gift.n);
+      if (gift) this.deps.onGift?.(id, gift.mat, gift.n);
     }
     if (arrived) this.deps.onPoints?.(arrived * VISITOR_POINTS); // 訪問者が来るたびに少し
     // 生き物の多さを上げていると、1 回に何匹も引っ越してくる。知らせは 1 回にまとめる
@@ -386,7 +386,7 @@ export class EcoManager {
     return this.animals.map((a) => (a.treatedUntil ? [a.species, ...a.colXZ, a.name, a.treatedUntil] : [a.species, ...a.colXZ, a.name]));
   }
 
-  /** 住人の様子（仕事の効き目・拾う原料に使う。eco/residents.ts） */
+  /** 住人の様子（仕事の効き目・拾う素材に使う。eco/residents.ts） */
   residentInfos(): ResidentInfo[] {
     const N = this.world?.size ?? 0;
     return this.animals.map((a) => { const [x, z] = a.colXZ; return { species: a.species, col: x + z * N, treatedUntil: a.treatedUntil }; });
@@ -394,7 +394,7 @@ export class EcoManager {
 
   /**
    * おすそ分け（v0.16.1）：収穫物を 1 つあげる。好きなものがあればそれ。あげた物を返す（無ければ null）。
-   * その住人は箱庭の 3 日間、原料を多く拾ってくる
+   * その住人は箱庭の 3 日間、素材を多く拾ってくる
    */
   share(a: Animal, inv: Record<string, number>, now: number): string | null {
     const crop = pickShareCrop(inv, a.favorite);

@@ -3,6 +3,7 @@ import type { CropKind } from '../game/farm';
 import type { BuildingDesign } from '../build/geoParse';
 import type { Rot } from '../build/placement';
 import type { GoalsState } from '../eco/goals';
+import { migrateInventory } from '../game/materials';
 import { FIELD_SHIFT, FRAME, OLD_FRAME, PLOT, PLOTS_PER_SIDE } from '../world/plots';
 
 /**
@@ -10,7 +11,7 @@ import { FIELD_SHIFT, FRAME, OLD_FRAME, PLOT, PLOTS_PER_SIDE } from '../world/pl
  * 地形はシード値から毎回同じものを作れるので、「生成の設定＋変えた所（差分）」だけを保存する。
  * 形式を変えた時は SAVE_VERSION を上げ、migrate() で古い形式を読めるようにする。
  */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 export interface SaveData {
   version: number;
@@ -75,7 +76,14 @@ function migrate(d: SaveData): SaveData {
   if (d.version < 4) d = toFrame5(d);
   // v4 → v5：土地の権利をなくし、発見ポイントに一本化（10 倍にし、使った権利 1 つ＝30 を引く）。木材は広葉樹の丸太に
   if (d.version < 5) d = toPoints10(d);
+  // v5 → v6：原料 12 種類・素材 13 種類をやめ、素材 5 つ（木材・繊維・石材・鉱物・土）に（v0.20）
+  if (d.version < 6) d = toMats6(d);
   return d;
+}
+
+export function toMats6(d: SaveData): SaveData {
+  const pickup = d.farm.pickup ? { ...d.farm.pickup, frac: {} } : undefined;
+  return { ...d, version: 6, farm: { ...d.farm, inventory: migrateInventory(d.farm.inventory), ...(pickup ? { pickup } : {}) } };
 }
 
 export function toPoints10(d: SaveData): SaveData {

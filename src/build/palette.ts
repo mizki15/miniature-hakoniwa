@@ -47,3 +47,51 @@ export function colorOfName(boneName: string): string | null {
   for (const p of BY_LENGTH) if (n === p.name || n.startsWith(p.name + '_')) return p.name;
   return null;
 }
+
+// ---------------------------------------------------------------- 素材 5 つと、自由な色（v0.20）
+
+/** 素材（v0.20。原料と 13 色の素材をやめて 5 つに）：木材・繊維・石材・鉱物・土 */
+export type MatId = 'wood' | 'fiber' | 'stone' | 'mineral' | 'soil';
+export const MAT_IDS: MatId[] = ['wood', 'fiber', 'stone', 'mineral', 'soil'];
+export const isMatId = (v: unknown): v is MatId => typeof v === 'string' && (MAT_IDS as string[]).includes(v);
+/** 名前だけで色を書かなかった時の色 */
+export const MAT_DEFAULT_HEX: Record<MatId, number> = { wood: 0xa07a4e, fiber: 0xc9a85a, stone: 0x9298a0, mineral: 0xf6f2ea, soil: 0xa85a44 };
+/** 素材の自然度（建物の性格の「自然」。1 人の手〜5 自然） */
+export const MAT_NATURE: Record<MatId, number> = { wood: 4, fiber: 5, stone: 3, soil: 2, mineral: 1 };
+/** v0.19 までのパレットの名前 → 素材（古い建物・AI が昔の名前で書いた建物も読めるように） */
+export const LEGACY_MAT: Record<string, MatId> = {
+  wall: 'wood', wood: 'wood', plank: 'wood', thatch: 'fiber', leaf: 'fiber', flower: 'fiber',
+  stone: 'stone', roof_blue: 'stone', roof: 'soil', brick: 'soil', white: 'mineral', glass: 'mineral', dark: 'mineral',
+};
+
+/** 直方体の色と素材。color はパレットの名前（古い形）か "#rrggbb"。glass：窓（夜に光る・灯りの星に数える） */
+export interface CubeColor { color: string; mat: MatId; glass?: true }
+
+/**
+ * グループの名前から色と素材を決める（v0.20）。決まらなければ null。
+ *   「素材_rrggbb」「素材_rrggbb_何か」：その素材で、その色（例 wood_8a5a3c_door、stone_6f7780）
+ *   「素材」「素材_何か」：その素材の、いつもの色（例 fiber_roof）
+ *   昔のパレットの名前（wall・roof・glass など）：その色と、決まった素材（LEGACY_MAT）
+ *   名前のどこかに glass という区切りがあれば窓（例 mineral_bfd8e0_glass）
+ */
+export function parseColorName(boneName: string): CubeColor | null {
+  const n = boneName.normalize('NFKC').toLowerCase();
+  if (!/^[a-z0-9_]+$/.test(n)) return null;
+  const parts = n.split('_');
+  const glass = parts.includes('glass') ? { glass: true as const } : {};
+  const m = /^(wood|fiber|stone|mineral|soil)_([0-9a-f]{6})(_|$)/.exec(n);
+  if (m) return { color: `#${m[2]}`, mat: m[1] as MatId, ...glass };
+  const legacy = colorOfName(n);
+  if (legacy) return { color: legacy, mat: LEGACY_MAT[legacy], ...(legacy === 'glass' ? { glass: true as const } : glass) };
+  if (isMatId(parts[0])) return { color: `#${MAT_DEFAULT_HEX[parts[0]].toString(16).padStart(6, '0')}`, mat: parts[0], ...glass };
+  return null;
+}
+
+/** 色として読めるか（パレットの名前か "#rrggbb"） */
+export const isCubeColor = (c: unknown): c is string => isPaletteName(c) || (typeof c === 'string' && /^#[0-9a-f]{6}$/.test(c));
+/** 直方体の色（16 進の数） */
+export const cubeHex = (c: { color: string }) => (c.color.startsWith('#') ? parseInt(c.color.slice(1), 16) : paletteHex(c.color) ?? 0xff00ff);
+/** 直方体の素材（古い建物はパレットの名前から） */
+export const cubeMat = (c: { color: string; mat?: MatId }): MatId => c.mat ?? LEGACY_MAT[c.color] ?? 'wood';
+/** 窓か */
+export const cubeGlass = (c: { color: string; glass?: boolean }) => c.glass === true || c.color === 'glass';

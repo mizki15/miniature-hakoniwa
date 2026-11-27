@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildingTraits } from './traits';
 import type { BuildingCharacter } from './character';
 
-const ch = (o: Partial<BuildingCharacter>): BuildingCharacter => ({ areas: {}, totalArea: 0, footprint: 9, height: 4, volume: 20, nature: 3, light: 0, size: 2, ...o });
+const ch = (o: Partial<BuildingCharacter>): BuildingCharacter => ({ areas: {}, glass: 0, totalArea: 0, footprint: 9, height: 4, volume: 20, nature: 3, light: 0, size: 2, ...o });
 
 describe('buildingTraits', () => {
   it('three rows: nature, light, size', () => {

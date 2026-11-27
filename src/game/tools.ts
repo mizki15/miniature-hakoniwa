@@ -1,6 +1,6 @@
 import { DIRT, FARMLAND, GRASS, WET_FARMLAND } from '../world/blocks';
 import { CROPS, CROP_KINDS, type CropKind, type Farm } from './farm';
-import type { RawId } from './materials';
+import type { MatId } from './materials';
 
 /**
  * 道具の定義（v0.18。レジストリ）：名前・アイコン・説明・グループと、使えるかの判定（check）・使った時の処理（apply）を 1 か所に持つ。
@@ -29,7 +29,7 @@ export interface ToolCtx {
   addFarmland(col: number): void;
   /** 作物の作り直しの印（数が変わった） */
   markCrops(): void;
-  gain(raw: RawId, n: number): void;
+  gain(mat: MatId, n: number): void;
   /** 小麦を収穫した時に、わらがいくつ多いか（ひつじの仕事） */
   extraStraw(): number;
   /** 季節の目標に数える */
@@ -113,7 +113,7 @@ const harvest: ToolDef<'harvest'> = {
     if (!kind) return null;
     ctx.goalEvent({ k: 'harvest', crop: kind });
     // ひつじがいると、わらが 1 つ多い（住人の仕事）
-    if (kind === 'wheat') { const n = 1 + ctx.extraStraw(); ctx.gain('straw', n); return `小麦を収穫しました（わら +${n}）`; }
+    if (kind === 'wheat') { const n = 1 + ctx.extraStraw(); ctx.gain('fiber', n); return `小麦を収穫しました（わら：繊維 +${n}）`; }
     return `${CROPS[kind].name}を収穫しました`;
   },
 };

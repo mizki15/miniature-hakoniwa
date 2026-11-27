@@ -15,7 +15,7 @@ import type { SaveData } from '../save/format';
 import { sanitizeDesign, type BuildingDesign } from '../build/geoParse';
 import { buildBuildingMesh } from '../build/geoMesh';
 import { DAY_MS, fadeFlowers, grassDue, natureDays, spreadTrees } from './nature';
-import { MATERIAL_NAME, RAW, addPickup, buildCost, gain, missingMats, payMats, pickupPerDay, refundMats, spend, type BuildCost, type RawId } from './materials';
+import { BLOCK_YIELD, MAT_NAME, TREE_YIELD, addFractional, addPickup, blockCost, buildCost, gain, matsText, missingMats, payMats, pickupPerDay, refundMats, type BuildCost, type MatAmounts, type MatId } from './materials';
 import type { BuildingCharacter } from '../build/character';
 import { buildingWildWeight, countEnvironment, houseSite, lightReach, type Light } from '../eco/environment';
 import { jobEffects, likedBy, residentPickupPerDay, type ResidentInfo } from '../eco/residents';
@@ -43,7 +43,7 @@ interface Site {
   workAt: [number, number, number];
 }
 
-/** 置けるブロック（「ブロックを置く」で選ぶ）。置くには原料が要る（BLOCK_COST） */
+/** 置けるブロック（「ブロックを置く」で選ぶ）。置くには素材が要る（BLOCK_COST） */
 export const PLACE_BLOCKS: { id: number; name: string; icon: string }[] = [
   { id: DIRT, name: '土', icon: '🟫' }, // 草地のブロックは置けない。土から 1 日ほどで草が生える（v0.13）
   { id: STONE, name: '石', icon: '🪨' },
@@ -81,20 +81,10 @@ const IRON_DEPTH = 3, IRON_CHANCE = 0.12;
 /** 刈った葦が生え戻るまで */
 const REED_REGROW_MS = 3 * 24 * 3600 * 1000;
 
-/** 掘る・削るとブロックから手に入る原料 */
-function rawOfBlock(t: number): RawId | null {
-  if (t === GRASS || t === DIRT || t === FARMLAND || t === WET_FARMLAND || t === PATH) return 'soil';
-  if (t === STONE || t === COBBLE) return 'rock';
-  if (t === SAND) return 'sand';
-  if (t === MUD) return 'clay';
-  if (t === LOG) return 'log_broad';
-  if (t === LEAVES || t === CONIFER) return 'foliage';
-  return null;
-}
-/** ブロックを置く・道を敷くのに要る原料（どれか 1 つを 1 個） */
-const BLOCK_COST: Record<number, RawId[]> = {
-  [DIRT]: ['soil'], [STONE]: ['rock'], [SAND]: ['sand'], [LOG]: ['log_broad', 'log_conifer'], [LEAVES]: ['foliage'], [CONIFER]: ['foliage'], [COBBLE]: ['rock'],
-};
+/** 素材の量を「土 +1・繊維 +1」の形に（増えた分） */
+const plusText = (a: MatAmounts) => Object.entries(a).filter(([, n]) => (n ?? 0) > 0).map(([m, n]) => `${MAT_NAME[m as MatId]} +${n}`).join('・');
+/** 割合を「土 8 割・繊維 2 割」の形に（掘る前の案内） */
+const ratioText = (a: MatAmounts) => Object.entries(a).filter(([, n]) => (n ?? 0) > 0).map(([m, n]) => (n === 1 ? MAT_NAME[m as MatId] : `${MAT_NAME[m as MatId]} ${Math.round((n ?? 0) * 10)} 割`)).join('・');
 
 export const TOOLS: { id: Tool; name: string; icon: string; help: string }[] = [
   { id: 'look', name: '見る', icon: '👁', help: '眺めるだけ。水面をクリックすると波紋' },
@@ -103,7 +93,7 @@ export const TOOLS: { id: Tool; name: string; icon: string; help: string }[] = [
   { id: 'plant', name: '苗木', icon: '🌳', help: '苗木を植える（約 1 日で木になる）' },
   { id: 'flower', name: '花を植える', icon: '🌷', help: '草地に花を植える。花は虫や鳥を呼ぶ' },
   { id: 'pick', name: '摘む・刈る', icon: '✂', help: '花を摘む（花 +1）・湿地の葦を刈る（葦 +1。数日で生え戻る）' },
-  { id: 'fell', name: '木を切る', icon: '🪓', help: `育った木を切って丸太 ${LOGS_PER_TREE} 本と葉 ${FOLIAGE_PER_TREE}。切り株から、また育つ` },
+  { id: 'fell', name: '木を切る', icon: '🪓', help: `育った木を切って${matsText(TREE_YIELD)}。切り株から、また育つ` },
   { id: 'dig', name: '掘る', icon: '🕳', help: 'ブロックを掘る。水のそばを掘ると水が流れ込む' },
   { id: 'raise', name: 'ブロックを置く', icon: '🧱', help: '選んだブロックを置く' },
   { id: 'level', name: '整地', icon: '📏', help: '最初に押したマスの高さに、なぞった所を削る・盛る' },
@@ -235,7 +225,7 @@ export class GameController {
   /** 拾う（放置で少し）：最後に足した時刻と、端数のたまり */
   private pickupAt: number | undefined = undefined;
   private pickupFrac: Record<string, number> = {};
-  /** 閉じていた間などに拾った原料の数（知らせに使う。読んだら 0 に戻す） */
+  /** 閉じていた間などに拾った素材の数（知らせに使う。読んだら 0 に戻す） */
   pickedSince = 0;
   private flowerGeos: THREE.BufferGeometry[] = [];
   private flowerShared = false;
@@ -681,7 +671,7 @@ export class GameController {
       const e = countEnvironment({ world: w, ...this.envInput() });
       // 土地から拾うぶんと、住人が拾ってくるぶん（仕事・おすそ分け）
       const perDay = pickupPerDay(e);
-      for (const [k, v] of Object.entries(residentPickupPerDay(this.residents(), f.simMs))) perDay[k as RawId] = (perDay[k as RawId] ?? 0) + (v ?? 0);
+      for (const [k, v] of Object.entries(residentPickupPerDay(this.residents(), f.simMs))) perDay[k as MatId] = (perDay[k as MatId] ?? 0) + (v ?? 0);
       const n = addPickup(f.inventory, this.pickupFrac, perDay, Math.min(7, since / DAY_MS));
       if (n) { this.pickedSince += n; this.unsaved = true; }
     }
@@ -1073,7 +1063,7 @@ export class GameController {
     const cost = this.costOf(d);
     if (!cost) return { ...fail('建物の性格を計算しています…'), box };
     const lack = missingMats(this.farm.inventory, cost);
-    const lackNames = Object.entries(lack).map(([m, n]) => `${MATERIAL_NAME[m] ?? m} ${n}`);
+    const lackNames = Object.entries(lack).map(([m, n]) => `${MAT_NAME[m as MatId] ?? m} ${n}`);
     if (lackNames.length) return { ...fail(`素材が足りません（${lackNames.join('・')}）`), box };
     if (this.wallet.get() < cost.points) return { ...fail(`発見ポイントが足りません（${cost.points} 要ります）`), box };
     return { ok: true, x, y, z, msg: `「${d.name}」を置く（発見ポイント ${cost.points}）`, box };
@@ -1104,7 +1094,7 @@ export class GameController {
       const tx = tc % w.size, tz = Math.floor(tc / w.size), ty = w.heights[tc] - 1;
       const sp = this.farm.saplings.find((s) => s.col === tc);
       if (sp && sp.progress < 1) return res(false, `まだ育っています（${Math.floor(sp.progress * 100)}%）`, tx, ty, tz);
-      return res(true, `木を切る（丸太 +${LOGS_PER_TREE}・葉 +${FOLIAGE_PER_TREE}）`, tx, ty, tz);
+      return res(true, `木を切る（${plusText(TREE_YIELD)}）`, tx, ty, tz);
     }
     // レジストリにある道具（game/tools.ts）
     const def = toolDef(this.tool);
@@ -1139,8 +1129,9 @@ export class GameController {
         const name = PATH_KINDS.find((p) => p.id === this.pathBlock)?.name ?? '道';
         if (t === this.pathBlock) return res(false, `もう${name}です`);
         if (t !== GRASS && t !== DIRT && t !== SAND && !isFarm(t) && t !== PATH && t !== COBBLE) return res(false, '草地・土・砂の所に敷けます');
-        if (BLOCK_COST[this.pathBlock] && this.blockRaw(this.pathBlock) === null) return res(false, `${this.blockCostName(this.pathBlock)}が足りません`);
-        return res(true, BLOCK_COST[this.pathBlock] ? `${name}を敷く（${this.blockCostName(this.pathBlock)} −1）` : `${name}を敷く`);
+        const pc = this.pathCost();
+        if (pc && !this.canPay(pc)) return res(false, `${matsText(pc)}が要ります`);
+        return res(true, pc ? `${name}を敷く（${matsText(pc)}）` : `${name}を敷く`);
       }
       case 'dig':
         if (y === 0) return res(false, '一番下は掘れません');
@@ -1151,8 +1142,8 @@ export class GameController {
           return res(true, '苗木ごと掘る');
         }
         {
-          const raw = rawOfBlock(t);
-          return res(true, raw ? `掘る（${RAW[raw].name} +1）` : '掘る');
+          const y0 = BLOCK_YIELD[t];
+          return res(true, y0 ? `掘る（${ratioText(y0)}）` : '掘る');
         }
       case 'raise': {
         const tx = x + hit.nx, ty = y + hit.ny, tz = z + hit.nz;
@@ -1161,9 +1152,9 @@ export class GameController {
         if (this.buildingCols.has(tx + tz * w.size)) return res(false, '建物があります', tx, ty, tz);
         const there = this.get(tx, ty, tz);
         if (there !== AIR && there !== WATER) return res(false, 'ふさがっています', tx, ty, tz);
-        const need = this.blockRaw(this.block);
-        if (need === null) return res(false, `${this.blockCostName(this.block)}が足りません`, tx, ty, tz);
-        return res(true, `${this.blockName()}を置く（${RAW[need].name} −1）`, tx, ty, tz);
+        const need = blockCost(this.block);
+        if (need && !this.canPay(need)) return res(false, `${matsText(need)}が要ります`, tx, ty, tz);
+        return res(true, `${this.blockName()}を置く${need ? `（${matsText(need)}）` : ''}`, tx, ty, tz);
       }
       case 'level': {
         // 整地は列で見る（坂をなぞると側面に当たることが多いので、面の向きは問わない）
@@ -1249,12 +1240,10 @@ export class GameController {
         this.onGoalEvent?.({ k: 'flower' });
         return `${FLOWER_KINDS.find((f) => f.variant === this.flowerVariant)?.name ?? '花'}を植えました`;
       case 'path': {
-        if (BLOCK_COST[this.pathBlock]) {
-          const need = this.blockRaw(this.pathBlock);
-          if (need === null || !spend(this.farm.inventory, need)) return `${this.blockCostName(this.pathBlock)}が足りません`;
-        }
-        // 前が石畳なら石を戻す（土の道に変える時など）
-        if (this.get(x, y, z) === COBBLE && this.pathBlock !== COBBLE) gain(this.farm.inventory, 'rock');
+        const pc = this.pathCost();
+        if (pc && !payMats(this.farm.inventory, { mats: pc })) return `${matsText(pc)}が要ります`;
+        // 前が石畳なら石材を戻す（土の道に変える時など）
+        if (this.get(x, y, z) === COBBLE && this.pathBlock !== COBBLE) gain(this.farm.inventory, 'stone');
         this.removeFlowersAt(x, z);
         this.farmland.delete(col);
         this.farm.wetUntil.delete(col);
@@ -1266,14 +1255,14 @@ export class GameController {
         if (this.hasFlower(col)) {
           if (!this.planted.has(col)) this.faded.add(col);
           this.removeFlowersAt(x, z);
-          gain(this.farm.inventory, 'blossom');
+          gain(this.farm.inventory, 'fiber');
           this.env();
-          return '花を摘みました（花 +1）';
+          return '花を摘みました（繊維 +1）';
         }
         this.reedCut.set(col, this.farm.simMs + REED_REGROW_MS);
-        gain(this.farm.inventory, 'reed');
+        gain(this.farm.inventory, 'fiber');
         this.groundDirty = true;
-        return '葦を刈りました（葦 +1。数日で生え戻る）';
+        return '葦を刈りました（繊維 +1。数日で生え戻る）';
       }
       case 'fell': {
         // 自然の木：形を消して、同じ種類の若木（切り株から育つ）にする。植えた木：育ち具合を 0 に戻す
@@ -1298,15 +1287,13 @@ export class GameController {
             }
           }
         }
-        // 4・5 番は針葉樹
-        const log: RawId = variant >= 4 ? 'log_conifer' : 'log_broad';
-        // くまがいると、丸太が 1 本多い（住人の仕事）
-        const logs = LOGS_PER_TREE + this.jobs().extraLogs;
-        gain(this.farm.inventory, log, logs);
-        gain(this.farm.inventory, 'foliage', FOLIAGE_PER_TREE);
+        void variant;
+        // くまがいると、木材が 1 つ多い（住人の仕事）
+        const got: MatAmounts = { ...TREE_YIELD, wood: (TREE_YIELD.wood ?? 0) + this.jobs().extraLogs };
+        for (const [m, n] of Object.entries(got)) gain(this.farm.inventory, m, n ?? 0);
         this.markGrowing();
         this.env();
-        return `木を切りました（${RAW[log].name} +${logs}・葉 +${FOLIAGE_PER_TREE}）`;
+        return `木を切りました（${plusText(got)}）`;
       }
       case 'dig': {
         const t0 = this.get(x, y, z);
@@ -1323,14 +1310,14 @@ export class GameController {
           if (this.farm.crops.delete(col)) this.markCrops();
           this.farmland.delete(col);
         }
-        // 掘ったブロックは原料になる。岩を深く掘ると、まれに鉄鉱石
-        const raw = rawOfBlock(t0);
-        if (raw) gain(this.farm.inventory, raw);
+        // 掘ったブロックは素材になる（ブロックごとの割合。端数はたまる）。岩を深く掘ると、まれに鉱物
+        const got = this.digYield(t0);
         const iron = t0 === STONE && w.heights[col] - 1 - y >= IRON_DEPTH && Math.random() < IRON_CHANCE;
-        if (iron) gain(this.farm.inventory, 'iron_ore');
+        if (iron) { gain(this.farm.inventory, 'mineral'); got.mineral = (got.mineral ?? 0) + 1; }
         this.setVoxel(x, y, z, AIR);
         this.flood(x, y, z);
-        return iron ? '掘りました（鉄鉱石が出てきた！）' : raw ? `掘りました（${RAW[raw].name} +1）` : '掘りました';
+        const txt = plusText(got);
+        return iron ? `掘りました（鉱石が出てきた！ ${txt}）` : txt ? `掘りました（${txt}）` : BLOCK_YIELD[t0] ? '掘りました（素材が少したまった）' : '掘りました';
       }
       case 'raise': {
         const prevTop = w.heights[col] - 1;
@@ -1339,8 +1326,8 @@ export class GameController {
           if (this.farm.crops.delete(col)) this.markCrops();
           if (this.farmland.delete(col)) this.setVoxel(x, prevTop, z, DIRT);
         }
-        const need = this.blockRaw(this.block);
-        if (need === null || !spend(this.farm.inventory, need)) return `${this.blockCostName(this.block)}が足りません`;
+        const need = blockCost(this.block);
+        if (need && !payMats(this.farm.inventory, { mats: need })) return `${matsText(need)}が要ります`;
         this.setVoxel(x, y, z, this.block);
         return `${this.blockName()}を置きました`;
       }
@@ -1355,14 +1342,14 @@ export class GameController {
         this.removeFlowersAt(x, z);
         this.farmland.delete(col);
         if (h > target) {
-          // 削った分は原料に（表面の草地・砂は下の段に残すので、数えるのは削ったブロックそのもの）
-          for (let yy = h - 1; yy >= target; yy--) { const raw = rawOfBlock(this.get(x, yy, z)); if (raw) gain(this.farm.inventory, raw); }
+          // 削った分は素材に（表面の草地・砂は下の段に残すので、数えるのは削ったブロックそのもの）
+          for (let yy = h - 1; yy >= target; yy--) this.digYield(this.get(x, yy, z));
           for (let yy = h - 1; yy >= target; yy--) this.setVoxel(x, yy, z, AIR);
           this.setVoxel(x, target - 1, z, surface);
           this.flood(x, target, z);
         } else {
           // 盛る分は土を使う（足りなければ判定で止めている）
-          if (!spend(this.farm.inventory, 'soil', target - h)) return '土が足りません';
+          if (!payMats(this.farm.inventory, { mats: { soil: target - h } })) return '土が足りません';
           if (top === GRASS || isFarm(top)) this.setVoxel(x, h - 1, z, DIRT);
           for (let yy = h; yy < target; yy++) this.setVoxel(x, yy, z, yy === target - 1 ? surface : DIRT);
         }
@@ -1372,14 +1359,16 @@ export class GameController {
     return null;
   }
 
-  /** そのブロックを置くのに使う原料（持っているもの。無ければ null）。要らないブロックは undefined にしない */
-  private blockRaw(block: number): RawId | null {
-    const opts = BLOCK_COST[block];
-    if (!opts) return null;
-    return opts.find((k) => (this.farm.inventory[k] ?? 0) > 0) ?? null;
+  /** ブロックを掘った時の素材を持ち物に足す（割合の端数はためる）。増えた分を返す */
+  private digYield(block: number): MatAmounts {
+    const y = BLOCK_YIELD[block];
+    return y ? addFractional(this.farm.inventory, this.pickupFrac, y, 1, 'dig:') : {};
   }
-  /** そのブロックに要る原料の名前（足りない時の知らせ） */
-  private blockCostName(block: number) { return (BLOCK_COST[block] ?? []).map((k) => RAW[k].name).join('か'); }
+  /** 払えるか */
+  private canPay(a: MatAmounts) { return Object.keys(missingMats(this.farm.inventory, { mats: a })).length === 0; }
+  /** 道を敷くのに要る素材（土の道は要らない） */
+  private pathCost(): MatAmounts | null { return this.pathBlock === PATH ? null : blockCost(this.pathBlock); }
+  /** そのブロックに要る素材の名前（足りない時の知らせ） */
 
   /** 「ブロックを置く」で選んでいるブロックの名前 */
   blockName() { return PLACE_BLOCKS.find((b) => b.id === this.block)?.name ?? 'ブロック'; }

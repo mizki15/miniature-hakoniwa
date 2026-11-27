@@ -1,9 +1,9 @@
 import type { Species } from '../creatures/animals';
 import type { CropKind } from '../game/farm';
 import { CROPS, CROP_KINDS } from '../game/farm';
-import type { RawId } from '../game/materials';
+import type { MatId } from '../game/materials';
 import { LAND_NAMES, sharePct, type EnvCounts, type Land } from './environment';
-import { missingRaws } from './residents';
+import { scarceMats } from './residents';
 import {
   RESIDENT_NEEDS, RESIDENT_ORDER, RESIDENT_TEXT, RESIDENT_WHEN, SHARE_STAR_MIN, VISITOR, VISITORS,
   shareStars, starText, visitorLikes, type DexId, type Needs, type VisitorId,
@@ -13,13 +13,13 @@ import type { Dex } from './dexState';
 /**
  * 季節の目標（v0.17。設計メモ 11 章）。three.js に依存しない。
  * - 1 季節（暦の 1 か月）に、箱庭ごとに 3 つ：簡単・ふつう・難しい。季節が変わると、終わらなかった目標は静かに消える
- * - 達成はゲームが自動で判定する。ほうびは発見ポイント（10・20・40）と原料。難しいものには季節の記念の飾り
+ * - 達成はゲームが自動で判定する。ほうびは発見ポイント（10・20・40）と素材。難しいものには季節の記念の飾り
  * - 始めたばかりの箱庭の最初の 3 つは、操作を覚える目標
  */
 export type Tier = 0 | 1 | 2;
 export const TIER_NAMES = ['簡単', 'ふつう', '難しい'] as const;
 export const TIER_POINTS = [10, 20, 40] as const;
-/** ほうびの原料の数（鉄鉱石は半分） */
+/** ほうびの素材の数（鉱物は半分） */
 export const TIER_RAWS = [3, 5, 8] as const;
 /** 「まれ」の生き物の目標がある間、その生き物の来る確率にかける倍率 */
 export const GOAL_BOOST = 3;
@@ -104,7 +104,7 @@ export function goalText(g: Goal, known: (id: DexId) => boolean): string {
       case 'resident': parts.push(`${nm(c.sp)}に引っ越してきてもらう`); break;
       case 'harvest': parts.push(c.crop ? `旬の${CROPS[c.crop].name}を ${c.n} 個収穫する` : c.n === 1 ? '畑を耕して、何か 1 つ収穫する' : `作物を ${c.n} 個収穫する`); break;
       case 'build':
-        parts.push(c.straw ? `わらを使った、自然 ${starText(c.nature ?? 1)} 以上の家を建てる`
+        parts.push(c.straw ? `わら（繊維）を使った、自然 ${starText(c.nature ?? 1)} 以上の家を建てる`
           : c.nature ? `自然 ${starText(c.nature)} 以上の家を建てる` : c.n === 1 ? '建物を 1 つ読み込んで建てる' : `家を ${c.n} 棟建てる`);
         break;
       case 'till': parts.push('畑を耕す'); break;
@@ -204,19 +204,18 @@ export function boostedVisitors(s: GoalsState | null): Set<VisitorId> {
 
 // ---------------------------------------------------------------- ほうび
 
-/** 手に入りにくい原料：その箱庭でとれないもの。全部とれるなら、いちばん少ない土地（湿地・砂浜・岩場）の原料 */
-export function rewardRaw(e: EnvCounts, rand: () => number): RawId {
-  const miss = missingRaws(e);
+/** 手に入りにくい素材：その箱庭でとりにくいもの。全部とれるなら、出る土地（森・岩場と砂浜・岩場と水辺）がいちばん少ない素材 */
+export function rewardMat(e: EnvCounts, rand: () => number): MatId {
+  const miss = scarceMats(e);
   if (miss.length) return miss[Math.floor(rand() * miss.length)];
-  const scarce: [number, RawId[]][] = [[e.wetland, ['clay', 'reed']], [e.beach, ['sand', 'shell']], [e.rock, ['rock', 'iron_ore']]];
+  const scarce: [number, MatId][] = [[e.forest, 'wood'], [e.rock + e.beach, 'mineral'], [e.rock + e.waterside, 'stone']];
   scarce.sort((a, b) => a[0] - b[0]);
-  const list = scarce[0][1];
-  return list[Math.floor(rand() * list.length)];
+  return scarce[0][1];
 }
-export function goalReward(g: Goal, e: EnvCounts, rand: () => number): { points: number; raw: RawId; n: number; memento: boolean } {
-  const raw = rewardRaw(e, rand);
-  const n = raw === 'iron_ore' ? Math.ceil(TIER_RAWS[g.tier] / 2) : TIER_RAWS[g.tier];
-  return { points: TIER_POINTS[g.tier], raw, n, memento: g.tier === 2 };
+export function goalReward(g: Goal, e: EnvCounts, rand: () => number): { points: number; mat: MatId; n: number; memento: boolean } {
+  const mat = rewardMat(e, rand);
+  const n = mat === 'mineral' ? Math.ceil(TIER_RAWS[g.tier] / 2) : TIER_RAWS[g.tier];
+  return { points: TIER_POINTS[g.tier], mat, n, memento: g.tier === 2 };
 }
 
 // ---------------------------------------------------------------- 選び方

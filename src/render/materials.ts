@@ -4,6 +4,7 @@ import {
   int, ivec3, length, max, mix, mx_noise_float as noiseT, mx_noise_vec3, normalize, normalGeometry, normalLocal, normalWorldGeometry, perspectiveDepthToViewZ,
   positionGeometry, positionLocal, positionView, positionWorld, pow, screenUV, sin, cos, smoothstep as smoothstepT, step, texture3DLoad, time,
   transformNormalToView, uniform, uniformArray, vec2, vec3, viewportDepthTexture, viewportSharedTexture, Fn, If, Loop,
+  normalView, BRDF_Lambert, diffuseColor,
 } from 'three/tsl';
 import { COBBLE, FARMLAND, LOG, PATH, WATER, WET_FARMLAND, paletteFlat } from '../world/blocks';
 import { cloudShadowAt } from './sky';
@@ -94,6 +95,30 @@ export const toonGradient = (() => {
   return t;
 })();
 
+/**
+ * トゥーンの光（v0.20）：three の MeshToonNodeMaterial は、光に背を向けた面にもハーフランバートで光を当てて影の地図で隠すので、
+ * 背を向けた面（ブロックの影の側）に、となりの列の影の縁が斜めの模様になって映っていた。
+ * ここでは光に背を向けた面（とかすめる面）は影の地図を見ずに直接光なし（影の中と同じ明るさ）にし、
+ * 光の当たる面だけを 2 段（横から 0.78・正面 1）に分けて、影の地図をかける
+ */
+class BlockToonLightingModel extends THREE.LightingModel {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  direct({ lightDirection, lightColor, reflectedLight }: any) {
+    const nl = normalView.dot(lightDirection);
+    const level = nl.lessThan(0.05).select(float(0), nl.lessThan(1 / 3).select(float(0.78), float(1)));
+    reflectedLight.directDiffuse.addAssign(lightColor.mul(level).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  indirect(builder: any) {
+    const { ambientOcclusion, irradiance, reflectedLight } = builder.context;
+    reflectedLight.indirectDiffuse.addAssign(irradiance.mul(BRDF_Lambert({ diffuseColor })));
+    reflectedLight.indirectDiffuse.mulAssign(ambientOcclusion);
+  }
+}
+class BlockToonMaterial extends THREE.MeshToonNodeMaterial {
+  setupLightingModel() { return new BlockToonLightingModel() as unknown as ReturnType<THREE.MeshToonNodeMaterial['setupLightingModel']>; }
+}
+
 /** 雲の影・ホタルの光・高い山の雪など、地形と小物に共通の仕上げ */
 function finishSurface(m: SurfaceMaterial, albedo: N, extraEmissive: N = null, cloudOctaves = 3) {
   const shade = float(1).sub(cloudShadowAt(positionWorld, cloudOctaves).mul(0.38));
@@ -180,7 +205,7 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
   // toon（試作）：lite と同じ軽さに加え、光を段に分け、質感の凹凸と水中のコースティクスも省く（線は後処理で描く）
   if (toon) lite = true;
   const m: SurfaceMaterial = toon
-    ? new THREE.MeshToonNodeMaterial({ gradientMap: toonGradient })
+    ? new BlockToonMaterial({ gradientMap: toonGradient })
     : new THREE.MeshStandardNodeMaterial({ roughness: 0.92, metalness: 0 });
   const pL: N = positionLocal;
   const nL: N = normalLocal;
@@ -300,7 +325,7 @@ export function createTerrainMaterial(types: THREE.Data3DTexture, size: number, 
  */
 export function createDetailMaterial(swayLinear = 0, opts: { sway?: boolean; windows?: boolean; toon?: boolean; far?: number; cloudOctaves?: number } = {}): SurfaceMaterial {
   const m: SurfaceMaterial = opts.toon
-    ? new THREE.MeshToonNodeMaterial({ gradientMap: toonGradient })
+    ? new BlockToonMaterial({ gradientMap: toonGradient })
     : new THREE.MeshStandardNodeMaterial({ roughness: 0.85, metalness: 0 });
   const pL: N = positionLocal; // ※インスタンスの行列を適用した後の座標（箱庭全体の中での位置）
   const pG: N = positionGeometry; // モデル自身の座標（根元が y=0）

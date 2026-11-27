@@ -98,7 +98,7 @@
           </div>
           <div class="row">
             <button id="rightPlus" title="発見ポイントを 30 増やす（区画 1 つぶん。テスト用）">✨ ポイント +30</button>
-            <button id="bagPlus" title="原料と素材を 50 ずつ足す（テスト用）">🎒 素材 +50</button>
+            <button id="bagPlus" title="素材を 50 ずつ足す（テスト用）">🎒 素材 +50</button>
             <button id="openAll" title="残りの区画をすべて開く（テスト用）">全区画を開く</button>
             <button id="ecoCall" title="来るかどうかの判定を、確率 1 で 1 回行う（テスト用）">🐾 生き物を呼ぶ</button>
             <button id="ecoClear" title="訪問者をみんな帰す（テスト用）">訪問者を帰す</button>
@@ -232,7 +232,7 @@
         <div class="side-body">
           <div id="tools" class="tool-list"></div>
           <button id="openBuildings" type="button" class="open-viewer" hidden>📦 建物を読み込む・棚を見る</button>
-          <button id="openBag" type="button" class="open-viewer">🎒 持ち物・加工<small>（I）</small></button>
+          <button id="openBag" type="button" class="open-viewer">🎒 持ち物<small>（I）</small></button>
         </div>
       </aside>
 
@@ -266,21 +266,21 @@
     <div id="hoverTip" class="hover-tip"></div>
 
     <!-- 建物の窓（読み込みと棚）。メニューと同じく、画面全体をすりガラスにして表示 -->
-    <!-- 持ち物と加工（I キー）：左に原料、右に素材と加工のボタン -->
+    <!-- 持ち物（I キー）：左に素材 5 つ、右に収穫物（v0.20） -->
     <div id="bag" aria-hidden="true">
-      <div class="viewer-panel bag-panel" role="dialog" aria-label="持ち物・加工">
+      <div class="viewer-panel bag-panel" role="dialog" aria-label="持ち物">
         <header class="viewer-head">
-          <span>🎒 持ち物・加工</span>
+          <span>🎒 持ち物</span>
           <button id="bagClose" type="button" title="閉じる（Esc）">×</button>
         </header>
         <div class="viewer-body bag-body">
           <section class="bag-col">
-            <h3>原料 <small>拾う・切る・掘る・摘む</small></h3>
-            <div id="bagRaws" class="bag-raws"></div>
+            <h3>素材 <small>掘る・切る・摘む・刈る・拾う</small></h3>
+            <div id="bagMats" class="bag-raws"></div>
           </section>
-          <section class="bag-col bag-col-mats">
-            <h3>素材 <small>ボタンで加工（Shift で全部）</small></h3>
-            <div id="bagMats" class="bag-mats"></div>
+          <section class="bag-col">
+            <h3>収穫物 <small>住人へのおすそ分けに</small></h3>
+            <div id="bagCrops" class="bag-raws"></div>
           </section>
         </div>
       </div>

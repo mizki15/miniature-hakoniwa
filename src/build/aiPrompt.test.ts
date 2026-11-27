@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { buildPrompt, buildFixPrompt } from './aiPrompt';
-import { PALETTE } from './palette';
+import { MAT_IDS } from './palette';
 
 describe('buildPrompt', () => {
-  it('promptListsWholePalette', () => {
+  it('promptListsAllMaterials', () => {
+    // v0.20：色は自由。素材 5 つをグループの名前の頭で選ぶ
     const p = buildPrompt('');
-    for (const c of PALETTE) {
-      expect(p).toContain(`   * ${c.name}: #${c.hex.toString(16).toUpperCase().padStart(6, '0')} (${c.en})`);
-    }
+    for (const m of MAT_IDS) expect(p).toContain(`   * ${m}: `);
+    expect(p).toContain('"<material>_<rrggbb>"');
+    expect(p).toContain('_glass');
   });
   it('promptStatesLimits', () => {
     const p = buildPrompt('');

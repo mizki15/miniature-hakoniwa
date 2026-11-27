@@ -5,17 +5,19 @@
  *   ・直方体が少しでも重なる格子は埋める（厚さ 1/16 の扉も消えない）
  *   ・2 方向以上が格子 1 つ（1/4 マス）より小さい部品は数えない
  *   ・同じ格子に 2 つの素材が重なったら、小さい（体積の小さい）直方体の素材。壁に貼った薄い窓や扉が、壁に埋もれないように。
- *     同じ大きさならパレットの順で先の素材（どの順に並べても同じ結果）
+ *     同じ大きさなら素材の順（木材・繊維・石材・鉱物・土・窓）で先の素材（どの順に並べても同じ結果）
  *   ・地面（y = 0 の層）につながっていない部品は数えない
  *   ・外から空気を塗りつぶし、外気に接する面だけを「見える表面」として数える（底は地面なので数えない）
  * three.js に頼らない（Web Worker とテストから呼ぶ）。
  */
 import type { BuildingDesign } from './geoParse';
-import { NATURALNESS, PALETTE } from './palette';
+import { MAT_IDS, MAT_NATURE, cubeGlass, cubeMat, type MatId } from './palette';
 
 export interface BuildingCharacter {
-  /** 素材ごとの見える表面の広さ（マス²） */
-  areas: Record<string, number>;
+  /** 素材（v0.20 の 5 つ）ごとの見える表面の広さ（マス²）。窓（ガラス）は鉱物に入る */
+  areas: Partial<Record<MatId, number>>;
+  /** 見える窓（ガラス）の広さ（マス²。灯りの星） */
+  glass: number;
   totalArea: number;
   /** 地面に接している広さ（マス²。四捨五入、最小 1） */
   footprint: number;
@@ -36,12 +38,14 @@ export const CELLS_PER_BLOCK = 4;
 const CELL = 1 / CELLS_PER_BLOCK;
 const HALF = CELL / 2;
 const EPS = 1e-6;
-const MAT_INDEX = new Map(PALETTE.map((p, i) => [p.name, i + 1]));
+/** 格子に入れる種類：1〜5 は素材（MAT_IDS の順）、6 は窓（素材は鉱物） */
+const GLASS_KIND = MAT_IDS.length + 1;
+const kindOf = (c: { color: string; mat?: MatId; glass?: boolean }) => (cubeGlass(c) ? GLASS_KIND : MAT_IDS.indexOf(cubeMat(c)) + 1);
 
 /** 自然の星：見える表面で重み付けした、素材の自然度の平均（四捨五入）。表面がなければ ★3 */
-export function natureStars(areas: Record<string, number>): number {
+export function natureStars(areas: Partial<Record<MatId, number>>): number {
   let sum = 0, w = 0;
-  for (const [m, a] of Object.entries(areas)) { const n = NATURALNESS[m]; if (n === undefined || a <= 0) continue; sum += n * a; w += a; }
+  for (const [m, a] of Object.entries(areas)) { const n = MAT_NATURE[m as MatId]; if (n === undefined || !a || a <= 0) continue; sum += n * a; w += a; }
   return w > 0 ? Math.min(5, Math.max(1, Math.round(sum / w))) : 3;
 }
 /** 灯りの星：見えるガラスの広さ（マス²）。なければ 0 */
@@ -66,8 +70,8 @@ export function buildingCharacter(d: BuildingDesign): BuildingCharacter {
   const cz = (iz: number) => oz + (iz - 1 + 0.5) * CELL;
 
   for (const cube of d.cubes) {
-    const mat = MAT_INDEX.get(cube.color);
-    if (!mat) continue;
+    const mat = kindOf(cube);
+    if (mat <= 0) continue;
     const m = cube.m;
     const t = [m[3], m[7], m[11]];
     const cols = [0, 1, 2].map((k) => [m[k], m[4 + k], m[8 + k]]);
@@ -145,7 +149,7 @@ export function buildingCharacter(d: BuildingDesign): BuildingCharacter {
 
   // 見える面・足元・高さ・体積
   const faceArea = CELL * CELL;
-  const areaByMat = new Float64Array(PALETTE.length + 1);
+  const areaByMat = new Float64Array(GLASS_KIND + 1);
   let foot = 0, filled = 0, top = -1;
   for (let i = 0; i < grid.length; i++) {
     const mat = grid[i];
@@ -159,16 +163,18 @@ export function buildingCharacter(d: BuildingDesign): BuildingCharacter {
     areaByMat[mat] += faces * faceArea;
   }
   const footArea = Math.max(1, Math.round(foot * CELL * CELL));
-  const areas: Record<string, number> = {};
+  const areas: Partial<Record<MatId, number>> = {};
   let totalArea = 0;
-  PALETTE.forEach((p, k) => { const a = areaByMat[k + 1]; if (a > 0) { areas[p.name] = a; totalArea += a; } });
+  const glass = areaByMat[GLASS_KIND];
+  MAT_IDS.forEach((m, k) => { const a = areaByMat[k + 1] + (m === 'mineral' ? glass : 0); if (a > 0) { areas[m] = a; totalArea += a; } });
   return {
     areas, totalArea,
     footprint: footArea,
     height: (top + 1) * CELL,
     volume: filled * CELL * CELL * CELL,
     nature: natureStars(areas),
-    light: lightStars(areas.glass ?? 0),
+    glass,
+    light: lightStars(glass),
     size: sizeStars(footArea),
   };
 }

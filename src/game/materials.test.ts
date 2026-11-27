@@ -1,76 +1,77 @@
 import { describe, it, expect } from 'vitest';
-import { MATERIALS, RAWS, RECIPE, RECIPES, addPickup, buildCost, buildPoints, craft, craftable, matKey, missingMats, payMats, pickupPerDay, refundMats, spend } from './materials';
-import { PALETTE } from '../build/palette';
-import { buildingCharacter } from '../build/character';
-import { parseBuilding } from '../build/geoParse';
+import { BLOCK_YIELD, MATS, MAT_IDS, TREE_YIELD, addFractional, addPickup, blockCost, buildCost, buildPoints, migrateInventory, missingMats, payMats, pickupPerDay, refundMats } from './materials';
+import { COBBLE, DIRT, GRASS, LEAVES, LOG, MUD, SAND, STONE } from '../world/blocks';
 
-describe('materials table', () => {
-  it('12 raw materials and one material per palette color', () => {
-    expect(RAWS).toHaveLength(12);
-    expect(MATERIALS.map((m) => m.id).sort()).toEqual(PALETTE.map((p) => p.name).sort());
+describe('five materials (v0.20)', () => {
+  it('wood, fiber, stone, mineral, soil — each with a name, icon and how to get it', () => {
+    expect(MAT_IDS).toEqual(['wood', 'fiber', 'stone', 'mineral', 'soil']);
+    for (const m of MATS) { expect(m.name).toBeTruthy(); expect(m.icon).toBeTruthy(); expect(m.from).toBeTruthy(); }
   });
-  it('every material can be made from some raw material', () => {
-    for (const m of MATERIALS) expect(RECIPES.some((r) => r.mat === m.id), m.id).toBe(true);
+  it('every block yield adds up to one block', () => {
+    for (const [b, y] of Object.entries(BLOCK_YIELD)) expect(Object.values(y).reduce((a, n) => a + (n ?? 0), 0), `block ${b}`).toBeCloseTo(1);
+  });
+  it('blocks give what they are made of', () => {
+    expect(BLOCK_YIELD[DIRT]).toEqual({ soil: 1 });
+    expect(BLOCK_YIELD[STONE]).toEqual({ stone: 1 });
+    expect(BLOCK_YIELD[LOG]).toEqual({ wood: 1 });
+    expect(BLOCK_YIELD[LEAVES]).toEqual({ fiber: 1 });
+    expect(BLOCK_YIELD[GRASS].soil).toBeGreaterThan(BLOCK_YIELD[GRASS].fiber!);
+    expect(BLOCK_YIELD[SAND].mineral).toBeGreaterThan(0.5);
+    expect(BLOCK_YIELD[MUD].soil).toBeGreaterThan(0.5);
+  });
+  it('placing a block costs one of its main material', () => {
+    expect(blockCost(DIRT)).toEqual({ soil: 1 });
+    expect(blockCost(GRASS)).toEqual({ soil: 1 });
+    expect(blockCost(SAND)).toEqual({ mineral: 1 });
+    expect(blockCost(COBBLE)).toEqual({ stone: 1 });
+    expect(blockCost(999)).toBeNull();
+  });
+  it('a tree gives wood and fiber', () => {
+    expect(TREE_YIELD).toEqual({ wood: 3, fiber: 2 });
   });
 });
 
-describe('craft', () => {
-  it('one log makes 4 wall boards, as many times as there are logs', () => {
-    const inv: Record<string, number> = { log_broad: 3 };
-    expect(craftable(inv, RECIPE['wall-broad'])).toBe(3);
-    expect(craft(inv, RECIPE['wall-broad'], 2)).toBe(2);
-    expect(inv).toEqual({ log_broad: 1, 'm:wall': 8 });
-    expect(craft(inv, RECIPE['wall-broad'], 5)).toBe(1);
-    expect(craft(inv, RECIPE['wall-broad'])).toBe(0);
+describe('fractions pile up', () => {
+  it('digging grass five times gives four soil and one fiber', () => {
+    const inv: Record<string, number> = {}, frac: Record<string, number> = {};
+    for (let i = 0; i < 5; i++) addFractional(inv, frac, BLOCK_YIELD[GRASS], 1, 'dig:');
+    expect(inv).toEqual({ soil: 4, fiber: 1 });
   });
-  it('straw needs two for one thatch; not enough means nothing happens', () => {
-    const inv: Record<string, number> = { straw: 1 };
-    expect(craft(inv, RECIPE['thatch-straw'])).toBe(0);
-    expect(inv).toEqual({ straw: 1 });
+  it('pickups per day from the land', () => {
+    const per = pickupPerDay({ forest: 600, waterside: 400, beach: 250 });
+    expect(per).toEqual({ wood: 1, fiber: 2, stone: 1, mineral: 1 });
+    const inv: Record<string, number> = {}, frac: Record<string, number> = {};
+    expect(addPickup(inv, frac, per, 0.5)).toBe(1); // 繊維だけ 1 つ
+    expect(addPickup(inv, frac, per, 0.5)).toBe(4);
+    expect(inv).toEqual({ wood: 1, fiber: 2, stone: 1, mineral: 1 });
   });
 });
 
 describe('building cost', () => {
-  const cube = (name: string, size: number[]) => JSON.stringify({ format_version: '1.12.0', 'minecraft:geometry': [{ description: { identifier: 'geometry.t' }, bones: [{ name, cubes: [{ origin: [0, 0, 0], size }] }] }] });
-  const ch = (name: string, size: number[]) => { const r = parseBuilding(cube(name, size)); if (!r.ok) throw new Error(); return buildingCharacter(r.design); };
-  it('materials are the visible surface (1 per block²), points grow with the volume (2–15)', () => {
-    const c = buildCost(ch('wall', [32, 32, 32])); // 2×2×2：見える面 4×4 + 上 4 = 20 マス²（2 マス²につき 1 素材）
-    expect(c.mats).toEqual({ wall: 10 });
-    expect(c.points).toBe(buildPoints(8));
-    expect(buildPoints(0)).toBe(2);
-    expect(buildPoints(1)).toBe(3);
-    expect(buildPoints(100)).toBe(10);
-    expect(buildPoints(10000)).toBe(15);
+  it('one material per 2 m² of visible surface, by material', () => {
+    const c = buildCost({ areas: { wood: 40, fiber: 13, mineral: 2 }, volume: 64 });
+    expect(c.mats).toEqual({ wood: 20, fiber: 7, mineral: 1 });
+    expect(c.points).toBe(buildPoints(64));
   });
-  it('pay, missing and refund', () => {
-    const cost = { mats: { wall: 5, glass: 2 }, points: 4 };
-    const inv: Record<string, number> = { [matKey('wall')]: 5, [matKey('glass')]: 1 };
-    expect(missingMats(inv, cost)).toEqual({ glass: 1 });
+  it('pay, lack, refund', () => {
+    const inv: Record<string, number> = { wood: 25, fiber: 3 };
+    const cost = { mats: { wood: 20, fiber: 7 }, points: 3 };
+    expect(missingMats(inv, cost)).toEqual({ fiber: 4 });
     expect(payMats(inv, cost)).toBe(false);
-    expect(inv[matKey('wall')]).toBe(5);
-    inv[matKey('glass')] = 2;
+    inv.fiber = 7;
     expect(payMats(inv, cost)).toBe(true);
-    expect([inv[matKey('wall')], inv[matKey('glass')]]).toEqual([0, 0]);
+    expect(inv).toEqual({ wood: 5, fiber: 0 });
     refundMats(inv, cost);
-    expect([inv[matKey('wall')], inv[matKey('glass')]]).toEqual([5, 2]);
-  });
-  it('spend refuses when there is not enough', () => {
-    const inv: Record<string, number> = { soil: 1 };
-    expect(spend(inv, 'soil', 2)).toBe(false);
-    expect(spend(inv, 'soil')).toBe(true);
-    expect(inv.soil).toBe(0);
+    expect(inv).toEqual({ wood: 25, fiber: 7 });
   });
 });
 
-describe('pickup', () => {
-  it('a little a day from forest, waterside and beach, keeping the fractions', () => {
-    const per = pickupPerDay({ forest: 400, waterside: 400, beach: 0 });
-    const inv: Record<string, number> = {}, frac: Record<string, number> = {};
-    expect(addPickup(inv, frac, per, 0.5)).toBe(0); // 半日では丸太 0.25 本
-    addPickup(inv, frac, per, 1.5);
-    expect(inv.log_broad).toBe(1);
-    expect(inv.rock).toBe(2);
-    expect(inv.foliage).toBe(2);
-    expect(inv.sand ?? 0).toBe(0);
+describe('old saves (raws and 13 materials) move to the five', () => {
+  it('raws one to one, crafted materials back to what they were made of; crops stay', () => {
+    const inv = migrateInventory({ log_broad: 3, log_conifer: 1, 'm:wall': 8, straw: 2, reed: 1, 'm:thatch': 2, rock: 5, 'm:stone': 4, clay: 2, 'm:brick': 4, sand: 3, iron_ore: 1, turnip: 4 });
+    expect(inv).toEqual({ wood: 6, fiber: 5, stone: 6, soil: 4, mineral: 5, turnip: 4 });
+  });
+  it('already new inventories stay', () => {
+    expect(migrateInventory({ wood: 3, soil: 2, wheat: 1 })).toEqual({ wood: 3, soil: 2, wheat: 1 });
   });
 });

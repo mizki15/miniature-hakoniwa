@@ -164,11 +164,11 @@ describe('rewards and help', () => {
   it('points by tier; raws this world cannot get; a memento for the hard one', () => {
     const g = (tier: 0 | 1 | 2) => ({ id: 'x', tier, type: 'land' as const, conds: [] });
     const r = goalReward(g(2), plainEnv(), () => 0);
-    expect(r).toMatchObject({ points: 40, memento: true, raw: 'clay', n: 8 });
-    expect(goalReward(g(0), plainEnv(), () => 0)).toMatchObject({ points: 10, memento: false, n: 3 });
-    // 何でもとれる箱庭では、いちばん少ない土地の原料
-    const rich = { ...plainEnv(), wetland: 30, beach: 5, rock: 60 };
-    expect(['sand', 'shell']).toContain(goalReward(g(1), rich, () => 0.3).raw);
+    expect(r).toMatchObject({ points: 40, memento: true, mat: 'mineral', n: 4 }); // 岩場も砂浜も無い：鉱物（鉱物は半分）
+    expect(goalReward(g(0), plainEnv(), () => 0)).toMatchObject({ points: 10, memento: false, n: 2 });
+    // 何でもとれる箱庭では、出る土地がいちばん少ない素材
+    const rich = { ...plainEnv(), forest: 30, beach: 5, rock: 60 };
+    expect(goalReward(g(1), rich, () => 0.3).mat).toBe('wood');
   });
   it('rare creatures in goals come more often', () => {
     const s: GoalsState = { key: 0, goals: [{ id: 'see:owl', tier: 2, type: 'observe', conds: [{ k: 'see', ids: ['owl'] }] }], log: emptyLog(), prev: [] };

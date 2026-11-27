@@ -4,7 +4,7 @@
  * 規格：docs/superpowers/specs/2026-11-19-building-import-design.md
  */
 import { LIMITS, UNITS_PER_VOXEL } from './limits';
-import { colorOfName, isPaletteName } from './palette';
+import { cubeMat, isCubeColor, isMatId, parseColorName, type CubeColor, type MatId } from './palette';
 
 export type IssueCode =
   | 'json' | 'file_size' | 'no_geometry' | 'poly_mesh' | 'no_color' | 'too_many_cubes' | 'too_many_bones' | 'too_deep'
@@ -13,7 +13,8 @@ export type IssueCode =
 export interface ParseIssue { code: IssueCode; message: string }
 
 /** 直方体 1 個。m：単位立方体 [0,1]^3 → ボクセル単位の座標への 3×4 アフィン行列（行優先 12 個）。大きさ・膨らみ・回転・親の回転を合成済み */
-export interface BuildingCube { m: number[]; color: string }
+/** color：パレットの名前（古い形）か "#rrggbb"。mat：素材（v0.20。無ければ色の名前から）。glass：窓 */
+export interface BuildingCube { m: number[]; color: string; mat?: MatId; glass?: true }
 
 export interface BuildingDesign {
   id: string;
@@ -38,7 +39,7 @@ type Vec3 = [number, number, number];
 export interface RawCube { origin: Vec3; size: Vec3; pivot: Vec3; rotation: Vec3; inflate: number }
 
 /** 検査を通ったグループ */
-export interface ResolvedBone { name: string; parent: number; pivot: Vec3; rotation: Vec3; cubes: RawCube[]; color: string | null }
+export interface ResolvedBone { name: string; parent: number; pivot: Vec3; rotation: Vec3; cubes: RawCube[]; color: CubeColor | null }
 
 /** start の { に対応する } の位置（なければ −1） */
 function balancedEnd(text: string, start: number): number {
@@ -203,11 +204,11 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
   // 色：自分の名前 → 親の名前、の順に決める
   for (const [bi, b] of bones.entries()) {
     for (let p: ResolvedBone | undefined = b; p; p = p.parent >= 0 ? bones[p.parent] : undefined) {
-      const c = colorOfName(p.name);
+      const c = parseColorName(p.name);
       if (c) { b.color = c; break; }
     }
     if (!b.color && b.cubes.length) {
-      issues.push({ code: 'no_color', message: `${labels[bi]}の色が決まりません。wood などパレットの名前を付けるか、色のあるグループの中に入れてください。` });
+      issues.push({ code: 'no_color', message: `${labels[bi]}の色が決まりません。wood_8a5a3c のように「素材_色」の名前を付けるか、色のあるグループの中に入れてください。` });
     }
   }
   return { name, bones };
@@ -266,7 +267,7 @@ export function transformCubes(bones: ResolvedBone[], withInflate = true): Build
       const k = withInflate ? c.inflate : 0;
       const from: Vec3 = [-(c.origin[0] + c.size[0]) - k, c.origin[1] - k, c.origin[2] - k];
       const m = mul(mul(matOf(i), rotAbout(c.pivot, c.rotation)), mul(translate(...from), scale(c.size[0] + 2 * k, c.size[1] + 2 * k, c.size[2] + 2 * k)));
-      out.push({ m, color: b.color ?? '' });
+      out.push({ m, color: b.color?.color ?? '', mat: b.color?.mat ?? 'wood', ...(b.color?.glass ? { glass: true as const } : {}) });
     }
   });
   return out;
@@ -338,12 +339,13 @@ export function parseBuilding(text: string): ParseResult {
 
   // ボクセル単位にし、底面をちょうど y = 0 にずらす
   const toVoxel = mul(translate(0, -min[1] / U, 0), scale(1 / U, 1 / U, 1 / U));
-  const out = cubes.map((c) => ({ m: mul(toVoxel, c.m), color: c.color }));
+  const out: BuildingCube[] = cubes.map((c) => ({ m: mul(toVoxel, c.m), color: c.color, mat: c.mat, ...(c.glass ? { glass: true as const } : {}) }));
   const bounds = {
     min: [min[0] / U, 0, min[2] / U] as Vec3,
     max: [max[0] / U, (max[1] - min[1]) / U, max[2] / U] as Vec3,
   };
-  const key = out.map((c) => c.m.map((v) => (Math.round(v * 1e4) / 1e4).toString()).join(',') + ':' + c.color).join(';');
+  // 素材と窓の印も id に含める（昔の名前の建物は、昔と同じ id のまま）
+  const key = out.map((c) => c.m.map((v) => (Math.round(v * 1e4) / 1e4).toString()).join(',') + ':' + c.color + (c.mat && c.color.startsWith('#') ? `:${c.mat}${c.glass ? ':g' : ''}` : '')).join(';');
   return { ok: true, design: { id: fnv1a(key), name: r.name, cubes: out, bounds } };
 }
 
@@ -357,9 +359,9 @@ export function sanitizeDesign(d: unknown): BuildingDesign | null {
   const okVec = (v: unknown) => Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= 1000);
   if (!okVec(b.min) || !okVec(b.max)) return null;
   const cubes = d.cubes
-    .filter((c): c is BuildingCube => isObj(c) && isPaletteName(c.color) && Array.isArray(c.m) && c.m.length === 12 && c.m.every((v) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 1000))
+    .filter((c): c is BuildingCube => isObj(c) && isCubeColor(c.color) && Array.isArray(c.m) && c.m.length === 12 && c.m.every((v) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 1000))
     .slice(0, LIMITS.cubes)
-    .map((c) => ({ m: [...c.m], color: c.color }));
+    .map((c) => ({ m: [...c.m], color: c.color, mat: isMatId(c.mat) ? c.mat : cubeMat(c), ...(c.glass === true || c.color === 'glass' ? { glass: true as const } : {}) }));
   if (!cubes.length) return null;
   return {
     id: d.id, name: typeof d.name === 'string' ? d.name : '名前のない建物', cubes, bounds: { min: [...(b.min as Vec3)] as Vec3, max: [...(b.max as Vec3)] as Vec3 },

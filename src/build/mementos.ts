@@ -1,5 +1,6 @@
 import type { BuildingCube, BuildingDesign } from './geoParse';
 import { seasonOfKey } from '../eco/goals';
+import { LEGACY_MAT } from './palette';
 
 /**
  * 季節の記念の飾り（v0.17。設計メモ 11 章）：季節の目標の「難しい」を達成すると、棚に入る。
@@ -7,7 +8,7 @@ import { seasonOfKey } from '../eco/goals';
  */
 type Box = [x: number, y: number, z: number, w: number, h: number, d: number, color: string];
 /** 真ん中（x・z）と下の面（y）で置く箱 */
-const box = ([x, y, z, w, h, d, color]: Box): BuildingCube => ({ m: [w, 0, 0, x - w / 2, 0, h, 0, y, 0, 0, d, z - d / 2], color });
+const box = ([x, y, z, w, h, d, color]: Box): BuildingCube => ({ m: [w, 0, 0, x - w / 2, 0, h, 0, y, 0, 0, d, z - d / 2], color, mat: LEGACY_MAT[color] ?? 'wood' });
 
 /** fit：足元の幅（列）。真ん中の列から、外形がこの幅に収まるよう全体を縮める */
 const SHAPES: { name: string; fit: number; boxes: Box[] }[] = [

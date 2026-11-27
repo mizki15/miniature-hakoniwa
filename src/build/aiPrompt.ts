@@ -1,29 +1,38 @@
 /**
  * AI（ChatGPT・Claude など）に建物を作ってもらうための説明文と、直してもらうための文。
- * パレットと上限は、検査（geoParse.ts）と同じ定数から書き出す（説明文と検査がずれないように）
+ * 素材（v0.20：グループの名前の頭）と上限は、検査（geoParse.ts）と同じ定数から書き出す（説明文と検査がずれないように）
  *
  * 文面は利用者の決めたテンプレート（2026-11-20）を英語にしたもの。AI は英語の規格のほうが取り違えにくいため、
  * 利用者が書く「作ってほしいもの」と、検査の問題の文（日本語）以外は英語にする
  */
 import { LIMITS, UNITS_PER_VOXEL } from './limits';
-import { PALETTE } from './palette';
+import { MAT_DEFAULT_HEX, MAT_IDS } from './palette';
 import type { ParseIssue } from './geoParse';
 
-const hex6 = (h: number) => '#' + h.toString(16).toUpperCase().padStart(6, '0');
+const hex6 = (h: number) => h.toString(16).padStart(6, '0');
+/** 素材の説明（AI 向けの英語） */
+const MAT_NOTE: Record<string, string> = {
+  wood: 'wood (walls, posts, doors, planks, logs)',
+  fiber: 'fiber (thatch, straw, ivy, hedges, flowers, cloth)',
+  stone: 'stone (foundations, stone walls, slate roofs, paving)',
+  mineral: 'mineral (glass, iron, plaster, shells, metal)',
+  soil: 'soil (brick, clay tiles, terracotta, earth)',
+};
 
 const EXAMPLE = `{
   "format_version": "1.12.0",
   "minecraft:geometry": [{
     "description": { "identifier": "geometry.small_hut" },
     "bones": [
-      { "name": "stone", "pivot": [0, 0, 0], "cubes": [ { "origin": [-24, 0, -24], "size": [48, 4, 48] } ] },
-      { "name": "wall",  "pivot": [0, 0, 0], "cubes": [ { "origin": [-20, 4, -20], "size": [40, 28, 40] } ] },
-      { "name": "wood_door", "parent": "wall", "pivot": [0, 0, 0], "cubes": [ { "origin": [-5, 4, -21], "size": [10, 20, 1] } ] },
-      { "name": "wall_gable", "pivot": [0, 0, 0], "cubes": [
+      { "name": "stone_8f959c_base", "pivot": [0, 0, 0], "cubes": [ { "origin": [-24, 0, -24], "size": [48, 4, 48] } ] },
+      { "name": "wood_a07a4e_wall",  "pivot": [0, 0, 0], "cubes": [ { "origin": [-20, 4, -20], "size": [40, 28, 40] } ] },
+      { "name": "wood_6e4c2e_door", "parent": "wood_a07a4e_wall", "pivot": [0, 0, 0], "cubes": [ { "origin": [-5, 4, -21], "size": [10, 20, 1] } ] },
+      { "name": "mineral_bfd8e0_glass", "parent": "wood_a07a4e_wall", "pivot": [0, 0, 0], "cubes": [ { "origin": [10, 14, -21], "size": [6, 6, 1] } ] },
+      { "name": "wood_a07a4e_gable", "pivot": [0, 0, 0], "cubes": [
         { "origin": [-13, 32, -20], "size": [26, 4, 40] },
         { "origin": [-6, 36, -20], "size": [12, 4, 40] }
       ] },
-      { "name": "roof", "pivot": [0, 44, 0], "cubes": [
+      { "name": "soil_c8403c_roof", "pivot": [0, 44, 0], "cubes": [
         { "origin": [-28, 44, -24], "size": [28, 3, 48], "pivot": [0, 44, 0], "rotation": [0, 0, -30] },
         { "origin": [0, 44, -24], "size": [28, 3, 48], "pivot": [0, 44, 0], "rotation": [0, 0, 30] }
       ] }
@@ -33,7 +42,7 @@ const EXAMPLE = `{
 
 export function buildPrompt(idea: string): string {
   const U = UNITS_PER_VOXEL;
-  const palette = PALETTE.map((p) => `   * ${p.name}: ${hex6(p.hex)} (${p.en})`).join('\n');
+  const mats = MAT_IDS.map((m) => `   * ${m}: ${MAT_NOTE[m]} (default color ${hex6(MAT_DEFAULT_HEX[m])})`).join('\n');
   return `You are an assistant that creates 3D models. Strictly follow the specification below and create a low-poly building
 as Minecraft Bedrock geometry JSON (the Blockbench "Bedrock Entity" format, .geo.json).
 ## What to build (it may be written in Japanese)
@@ -48,8 +57,10 @@ ${idea.trim()}
 * Orientation: the front faces -Z (north). Seen from the front, +X is on the right
 * Size: including any rotation, width and depth within ${LIMITS.widthUnits} units (${LIMITS.widthUnits / U} blocks), height within ${LIMITS.heightUnits} units (${LIMITS.heightUnits / U} blocks)
 * Counts: at most ${LIMITS.cubes} cubes, ${LIMITS.bones} groups, and ${LIMITS.depth} levels of nesting. The whole JSON must be within ${LIMITS.fileBytes / 1024} KB
-* Colors: decided by the group name. Name each group one of the following, or "<name>_<anything>" (e.g. roof_left, wall_front). A group without a color name uses its parent group's color
-${palette}
+* Materials and colors: decided by the group name, "<material>_<rrggbb>" or "<material>_<rrggbb>_<anything>" (e.g. wood_8a5a3c_door, stone_6f7780_base). <rrggbb> is any color as 6 lowercase hex digits. A group without a material name uses its parent group's material and color
+* Materials (choose the one the part is made of; the color can be anything):
+${mats}
+* Windows: add "_glass" to the name (e.g. mineral_bfd8e0_glass). Windows glow at night
 
 ## Example (small hut)
 ${EXAMPLE}

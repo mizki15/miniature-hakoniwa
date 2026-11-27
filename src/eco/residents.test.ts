@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GIFT_CHANCE, JOB_TEXT, HOME_PREFS, TREAT_MS, jobEffects, likedBy, likelyResidents, missingRaws, pickShareCrop, residentPickupPerDay, shares, visitorGift, type Site } from './residents';
+import { GIFT_CHANCE, JOB_TEXT, HOME_PREFS, TREAT_MS, jobEffects, likedBy, likelyResidents, scarceMats, pickShareCrop, residentPickupPerDay, shares, visitorGift, type Site } from './residents';
 import { emptyEnv } from './environment';
 import { checkEcosystem } from './ecosystem';
 import { RESIDENT_ORDER, type Moment } from './species';
@@ -16,19 +16,19 @@ describe('favourite houses', () => {
     for (const sp of RESIDENT_ORDER) { expect(HOME_PREFS[sp]).toBeDefined(); expect(JOB_TEXT[sp]).toBeTruthy(); }
   });
   it('material shares', () => {
-    const s = shares(house({ wall: 30, plank: 10, stone: 20, thatch: 40 }));
-    expect(s.wood).toBeCloseTo(0.4); expect(s.stone).toBeCloseTo(0.2); expect(s.thatch).toBeCloseTo(0.4);
+    const s = shares(house({ wood: 40, stone: 20, fiber: 40 }));
+    expect(s.wood).toBeCloseTo(0.4); expect(s.stone).toBeCloseTo(0.2); expect(s.fiber).toBeCloseTo(0.4);
   });
   it('a small low house in a meadow suits rabbits, but not away from the meadow', () => {
-    const c = house({ wall: 50, roof: 50 }, { size: 1, height: 3 });
+    const c = house({ wood: 50, soil: 50 }, { size: 1, height: 3 });
     expect(likelyResidents(c).map((x) => x.species)).toContain('rabbit');
     expect(likedBy(c, site({ meadow: true }))).toContain('rabbit');
     expect(likedBy(c, site())).not.toContain('rabbit');
   });
   it('a brick house with lights suits cats; a stone house by the water suits otters', () => {
-    expect(likedBy(house({ brick: 40, roof: 40, glass: 20 }, { light: 2 }), site())).toContain('cat');
-    expect(likedBy(house({ brick: 40, roof: 40, glass: 20 }, { light: 0 }), site())).not.toContain('cat');
-    expect(likedBy(house({ stone: 40, roof: 60 }), site({ water: true }))).toEqual(expect.arrayContaining(['otter', 'duck']));
+    expect(likedBy(house({ soil: 80, mineral: 20 }, { light: 2 }), site())).toContain('cat');
+    expect(likedBy(house({ soil: 80, mineral: 20 }, { light: 0 }), site())).not.toContain('cat');
+    expect(likedBy(house({ stone: 40, soil: 60 }), site({ water: true }))).toEqual(expect.arrayContaining(['otter', 'duck']));
   });
 });
 
@@ -60,11 +60,11 @@ describe('jobs', () => {
     expect(jobEffects([{ species: 'fox', col: 0 }], 320).stayMul).toBe(1.2);
     expect(jobEffects([], 320)).toMatchObject({ treeSpreadMul: 1, stayMul: 1, extraLogs: 0, extraStraw: 0, wetMul: 1, satisfyMul: 1 });
   });
-  it('pickers bring raws every day; a shared crop adds more for 3 days', () => {
-    expect(residentPickupPerDay([{ species: 'serow', col: 0 }], 0)).toEqual({ rock: 1 });
+  it('pickers bring materials every day; a shared crop adds more for 3 days', () => {
+    expect(residentPickupPerDay([{ species: 'serow', col: 0 }], 0)).toEqual({ stone: 1 });
     expect(residentPickupPerDay([{ species: 'rabbit', col: 0 }], 0)).toEqual({});
-    expect(residentPickupPerDay([{ species: 'rabbit', col: 0, treatedUntil: TREAT_MS }], TREAT_MS - 1)).toEqual({ blossom: 0.5 });
-    expect(residentPickupPerDay([{ species: 'serow', col: 0, treatedUntil: 10 }], 5)).toEqual({ rock: 2 });
+    expect(residentPickupPerDay([{ species: 'rabbit', col: 0, treatedUntil: TREAT_MS }], TREAT_MS - 1)).toEqual({ fiber: 0.5 });
+    expect(residentPickupPerDay([{ species: 'serow', col: 0, treatedUntil: 10 }], 5)).toEqual({ stone: 2 });
   });
 });
 
@@ -76,19 +76,20 @@ describe('sharing crops', () => {
   });
 });
 
-describe('visitors bring missing raws', () => {
-  it('only raws whose land is missing', () => {
+describe('visitors bring scarce materials (v0.20)', () => {
+  it('only materials whose land is missing', () => {
     const e = { ...emptyEnv(), ground: 100, forest: 10, waterside: 10, flowerField: 5 };
-    expect(missingRaws(e)).toEqual(['clay', 'reed', 'sand', 'shell', 'iron_ore']);
-    expect(missingRaws({ ...e, wetland: 5, beach: 5, rock: 5 })).toEqual([]);
+    expect(scarceMats(e)).toEqual(['mineral']); // 岩場も砂浜も無い
+    expect(scarceMats({ ...emptyEnv(), ground: 100 })).toEqual(['wood', 'stone', 'mineral']);
+    expect(scarceMats({ ...e, beach: 5 })).toEqual([]);
   });
   it('sometimes, 1–2 of one of them', () => {
-    const e = { ...emptyEnv(), ground: 100, forest: 10, waterside: 10, flowerField: 5, beach: 5, rock: 5 }; // 足りないのは粘土と葦
+    const e = { ...emptyEnv(), ground: 100, waterside: 10, beach: 5 }; // 足りないのは木材だけ
     expect(visitorGift(e, () => GIFT_CHANCE)).toBeNull();
     const seq = [0, 0.6, 0.9];
     const g = visitorGift(e, () => seq.shift()!);
-    expect(g).toEqual({ raw: 'reed', n: 2 });
-    expect(visitorGift({ ...e, wetland: 5 }, () => 0)).toBeNull();
+    expect(g).toEqual({ mat: 'wood', n: 2 });
+    expect(visitorGift({ ...e, forest: 5 }, () => 0)).toBeNull();
   });
 });
 

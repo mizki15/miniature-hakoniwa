@@ -65,7 +65,7 @@ describe('buildingCharacter: counting', () => {
   });
   it('a thin door (1/16 block) is still counted', () => {
     const c = buildingCharacter(design({ wall: [block(0, 0, 0, 2, 2, 2)], glass: [{ origin: [0, 0, -1], size: [32, 32, 1] }] }));
-    expect(c.areas.glass).toBeGreaterThan(3);
+    expect(c.glass).toBeGreaterThan(3);
     expect(c.light).toBeGreaterThan(0);
   });
   it('parts floating in the air are not counted', () => {
@@ -102,7 +102,7 @@ describe('buildingCharacter: stars', () => {
   it('nature is the area-weighted average of material naturalness', () => {
     expect(buildingCharacter(design({ thatch: [block(0, 0, 0, 2, 2, 2)] })).nature).toBe(5);
     expect(buildingCharacter(design({ dark: [block(0, 0, 0, 2, 2, 2)] })).nature).toBe(1);
-    expect(natureStars({ thatch: 1, glass: 1 })).toBe(3);
+    expect(natureStars({ fiber: 1, mineral: 1 })).toBe(3);
     expect(natureStars({})).toBe(3);
   });
   it('light steps with the visible glass area', () => {
@@ -116,11 +116,11 @@ describe('buildingCharacter: stars', () => {
 describe('buildingCharacter: thin parts on a wall', () => {
   it('a 1/16 glass pane laid on a wall shows as a window', () => {
     const c = buildingCharacter(design({ white: [block(0, 0, 0, 4, 3, 4)], glass: [{ origin: [16, 16, -1], size: [14, 14, 1] }] }));
-    expect(c.areas.glass).toBeGreaterThan(0.5);
+    expect(c.glass).toBeGreaterThan(0.5);
     expect(c.light).toBeGreaterThan(0);
   });
   it('a pane inside the wall (not on its surface) still does not count', () => {
     const c = buildingCharacter(design({ white: [block(0, 0, 0, 4, 3, 4)], glass: [{ origin: [16, 16, 8], size: [14, 14, 1] }] }));
-    expect(c.areas.glass ?? 0).toBe(0);
+    expect(c.glass).toBe(0);
   });
 });

@@ -12,7 +12,7 @@ import { colored } from './flowers';
 export const PEBBLE_VARIANTS = 3;
 export const GRASS_VARIANTS = 3;
 export const REED_VARIANTS = 2;
-/** 湿地の泥の列のうち、葦が生えている割合（刈ると数日で生え戻る。原料の「葦」になる） */
+/** 湿地の泥の列のうち、葦が生えている割合（刈ると数日で生え戻る。素材の「葦」になる） */
 export const REED_CHANCE = 0.35;
 
 const PEBBLE_COLORS = [0x8f969e, 0xa7a49a, 0x7b8188, 0x9a8f80, 0xb3b0a6];
@@ -113,7 +113,7 @@ export const isReedSpot = (col: number) => colHash(col, 9) < REED_CHANCE;
 /**
  * 小石と草の置き場所を決める。
  * skip(col)：置かない列（木・建物・作物・花のある列、開いていない区画など）。
- * 葦は小物の多さに関わらず出す（原料になるので）。cut(col)：刈ってまだ生え戻っていない列
+ * 葦は小物の多さに関わらず出す（素材になるので）。cut(col)：刈ってまだ生え戻っていない列
  */
 export function placeGround(
   voxels: Uint8Array, heights: Int16Array, size: number, height: number, density: number,
