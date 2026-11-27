@@ -1,4 +1,5 @@
-import type * as THREE from 'three/webgpu';
+import * as THREE from 'three/webgpu';
+import { faceColor } from '../world/blocks';
 
 /**
  * 小さなプレビューの絵（v0.20.1。画面下の選択バーのアイコン）：ローポリの形（頂点色つき）を 2D の canvas に描く。
@@ -74,4 +75,33 @@ export function renderThumb(g: THREE.BufferGeometry, { size = 72, yaw = 0.62, pi
     ctx.stroke();
   }
   return cv.toDataURL();
+}
+
+/** ブロック 1 つのプレビュー用の形：箱の面ごとに、上・下・側の色（world/blocks.ts） */
+export function blockPreviewGeometry(block: number): THREE.BufferGeometry {
+  const g = new THREE.BoxGeometry(1, 1, 1).toNonIndexed();
+  const n = g.getAttribute('position').count;
+  const col = new Float32Array(n * 3);
+  // BoxGeometry の面の順：+x, -x, +y, -y, +z, -z（1 面 6 頂点）
+  const kinds = [2, 2, 0, 1, 2, 2] as const;
+  for (let i = 0; i < n; i++) col.set(faceColor(block, kinds[Math.floor(i / 6)]), i * 3);
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+
+/** 絵文字のアイコン（形の無い道具に） */
+export function emojiIcon(emoji: string, size = 72): string {
+  const key = `emoji:${emoji}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const ctx = cv.getContext('2d')!;
+  ctx.font = `${Math.round(size * 0.66)}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, size / 2, size / 2 + size * 0.04);
+  const url = cv.toDataURL();
+  cache.set(key, url);
+  return url;
 }

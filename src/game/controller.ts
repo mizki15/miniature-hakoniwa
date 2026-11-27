@@ -7,6 +7,7 @@ import { FRAME, PLOT, plotOfCol, plotRect } from '../world/plots';
 import { canSetCol, floodAllowed } from './edgeRules';
 import { CROPS, Farm, type Crop, type CropKind, type FarmEnv, type Sapling } from './farm';
 import { UndoStack } from './undoStack';
+import { PATH_DEF, buildPathTile, pathIndex, pathOfIndex, type PathKind } from './paths';
 import { TOOL_DEFS, toolDef, type ToolAt, type ToolCtx } from './tools';
 import { buildCropGeometry, buildSaplingGeometry, type SaplingKind } from './cropModels';
 import { raycastVoxels, type VoxelHit } from './picking';
@@ -71,6 +72,8 @@ interface UndoEntry {
   decor: Float32Array[];
   treeCols: Set<number>;
   planted: Map<number, number>;
+  /** 道のタイル（v0.20.3） */
+  paths: Map<number, PathKind>;
 }
 
 /** 木を 1 本切ると手に入る丸太（広葉樹か針葉樹）と、葉・つる */
@@ -96,8 +99,8 @@ export const TOOLS: { id: Tool; name: string; icon: string; help: string }[] = [
   { id: 'fell', name: '木を切る', icon: '🪓', help: `育った木を切って${matsText(TREE_YIELD)}。切り株から、また育つ` },
   { id: 'dig', name: '掘る', icon: '🕳', help: 'ブロックを掘る。水のそばを掘ると水が流れ込む' },
   { id: 'raise', name: 'ブロックを置く', icon: '🧱', help: '選んだブロックを置く' },
-  { id: 'level', name: '整地', icon: '📏', help: '最初に押したマスの高さに、なぞった所を削る・盛る' },
-  { id: 'path', name: '道を敷く', icon: '🛤', help: '地面を道にする。住人は道を好んで歩く' },
+  { id: 'level', name: 'ならす', icon: '📏', help: '最初に押したマスの高さに、なぞった所を削る・盛る' },
+  { id: 'path', name: '道を敷く', icon: '🛤', help: '道のタイルを敷く（地面から 1/8 盛り上がる）。住人は道を好んで歩く' },
   { id: 'build', name: '建物を置く', icon: '🏠', help: '選んだ建物を地面に置く。下から少しずつ建っていく' },
   { id: 'unbuild', name: '片付ける', icon: '🧹', help: '置いた建物を取り除く（棚には残る）' },
 ];
@@ -107,11 +110,6 @@ export const FLOWER_KINDS: { variant: number; name: string; icon: string }[] = [
   { variant: 0, name: '赤い花', icon: '🌹' },
   { variant: 1, name: '黄色い花', icon: '🌼' },
   { variant: 2, name: '白い花', icon: '🤍' },
-];
-/** 敷ける道 */
-export const PATH_KINDS: { id: number; name: string; icon: string }[] = [
-  { id: PATH, name: '土の道', icon: '🟤' },
-  { id: COBBLE, name: '石畳', icon: '⬜' },
 ];
 /** 整地で、1 列あたり削る・盛る高さの上限 */
 const LEVEL_MAX = 8;
@@ -168,7 +166,8 @@ export class GameController {
   /** 「花を植える」で植える花（FLOWER_KINDS の variant） */
   flowerVariant = 0;
   /** 「道を敷く」で敷く道のブロック */
-  pathBlock: number = PATH;
+  /** 道作りで敷く道（v0.20.3） */
+  pathKind: PathKind = 'dirt';
   /** 植えた花（列 → 花の形）。地形から作り直せないので保存する */
   private planted = new Map<number, number>();
   /** 整地：このなぞりでそろえる高さ（最初に押した列の地面の高さ）。なぞりごとに決め直す */
@@ -290,6 +289,9 @@ export class GameController {
     this.edits.clear();
     this.chunks.clear();
     this.farmland.clear();
+    this.pathTiles.clear();
+    w.paths = new Uint8Array(w.size * w.size);
+    this.pathsDirty = true;
     this.irrigatedCache.clear();
     this.cropMeshes = [];
     this.growingMeshes = [];
@@ -419,7 +421,7 @@ export class GameController {
       for (let i = 0; i < d.placements.length; i += 5) flowerCols.add(Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * w.size);
     }
     const pl = placeGround(w.voxels, w.heights, w.size, w.height, this.groundDensity,
-      (col) => this.treeCols.has(col) || this.buildingCols.has(col) || flowerCols.has(col), (col) => this.reedCut.has(col));
+      (col) => this.treeCols.has(col) || this.buildingCols.has(col) || flowerCols.has(col) || this.pathTiles.has(col), (col) => this.reedCut.has(col));
     const half = w.size / 2;
     const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
     const make = (geo: THREE.BufferGeometry, mat: THREE.Material, list: number[]) => {
@@ -808,6 +810,7 @@ export class GameController {
       decor: this.decor.map((d) => d.placements),
       treeCols: new Set(this.treeCols),
       planted: new Map(this.planted),
+      paths: new Map(this.pathTiles),
     };
   }
 
@@ -848,7 +851,13 @@ export class GameController {
    * 記録の状態に戻す。戻す前の状態を、同じ形の記録にして返す
    * （取り消しの記録を当てるとやり直しの記録が、やり直しの記録を当てると取り消しの記録ができる）
    */
+  /** 取り消し・やり直しの最中（地形を戻す時に消える道の素材は、持ち物の差分で戻すので、ここでは戻さない） */
+  private applyingEntry = false;
   private applyEntry(r: UndoEntry): UndoEntry {
+    this.applyingEntry = true;
+    try { return this.applyEntryInner(r); } finally { this.applyingEntry = false; }
+  }
+  private applyEntryInner(r: UndoEntry): UndoEntry {
     const back = this.snapshot(r.label);
     for (const i of r.voxels.keys()) back.voxels.set(i, this.world!.voxels[i]);
     back.changed = true;
@@ -877,6 +886,8 @@ export class GameController {
     for (const c of this.treeCols) if (!r.treeCols.has(c)) cols.add(c);
     for (const c of r.treeCols) if (!this.treeCols.has(c)) cols.add(c);
     this.treeCols = r.treeCols;
+    // 道のタイル（地形を戻した後に。戻す間に消えた分も、記録のとおりに）
+    this.setAllPaths(r.paths);
     // 花（植えた花の記録も）・切った木
     this.planted = r.planted;
     r.decor.forEach((p, k) => {
@@ -909,6 +920,11 @@ export class GameController {
     this.env();
     const i = this.idx(x, y, z);
     if (w.voxels[i] === t) return;
+    // 道のタイル（v0.20.3）：その列の表面を変えた・タイルと同じ空間（表面のすぐ上）にブロックを置いた時は、道を消す（素材は戻す）
+    {
+      const pc = x + z * w.size;
+      if (this.pathTiles.has(pc) && y >= w.heights[pc] - 1) this.removePath(pc, !this.applyingEntry);
+    }
     // 取り消しの記録：このなぞりで初めて変える所だけ、元の種類を覚える
     if (this.recording && !this.recording.voxels.has(i)) this.recording.voxels.set(i, w.voxels[i]);
     w.voxels[i] = t;
@@ -921,7 +937,7 @@ export class GameController {
     w.heights[col] = h;
     this.updateWalkable(col);
     // 表面がむき出しの土になった列は、草が生えるまでの時計を回し始める（土でなくなったらやめる）
-    if (h > 0 && w.voxels[this.idx(x, h - 1, z)] === DIRT && h >= w.waterLevel) { if (!this.bareSince.has(col)) this.bareSince.set(col, this.farm.simMs); }
+    if (h > 0 && w.voxels[this.idx(x, h - 1, z)] === DIRT && h >= w.waterLevel && !this.pathTiles.has(col)) { if (!this.bareSince.has(col)) this.bareSince.set(col, this.farm.simMs); }
     else this.bareSince.delete(col);
     this.texLayers.add(y); // 地形の 3D テクスチャは、変えた高さの層だけ送る（tick の終わりにまとめて）
     this.irrigatedCache.clear();
@@ -1129,11 +1145,11 @@ export class GameController {
         if (!topFace || !isTop) return res(false, '地面の上面を選んでください');
         if (this.treeCols.has(col)) return res(false, '木の根元には敷けません');
         if (this.farm.crops.has(col)) return res(false, '作物があります');
-        const name = PATH_KINDS.find((p) => p.id === this.pathBlock)?.name ?? '道';
-        if (t === this.pathBlock) return res(false, `もう${name}です`);
-        if (t !== GRASS && t !== DIRT && t !== SAND && !isFarm(t) && t !== PATH && t !== COBBLE) return res(false, '草地・土・砂の所に敷けます');
+        const name = PATH_DEF[this.pathKind].name;
+        if (this.pathTiles.get(col) === this.pathKind) return res(false, `もう${name}です`);
+        if (t !== GRASS && t !== DIRT && t !== SAND && !isFarm(t) && t !== PATH && t !== COBBLE && t !== MUD) return res(false, '草地・土・砂の所に敷けます');
         const pc = this.pathCost();
-        if (pc && !this.canPay(pc)) return res(false, `${matsText(pc)}が要ります`);
+        if (pc && !this.canPay(pc)) return res(false, `${matsText(pc)} が要ります`);
         return res(true, pc ? `${name}を敷く（${matsText(pc)}）` : `${name}を敷く`);
       }
       case 'dig':
@@ -1156,7 +1172,7 @@ export class GameController {
         const there = this.get(tx, ty, tz);
         if (there !== AIR && there !== WATER) return res(false, 'ふさがっています', tx, ty, tz);
         const need = blockCost(this.block);
-        if (need && !this.canPay(need)) return res(false, `${matsText(need)}が要ります`, tx, ty, tz);
+        if (need && !this.canPay(need)) return res(false, `${matsText(need)} が要ります`, tx, ty, tz);
         return res(true, `${this.blockName()}を置く${need ? `（${matsText(need)}）` : ''}`, tx, ty, tz);
       }
       case 'level': {
@@ -1231,6 +1247,7 @@ export class GameController {
       }
       case 'plant': {
         this.removeFlowersAt(x, z);
+        this.removePath(col);
         // 広葉樹は 0〜3 番、針葉樹は 4・5 番の木の形に育つ（v0.20.1 から選べる）
         const variant = this.saplingKind === 'conifer' ? 4 + Math.floor(Math.random() * 2) : Math.floor(Math.random() * 4);
         this.farm.plantSapling(col, variant, Math.floor(Math.random() * 4) * (Math.PI / 2));
@@ -1245,14 +1262,17 @@ export class GameController {
         return `${FLOWER_KINDS.find((f) => f.variant === this.flowerVariant)?.name ?? '花'}を植えました`;
       case 'path': {
         const pc = this.pathCost();
-        if (pc && !payMats(this.farm.inventory, { mats: pc })) return `${matsText(pc)}が要ります`;
-        // 前が石畳なら石材を戻す（土の道に変える時など）
-        if (this.get(x, y, z) === COBBLE && this.pathBlock !== COBBLE) gain(this.farm.inventory, 'stone');
+        if (pc && !payMats(this.farm.inventory, { mats: pc })) return `${matsText(pc)} が要ります`;
+        // 前の道は素材を戻して敷き替える
+        this.removePath(col);
         this.removeFlowersAt(x, z);
         this.farmland.delete(col);
         this.farm.wetUntil.delete(col);
-        this.setVoxel(x, y, z, this.pathBlock);
-        return `${PATH_KINDS.find((p) => p.id === this.pathBlock)?.name ?? '道'}を敷きました`;
+        // タイルの下は土（草が生えない）
+        if (this.get(x, y, z) !== DIRT && this.get(x, y, z) !== SAND) this.setVoxel(x, y, z, DIRT);
+        this.bareSince.delete(col);
+        this.setPath(col, this.pathKind);
+        return `${PATH_DEF[this.pathKind].name}を敷きました`;
       }
       case 'pick': {
         // 花を摘む（生成された花は、枯れた時と同じく保存して消し直す）か、葦を刈る
@@ -1331,7 +1351,7 @@ export class GameController {
           if (this.farmland.delete(col)) this.setVoxel(x, prevTop, z, DIRT);
         }
         const need = blockCost(this.block);
-        if (need && !payMats(this.farm.inventory, { mats: need })) return `${matsText(need)}が要ります`;
+        if (need && !payMats(this.farm.inventory, { mats: need })) return `${matsText(need)} が要ります`;
         this.setVoxel(x, y, z, this.block);
         return `${this.blockName()}を置きました`;
       }
@@ -1371,7 +1391,87 @@ export class GameController {
   /** 払えるか */
   private canPay(a: MatAmounts) { return Object.keys(missingMats(this.farm.inventory, { mats: a })).length === 0; }
   /** 道を敷くのに要る素材（土の道は要らない） */
-  private pathCost(): MatAmounts | null { return this.pathBlock === PATH ? null : blockCost(this.pathBlock); }
+  private pathCost(): MatAmounts | null { return PATH_DEF[this.pathKind].cost; }
+
+  // ---------- 道のタイル（v0.20.3。game/paths.ts） ----------
+  /** 列 → 道の種類 */
+  private pathTiles = new Map<number, PathKind>();
+  private pathMeshes: THREE.InstancedMesh[] = [];
+  private pathGeos = new Map<PathKind, THREE.BufferGeometry>();
+  private pathsDirty = false;
+  /** 道のある列（地面の小物・住人の行き先などに） */
+  get pathCols(): ReadonlySet<number> { return new Set(this.pathTiles.keys()); }
+  pathAt(col: number): PathKind | null { return this.pathTiles.get(col) ?? null; }
+  private setPath(col: number, k: PathKind) {
+    this.pathTiles.set(col, k);
+    if (this.world?.paths) this.world.paths[col] = pathIndex(k);
+    this.pathsDirty = true;
+    this.env();
+  }
+  /** 道を取り除く（素材は戻す）。無ければ何もしない */
+  private removePath(col: number, refund = true) {
+    const k = this.pathTiles.get(col);
+    if (!k) return;
+    this.pathTiles.delete(col);
+    if (this.world?.paths) this.world.paths[col] = 0;
+    const c = PATH_DEF[k].cost;
+    if (refund && c) refundMats(this.farm.inventory, { mats: c });
+    this.pathsDirty = true;
+    this.env();
+  }
+  /** 道をまとめて入れ替える（読み込み・取り消し） */
+  private setAllPaths(m: Map<number, PathKind>) {
+    this.pathTiles = new Map(m);
+    if (this.world) {
+      this.world.paths = new Uint8Array(this.world.size * this.world.size);
+      for (const [col, k] of m) this.world.paths[col] = pathIndex(k);
+    }
+    this.pathsDirty = true;
+    this.env();
+  }
+  /** 道のタイルを描き直す（種類ごとに 1 つの InstancedMesh） */
+  private rebuildPaths() {
+    const w = this.world;
+    for (const m of this.pathMeshes) { this.deps.diorama.remove(m); m.dispose(); }
+    this.pathMeshes = [];
+    if (!w) return;
+    const half = w.size / 2;
+    const byKind = new Map<PathKind, number[]>();
+    for (const [col, k] of this.pathTiles) { if (!byKind.has(k)) byKind.set(k, []); byKind.get(k)!.push(col); }
+    const mtx = new THREE.Matrix4();
+    for (const [k, cols] of byKind) {
+      let geo = this.pathGeos.get(k);
+      if (!geo) { geo = buildPathTile(k); this.pathGeos.set(k, geo); }
+      const im = new THREE.InstancedMesh(geo, this.deps.flowerMat, cols.length);
+      cols.forEach((col, i) => {
+        // 板の道は、列ごとに向きを 90° ずつ変えない（つながって見えるように）。ほかは少しだけ回す
+        const rot = k === 'plank' ? 0 : Math.floor((((col * 2654435761) >>> 0) / 4294967296) * 4) * (Math.PI / 2);
+        mtx.makeRotationY(rot).setPosition((col % w.size) + 0.5 - half, w.heights[col], Math.floor(col / w.size) + 0.5 - half);
+        im.setMatrixAt(i, mtx);
+      });
+      im.receiveShadow = true;
+      im.castShadow = false;
+      im.userData.sharedGeometry = true;
+      this.pathMeshes.push(im);
+      this.deps.diorama.add(im);
+    }
+  }
+  /**
+   * 昔の保存（v0.20.2 まで）の道のブロック（土の道・石畳）を、タイルに移す：表面のブロックを土にし、同じ種類のタイルを敷く
+   */
+  private migrateOldPaths() {
+    const w = this.world!;
+    const N = w.size, NN = N * N;
+    for (let col = 0; col < NN; col++) {
+      const h = w.heights[col];
+      if (h <= 0) continue;
+      const t = w.voxels[col + (h - 1) * NN];
+      if (t !== PATH && t !== COBBLE) continue;
+      this.setVoxel(col % N, h - 1, Math.floor(col / N), DIRT);
+      this.bareSince.delete(col);
+      this.setPath(col, t === COBBLE ? 'cobble' : 'dirt');
+    }
+  }
   /** そのブロックに要る素材の名前（足りない時の知らせ） */
 
   /** 「ブロックを置く」で選んでいるブロックの名前 */
@@ -1697,6 +1797,7 @@ export class GameController {
   flushDirty() {
     if (this.cropsDirty) { this.cropsDirty = false; this.rebuildCrops(); }
     if (this.growingDirty) { this.growingDirty = false; this.rebuildGrowing(); }
+    if (this.pathsDirty) { this.pathsDirty = false; this.rebuildPaths(); }
     const t = this.typeTex as (THREE.Data3DTexture & { layerUpdates?: Set<number> }) | null;
     if (t && (this.texFull || this.texLayers.size)) {
       // WebGPU は layerUpdates の層だけを送り、送ったら空にする。WebGL は 3D テクスチャを毎回丸ごと送る（層は残るので、多くなったら空にする）
@@ -1886,7 +1987,7 @@ export class GameController {
   // ---------- 保存・読み込み ----------
 
   /** 保存用：地形の差分と畑の状態 */
-  exportState(): Pick<SaveData, 'edits' | 'farm' | 'buildings'> {
+  exportState(): Pick<SaveData, 'edits' | 'farm' | 'buildings' | 'paths'> {
     const edits: number[] = [];
     for (const [i, t] of this.edits) edits.push(i, t);
     const f = this.farm;
@@ -1909,6 +2010,7 @@ export class GameController {
         designs: [...this.designs.values()],
         placed: this.placed.map((p): [string, number, number, Rot, number?, number?] => (p.paid ? [p.id, p.x, p.z, p.rot, +Math.min(1, p.progress).toFixed(5), 1] : p.progress >= 1 ? [p.id, p.x, p.z, p.rot] : [p.id, p.x, p.z, p.rot, +p.progress.toFixed(5)])),
       },
+      paths: [...this.pathTiles].map(([col, k]): [number, number] => [col, pathIndex(k)]),
     };
   }
 
@@ -1970,6 +2072,11 @@ export class GameController {
     // 進み具合のない古い記録は、建ち終わった建物として読む
     this.placed = save.buildings.placed.filter(([id]) => this.designs.has(id)).map(([id, x, z, rot, progress, paid]) => ({ id, x, z, rot, progress: progress ?? 1, paid: paid === 1 }));
     if (this.selectedDesign && !this.designs.has(this.selectedDesign)) this.selectedDesign = null;
+    // 道のタイル（v0.20.3）。昔の道のブロックはタイルに移す
+    const savedPaths = new Map<number, PathKind>();
+    for (const [col, k] of save.paths ?? []) { const kind = pathOfIndex(k); if (kind && col >= 0 && col < w.size * w.size) savedPaths.set(col, kind); }
+    this.setAllPaths(savedPaths);
+    this.migrateOldPaths();
     this.markCrops();
     this.markGrowing();
     this.rebuildBuildings();

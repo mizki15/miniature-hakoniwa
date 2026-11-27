@@ -59,6 +59,8 @@ export interface SaveData {
   buildings: { designs: BuildingDesign[]; placed: [designId: string, x: number, z: number, rot: Rot, progress?: number, paid?: number][] };
   /** 季節の目標（v0.17。eco/goals.ts。無ければ、読み込んだ時の季節で作る） */
   goals?: GoalsState;
+  /** 道のタイル（v0.20.3）：[列, 道の種類の番号（1 土の道・2 砂利道・3 石畳・4 板の道・5 れんが道）] */
+  paths?: [col: number, kind: number][];
 }
 
 /** v1（大きさを選んで作った箱庭）のデータ。地形の作り方が変わったので引き継げない */

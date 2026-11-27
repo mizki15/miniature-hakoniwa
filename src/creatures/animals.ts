@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { WorldData as World } from '../world/terrain';
 import { isPathBlock } from '../world/blocks';
+import { TILE_H } from '../game/paths';
 import { approach, gaitPose, turnToward, wrapAngle, type Gait } from './motion';
 import { RESIDENT_COLORS, buildResidentModel } from './models';
 
@@ -168,7 +169,8 @@ export class Animal {
     const N = this.world.size;
     const ix = Math.floor(x), iz = Math.floor(z);
     if (ix < 0 || iz < 0 || ix >= N || iz >= N) return null;
-    return { walk: this.world.walkable[ix + iz * N] === 1, h: this.world.heights[ix + iz * N] };
+    // 道のタイルの上は 1/8 高い（v0.20.3）
+    return { walk: this.world.walkable[ix + iz * N] === 1, h: this.world.heights[ix + iz * N] + ((this.world.paths?.[ix + iz * N] ?? 0) > 0 ? TILE_H : 0) };
   }
 
   /** その場所の一番上が道か */
@@ -177,7 +179,8 @@ export class Animal {
     const ix = Math.floor(x), iz = Math.floor(z);
     if (ix < 0 || iz < 0 || ix >= N || iz >= N) return false;
     const h = this.world.heights[ix + iz * N];
-    return h > 0 && isPathBlock(this.world.voxels[ix + iz * N + (h - 1) * N * N]);
+    // 道のタイル（v0.20.3）か、昔の道のブロック
+    return (this.world.paths?.[ix + iz * N] ?? 0) > 0 || (h > 0 && isPathBlock(this.world.voxels[ix + iz * N + (h - 1) * N * N]));
   }
 
   /**

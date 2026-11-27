@@ -36,8 +36,11 @@ import type { InitResult, PlotResult, RemeshResult } from './world/worker';
 import { FRAME, OPEN_PLOT_POINTS, PLOT, PLOTS_PER_SIDE, PLOT_COUNT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect } from './world/plots';
 import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
-import { FLOWER_KINDS, GameController, PATH_KINDS, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
+import { FLOWER_KINDS, GameController, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
 import { HoverTip } from './ui/hoverTip';
+import { PATHS, PATH_DEF, buildPathTile, type PathKind } from './game/paths';
+import { blockPreviewGeometry, emojiIcon } from './ui/thumb';
+import { blockCost, matsText } from './game/materials';
 import { PickBar, type PickItem } from './ui/pickBar';
 import { thumbOf } from './ui/thumb';
 import { buildCropGeometry, buildSaplingGeometry } from './game/cropModels';
@@ -483,8 +486,51 @@ async function main() {
   /** 道具の選択肢 1 つ。id：'till'・'seed:wheat'・'block:3'・'flower:1'・'path:15'・'build:<建物>' など */
   type ToolOption = { id: string; icon: string; name: string; help: string };
   const help = (t: Tool) => TOOLS.find((x) => x.id === t)!.help;
-  /** 植栽（v0.20.1）：左の一覧では 1 つ。選ぶと画面下に植えるものが並ぶ */
-  const PLANTING: ToolOption = { id: 'planting', icon: '🌱', name: '植栽', help: '作物の種をまく・苗木を植える。選ぶと画面の下に、植えるもの（作物 10 種類と苗木 2 種類）が並ぶ' };
+  /**
+   * カテゴリ（v0.20.1 植栽、v0.20.3 ブロック配置・道作り・造成）：左の一覧では 1 つ。選ぶと画面下の選択バーに中身が並ぶ。
+   * match：その道具の id がこのカテゴリのものか。def：初めて選んだ時の道具
+   */
+  interface Category { opt: ToolOption; group: string; match: (id: string) => boolean; items: () => PickItem[]; def: string }
+  const SEASON_SHORT = ['春', '夏', '秋', '冬'];
+  const CATS: Category[] = [
+    {
+      opt: { id: 'cat:planting', icon: '🌱', name: '植栽', help: '作物の種をまく・苗木を植える。選ぶと画面の下に、植えるもの（作物 10 種類と苗木 2 種類）が並ぶ' },
+      group: 'g:life', match: (id) => id.startsWith('seed:') || id.startsWith('sapling:'), def: 'seed:turnip',
+      items: () => [
+        ...CROP_KINDS.map((k) => ({
+          id: `seed:${k}`, name: CROPS[k].name, img: thumbOf(`crop:${k}`, () => buildCropGeometry(k, 3)),
+          help: `${CROPS[k].name}の種をまく（畑に）。育つまで約 ${CROPS[k].hours} 時間・旬は ${CROPS[k].seasons.map((x) => SEASON_SHORT[x]).join('・')}`,
+        })),
+        { id: 'sapling:broad', name: '広葉樹', img: thumbOf('sapling:broad', () => buildSaplingGeometry('broad')), help: '広葉樹の苗木を植える（草地か土に）。約 1 日で丸い葉の木になる' },
+        { id: 'sapling:conifer', name: '針葉樹', img: thumbOf('sapling:conifer', () => buildSaplingGeometry('conifer')), help: '針葉樹の苗木を植える（草地か土に）。約 1 日でとがった葉の木になる' },
+      ],
+    },
+    {
+      opt: { id: 'cat:shape', icon: '⛏', name: '造成', help: '地面を掘る・ならす。右クリック（ドラッグしない短いクリック）で、掘る／ならすが切り替わる' },
+      group: 'g:terrain', match: (id) => id === 'dig' || id === 'level', def: 'dig',
+      items: () => [
+        { id: 'dig', name: '掘る', img: emojiIcon('🕳'), help: `${help('dig')}（右クリックで「ならす」に切り替え）` },
+        { id: 'level', name: 'ならす', img: emojiIcon('📏'), help: `最初に押したマスの高さに、なぞった所を削る・盛る（右クリックで「掘る」に切り替え）` },
+      ],
+    },
+    {
+      opt: { id: 'cat:blocks', icon: '🧱', name: 'ブロック配置', help: 'ブロックを置く。選ぶと画面の下に、置けるブロックが並ぶ' },
+      group: 'g:terrain', match: (id) => id.startsWith('block:'), def: `block:${PLACE_BLOCKS[0].id}`,
+      items: () => PLACE_BLOCKS.map((b) => {
+        const c = blockCost(b.id);
+        return { id: `block:${b.id}`, name: b.name, img: thumbOf(`block:${b.id}`, () => blockPreviewGeometry(b.id)), help: `${b.name}のブロックを置く${c ? `（${matsText(c)}）` : ''}。道のタイルの上に置くと、道は消える` };
+      }),
+    },
+    {
+      opt: { id: 'cat:paths', icon: '🛤', name: '道作り', help: '道を敷く（地面から 1/8 ブロック盛り上がったタイル）。選ぶと画面の下に、道の種類が並ぶ' },
+      group: 'g:terrain', match: (id) => id.startsWith('path:'), def: 'path:dirt',
+      items: () => PATHS.map((p) => ({ id: `path:${p.id}`, name: p.name, img: thumbOf(`path:${p.id}`, () => buildPathTile(p.id), { pitch: 0.95, yaw: 0.5 }), help: p.help })),
+    },
+  ];
+  const catOf = (id: string) => CATS.find((c) => c.opt.id === id || c.match(id));
+  const catOpt = (id: string) => CATS.find((c) => c.opt.id === id)!.opt;
+  /** カテゴリごとに、最後に選んだ道具 */
+  const lastInCat = new Map<string, string>();
   /** グループ（1〜3 キーもこの順） */
   const GROUPS: { id: string; name: string; options: () => ToolOption[] }[] = [
     { id: 'g:build', name: 'Build', options: () => [
@@ -493,40 +539,25 @@ async function main() {
     ] },
     { id: 'g:life', name: 'Life', options: () => [
       // 耕す・植栽（作物と苗木。画面下で選ぶ。v0.20.1）・水やり・収穫（game/tools.ts）
-      ...registryOptions('life').filter((o) => !o.id.startsWith('seed:')).flatMap((o) => (o.id === 'till' ? [o, PLANTING] : [o])),
+      ...registryOptions('life').filter((o) => !o.id.startsWith('seed:')).flatMap((o) => (o.id === 'till' ? [o, catOpt('cat:planting')] : [o])),
       ...FLOWER_KINDS.map((f) => ({ id: `flower:${f.variant}`, icon: f.icon, name: f.name, help: help('flower') })),
       { id: 'pick', icon: '✂', name: '摘む・刈る', help: help('pick') },
       { id: 'fell', icon: '🪓', name: '木を切る', help: help('fell') },
     ] },
-    { id: 'g:terrain', name: 'Terrain', options: () => [
-      { id: 'dig', icon: '🕳', name: '掘る', help: help('dig') },
-      { id: 'level', icon: '📏', name: '整地', help: help('level') },
-      ...PATH_KINDS.map((p) => ({ id: `path:${p.id}`, icon: p.icon, name: p.name, help: help('path') })),
-      ...PLACE_BLOCKS.map((b) => ({ id: `block:${b.id}`, icon: b.icon, name: `${b.name}を置く`, help: `${b.name}のブロックを置く` })),
-    ] },
+    // 造成（掘る・ならす）・ブロック配置・道作り（v0.20.3。中身は画面下の選択バーで選ぶ）
+    { id: 'g:terrain', name: 'Terrain', options: () => [catOpt('cat:shape'), catOpt('cat:blocks'), catOpt('cat:paths')] },
   ];
   /** その道具が入っているグループ（Build は棚の建物で中身が変わるので、id の形でも見る） */
-  const groupOf = (id: string) => (id.startsWith('build:') ? GROUPS[0] : GROUPS.find((g) => g.options().some((o) => o.id === id)) ?? GROUPS[1]);
+  const groupOf = (id: string) => (id.startsWith('build:') ? GROUPS[0]
+    : GROUPS.find((g) => g.id === catOf(id)?.group) ?? GROUPS.find((g) => g.options().some((o) => o.id === id)) ?? GROUPS[1]);
   /** グループごとに、最後に選んだ道具 */
   const lastByGroup = new Map<string, string>();
-  /** 植栽（v0.20.1）：作物の種と苗木を 1 つの道具にまとめ、何を植えるかは画面下の選択バーで選ぶ */
-  const isPlanting = (id: string) => id === 'planting' || id.startsWith('seed:') || id.startsWith('sapling:');
-  let lastPlant = 'seed:turnip';
-  const SEASON_SHORT = ['春', '夏', '秋', '冬'];
-  const plantItems = (): PickItem[] => [
-    ...CROP_KINDS.map((k) => ({
-      id: `seed:${k}`, name: CROPS[k].name, img: thumbOf(`crop:${k}`, () => buildCropGeometry(k, 3)),
-      help: `${CROPS[k].name}の種をまく（畑に）。育つまで約 ${CROPS[k].hours} 時間・旬は ${CROPS[k].seasons.map((x) => SEASON_SHORT[x]).join('・')}`,
-    })),
-    { id: 'sapling:broad', name: '広葉樹', img: thumbOf('sapling:broad', () => buildSaplingGeometry('broad')), help: '広葉樹の苗木を植える（草地か土に）。約 1 日で丸い葉の木になる' },
-    { id: 'sapling:conifer', name: '針葉樹', img: thumbOf('sapling:conifer', () => buildSaplingGeometry('conifer')), help: '針葉樹の苗木を植える（草地か土に）。約 1 日でとがった葉の木になる' },
-  ];
   const pickBar = new PickBar($('pickBar'), (id) => pickTool(id), (it) => { if (it) hintEl.textContent = it.help ?? it.name; });
-  /** 画面下の選択バーを、いまの道具に合わせる（エディタで植栽を持っている時だけ出す） */
+  /** 画面下の選択バーを、いまの道具に合わせる（エディタで、カテゴリの道具を持っている時だけ出す） */
   const syncPickBar = () => {
-    const on = mode === 'edit' && isPlanting(editPick);
-    if (on) pickBar.show(plantItems(), editPick); else pickBar.hide();
-    layoutEl.classList.toggle('has-pickbar', on);
+    const cat = mode === 'edit' ? catOf(editPick) : undefined;
+    if (cat) pickBar.show(cat.items(), editPick); else pickBar.hide();
+    layoutEl.classList.toggle('has-pickbar', !!cat);
   };
   let editPick = 'till';
   /** 道具を持つ。グループの id（'g:life' など）なら、そのグループで最後に使った道具 */
@@ -536,15 +567,18 @@ async function main() {
       const g = GROUPS.find((x) => x.id === id)!;
       const opts = g.options();
       const last = lastByGroup.get(id);
-      id = last && (opts.some((o) => o.id === last) || isPlanting(last)) ? last : opts[0].id;
+      id = last && (opts.some((o) => o.id === last) || catOf(last)) ? last : opts[0].id;
     }
-    if (id === 'planting') id = lastPlant;
+    // カテゴリなら、そのカテゴリで最後に選んだもの
+    if (id.startsWith('cat:')) { const c = catOf(id)!; id = lastInCat.get(c.opt.id) ?? c.def; }
+    const cat = catOf(id);
+    if (cat) lastInCat.set(cat.opt.id, id);
     let t: Tool;
-    if (id.startsWith('seed:')) { game.seed = id.slice(5) as CropKind; t = 'seed'; lastPlant = id; }
-    else if (id.startsWith('sapling:')) { game.saplingKind = id.slice(8) === 'conifer' ? 'conifer' : 'broad'; t = 'plant'; lastPlant = id; }
+    if (id.startsWith('seed:')) { game.seed = id.slice(5) as CropKind; t = 'seed'; }
+    else if (id.startsWith('sapling:')) { game.saplingKind = id.slice(8) === 'conifer' ? 'conifer' : 'broad'; t = 'plant'; }
     else if (id.startsWith('block:')) { game.block = parseInt(id.slice(6), 10); t = 'raise'; }
     else if (id.startsWith('flower:')) { game.flowerVariant = parseInt(id.slice(7), 10); t = 'flower'; }
-    else if (id.startsWith('path:')) { game.pathBlock = parseInt(id.slice(5), 10); t = 'path'; }
+    else if (id.startsWith('path:')) { game.pathKind = PATH_DEF[id.slice(5) as PathKind] ? id.slice(5) as PathKind : 'dirt'; t = 'path'; }
     else if (id.startsWith('build:')) {
       const did = id.slice(6);
       if (!game.designs.has(did)) return;
@@ -568,7 +602,7 @@ async function main() {
       const ic = Object.assign(document.createElement('span'), { className: 'ic', textContent: o.icon });
       const nm = Object.assign(document.createElement('span'), { className: 'n', textContent: o.name }); // 建物の名前は読み込んだ物なので textContent で
       b.append(ic, nm);
-      b.classList.toggle('on', o.id === (isPlanting(editPick) ? 'planting' : editPick));
+      b.classList.toggle('on', o.id === (catOf(editPick)?.opt.id ?? editPick));
       b.addEventListener('click', () => pickTool(o.id));
       hoverTip.attach(b, () => o.help, 'right', false, $('editor'));
       return b;
@@ -1198,6 +1232,19 @@ async function main() {
     tooltipEl.style.left = `${Math.max(8, Math.min(appEl.clientWidth - w - 8, px + 16))}px`;
     tooltipEl.style.top = `${Math.max(8, Math.min(appEl.clientHeight - h - 8, py + 16))}px`;
   };
+
+  // エディタ：造成（掘る・ならす）を持っている時、短い右クリック（ドラッグしない・0.4 秒以内）で切り替える（v0.20.3）。
+  // 右ドラッグ（視点を回す）では切り替えない
+  let editRight: { x: number; y: number; t: number } | null = null;
+  renderer.domElement.addEventListener('pointerdown', (e) => { if (mode === 'edit' && e.button === 2) editRight = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    if (mode !== 'edit' || e.button !== 2 || !editRight) return;
+    const quick = Math.hypot(e.clientX - editRight.x, e.clientY - editRight.y) <= 5 && performance.now() - editRight.t < 400;
+    editRight = null;
+    if (!quick || (game.tool !== 'dig' && game.tool !== 'level')) return;
+    pickTool(game.tool === 'dig' ? 'level' : 'dig');
+    toast(game.tool === 'dig' ? '⛏ 掘る' : '📏 ならす（最初に押したマスの高さにそろえる）');
+  });
 
   // 短い右クリック（ドラッグではない時）だけで固定・解除する。左クリックでは変わらない
   //   作物・動物の上 → その情報を固定（固定中の物なら解除）／何もない所 → 解除

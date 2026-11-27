@@ -21,6 +21,8 @@ export interface World {
   voxels: Uint8Array; // index = x + z*size + y*size*size
   heights: Int16Array; // 列ごとの地表の高さ（固体ボクセルの個数）
   walkable: Uint8Array; // 住人が歩ける列なら 1
+  /** 道のタイル（v0.20.3。列ごとに 0＝なし、1〜＝道の種類 game/paths.ts）。ゲームが付ける（地形を作る時は無い） */
+  paths?: Uint8Array;
   plots: number; // 開いた区画のマスク（plots.ts）
   trees: Placement[];
   flowers: Placement[];

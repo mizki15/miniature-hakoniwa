@@ -175,7 +175,7 @@ export function classifyColumns(i: EnvInput): Uint8Array {
     let code = 0;
     const top = topOf(w, col);
     if (isWater(w, col)) code = top === MUD ? LAND_CODE.wetland : WATER_CODE;
-    else if (i.buildingCols?.has(col) || isPathBlock(top)) code = LAND_CODE.human;
+    else if (i.buildingCols?.has(col) || isPathBlock(top) || (i.world.paths?.[col] ?? 0) > 0) code = LAND_CODE.human;
     else if (i.farmland.has(col)) code = LAND_CODE.farm;
     else if (top === MUD) code = LAND_CODE.wetland;
     else if (shore[col]) code = LAND_CODE.waterside;
