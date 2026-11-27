@@ -7,7 +7,7 @@ import {
   normalView, BRDF_Lambert, diffuseColor, mod,
 } from 'three/tsl';
 import { COBBLE, FARMLAND, LOG, PATH, WATER, WET_FARMLAND, hexToLinear, paletteFlat } from '../world/blocks';
-import { MYBLOCK_BASE, PATTERNS, hexNum, type MyBlockDef } from '../world/myBlocks';
+import { MYBLOCK_BASE, PATTERNS, hexNum, type FaceBlockDef } from '../world/myBlocks';
 import { cloudShadowAt } from './sky';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -136,7 +136,7 @@ const palette = uniformArray(Array.from({ length: MAX_TYPES * 3 }, (_, i) => { c
 const accentPal = uniformArray(Array.from({ length: MAX_TYPES * 3 }, () => new THREE.Color(0, 0, 0)), 'color');
 const patternPal = uniformArray(new Array(MAX_TYPES * 3).fill(0), 'float');
 /** マイブロックの見た目を、地形のシェーダーの表に書き込む（上 0・下 1・横 2） */
-export function setMyBlockLook(def: MyBlockDef) {
+export function setMyBlockLook(def: FaceBlockDef) {
   ([[0, def.top], [1, def.bottom], [2, def.side]] as const).forEach(([k, f]) => {
     const i = def.id * 3 + k;
     const [r, g, b] = hexToLinear(hexNum(f.base));

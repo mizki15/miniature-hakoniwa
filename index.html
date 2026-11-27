@@ -298,14 +298,15 @@
         <div class="viewer-body bag-body">
           <section class="bag-col">
             <h3>1. AI に頼む <small>ChatGPT・Claude など</small></h3>
-            <textarea id="mbIdea" class="mb-text" rows="3" placeholder="作りたいブロック（例：苔むした石、青いタイル、木箱）"></textarea>
+            <textarea id="mbIdea" class="mb-text" rows="3" placeholder="作りたい物（例：小さな机、植木鉢、ランタン、木箱）。1 マスの中に収まる形なら、立方体でなくてよい"></textarea>
             <button id="mbCopyPrompt" type="button" class="open-viewer">📋 AI に渡す文をコピー</button>
             <h3>2. AI の返事を貼る</h3>
             <textarea id="mbPaste" class="mb-text" rows="7" placeholder="AI が出した JSON を、そのまま貼り付け"></textarea>
             <ul id="mbIssues" class="mb-issues"></ul>
+            <button id="mbCopyFix" type="button" class="open-viewer" hidden>📋 直してもらう文をコピー</button>
           </section>
           <section class="bag-col">
-            <h3>見本 <small>形は立方体。面ごとの色と模様だけ</small></h3>
+            <h3>見本 <small>1 マスの中の形。素材は部品の名前から</small></h3>
             <img id="mbPreview" class="mb-preview" alt="" hidden />
             <p id="mbInfo" class="mb-info"></p>
             <button id="mbAdd" type="button" class="primary mb-add" disabled>ブロック配置に入れる</button>
@@ -411,8 +412,8 @@
               <dt>1〜3</dt><dd>Build・Life・Terrain（そのグループで最後に使った道具。見るモードからでもエディタへ）</dd>
               <dt>Esc</dt><dd>このメニューを開く・閉じる</dd>
               <dt>左ドラッグ</dt><dd>エディタ：なぞって道具を使う</dd>
-              <dt>左クリック</dt><dd>見る：住人を撫でる・作物に水やり／収穫（水面なら波紋）</dd>
-              <dt>左ダブルクリック</dt><dd>見る：住人に餌・花を摘む・葦を刈る・木を切る</dd>
+              <dt>左クリック</dt><dd>見る：住人を撫でる（上下している間にもう一度で餌）・作物に水やり／収穫（水面なら波紋）</dd>
+              <dt>左ダブルクリック</dt><dd>見る：花を摘む・葦を刈る・木を切る</dd>
               <dt>右ドラッグ</dt><dd>視点を回す</dd>
               <dt>中ドラッグ</dt><dd>視点を動かす</dd>
               <dt>ホイール</dt><dd>ズーム</dd>

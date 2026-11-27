@@ -6,10 +6,17 @@
  * 種類の番号は 64〜127（地形のボクセルの番号の空き）。保存にはマイブロックの定義も入れる（置いたボクセルは番号で残る）
  */
 import { MAT_IDS, type MatId } from '../build/palette';
+import type { BuildingDesign } from '../build/geoParse';
 
 export const MYBLOCK_BASE = 64;
 export const MYBLOCK_MAX = 64;
 export const isMyBlock = (t: number) => t >= MYBLOCK_BASE && t < MYBLOCK_BASE + MYBLOCK_MAX;
+/**
+ * 形のあるマイブロック（v0.20.6。build/modelBlock.ts）の番号：96〜127。地形のメッシュには描かず（となりの面も隠さない）、
+ * 形のメッシュを置く。掘れる・水を止めるのは同じ。64〜95 は v0.20.4 の、面の色と模様だけのマイブロック
+ */
+export const MODEL_BASE = 96;
+export const isModelBlock = (t: number) => t >= MODEL_BASE && t < MYBLOCK_BASE + MYBLOCK_MAX;
 
 /** 面の模様。地形のシェーダー（render/materials.ts）と、プレビュー（ui/myBlockThumb.ts）で同じ式を使う */
 export const PATTERNS = ['plain', 'speckle', 'stripes', 'bricks', 'planks', 'checker', 'dots', 'border'] as const;
@@ -23,15 +30,26 @@ export const PATTERN_EN: Record<Pattern, string> = {
 };
 
 export interface FaceLook { base: string; accent: string; pattern: Pattern }
-export interface MyBlockDef {
-  /** 種類の番号（64〜127）。棚に入れた時に決まる */
+/** 面の色と模様だけのマイブロック（v0.20.4。番号 64〜95） */
+export interface FaceBlockDef {
+  /** 種類の番号。棚に入れた時に決まる */
   id: number;
   name: string;
   /** 素材の割合（合計 1） */
   mats: Partial<Record<MatId, number>>;
   top: FaceLook; side: FaceLook; bottom: FaceLook;
+  design?: undefined;
 }
-export type MyBlockLook = Omit<MyBlockDef, 'id'>;
+/** 形のあるマイブロック（v0.20.6。番号 96〜127）：建物と同じ形式の、1 × 1 × 1 の中の形 */
+export interface ModelBlockDef {
+  id: number;
+  name: string;
+  mats: Partial<Record<MatId, number>>;
+  design: BuildingDesign;
+}
+export type MyBlockDef = FaceBlockDef | ModelBlockDef;
+export type MyBlockLook = Omit<FaceBlockDef, 'id'>;
+export const isModelDef = (d: MyBlockDef): d is ModelBlockDef => !!d.design;
 
 /**
  * 面（上 0・下 1・横 2）の座標 (u, v)（0〜1。横の面は v が上向き）で、アクセントの色を使うか。
@@ -141,19 +159,22 @@ export function parseMyBlock(text: string): { ok: true; look: MyBlockLook } | { 
 }
 
 /** 保存データから読む（形が崩れていれば null） */
-export function sanitizeMyBlock(v: unknown): MyBlockDef | null {
-  if (!isObj(v) || typeof v.id !== 'number' || !isMyBlock(v.id)) return null;
+export function sanitizeMyBlock(v: unknown): FaceBlockDef | null {
+  if (!isObj(v) || typeof v.id !== 'number' || !isMyBlock(v.id) || isModelBlock(v.id)) return null;
   const r = parseMyBlock(JSON.stringify({ name: v.name, materials: v.mats, faces: { top: v.top, side: v.side, bottom: v.bottom } }));
   return r.ok ? { id: v.id, ...r.look } : null;
 }
 
 /** 同じ見た目・同じ割合か（同じものを 2 つ棚に入れないように） */
-export const sameLook = (a: MyBlockLook, b: MyBlockLook) => JSON.stringify([a.mats, a.top, a.side, a.bottom]) === JSON.stringify([b.mats, b.top, b.side, b.bottom]);
+const lookKey = (x: Omit<FaceBlockDef, 'id'> | Omit<ModelBlockDef, 'id'>) =>
+  x.design ? `model:${x.design.id}` : JSON.stringify([x.mats, (x as MyBlockLook).top, (x as MyBlockLook).side, (x as MyBlockLook).bottom]);
+export const sameLook = (a: Omit<FaceBlockDef, 'id'> | Omit<ModelBlockDef, 'id'>, b: Omit<FaceBlockDef, 'id'> | Omit<ModelBlockDef, 'id'>) => lookKey(a) === lookKey(b);
 
-/** 空いている番号（無ければ null） */
-export function freeMyBlockId(used: Iterable<number>): number | null {
+/** 空いている番号（無ければ null）。model：形のあるマイブロック（96〜127）か、面だけ（64〜95） */
+export function freeMyBlockId(used: Iterable<number>, model = false): number | null {
   const s = new Set(used);
-  for (let i = MYBLOCK_BASE; i < MYBLOCK_BASE + MYBLOCK_MAX; i++) if (!s.has(i)) return i;
+  const [a, b] = model ? [MODEL_BASE, MYBLOCK_BASE + MYBLOCK_MAX] : [MYBLOCK_BASE, MODEL_BASE];
+  for (let i = a; i < b; i++) if (!s.has(i)) return i;
   return null;
 }
 

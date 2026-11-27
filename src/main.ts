@@ -36,10 +36,12 @@ import type { InitResult, PlotResult, RemeshResult } from './world/worker';
 import { FRAME, OPEN_PLOT_POINTS, PLOT, PLOTS_PER_SIDE, PLOT_COUNT, START_PLOT, boundsOf, canOpen, countOpen, isOpen, openable, plotOfCol, plotRect } from './world/plots';
 import { buildBase, disposeBase } from './render/base';
 import { PlotGhosts } from './render/plotGhosts';
-import { CURSOR_PAD, FLOWER_KINDS, GameController, PLACE_BLOCKS, TOOLS, type Tool } from './game/controller';
+import { CURSOR_PAD, FLOWER_KINDS, GameController, PLACE_BLOCKS, TOOLS, toGeometry, type Tool } from './game/controller';
 import { HoverTip } from './ui/hoverTip';
 import { myBlockThumb } from './ui/myBlockThumb';
-import { PATTERN_NAME, buildMyBlockPrompt, parseMyBlock, type MyBlockLook } from './world/myBlocks';
+import { PATTERN_NAME, parseMyBlock, type FaceBlockDef, type MyBlockLook } from './world/myBlocks';
+import { parseModelBlock, type ModelBlockLook } from './build/modelBlock';
+import { buildBuildingMesh } from './build/geoMesh';
 import type { MatId } from './game/materials';
 import { PATHS, PATH_DEF, buildPathTile, type PathKind } from './game/paths';
 import { blockPreviewGeometry, emojiIcon } from './ui/thumb';
@@ -528,8 +530,8 @@ async function main() {
           return { id: `block:${b.id}`, name: b.name, img: thumbOf(`block:${b.id}`, () => blockPreviewGeometry(b.id)), help: `${b.name}のブロックを置く${c ? `（${matsText(c)}）` : ''}。道のタイルの上に置くと、道は消える` };
         }),
         // マイブロック（v0.20.4）と、作る窓を開くボタン
-        ...[...game.myBlocks.values()].map((d) => ({ id: `block:${d.id}`, name: d.name, img: myBlockThumb(d), help: `マイブロック「${d.name}」を置く（${matsText(blockCost(d.id) ?? {})}）。掘ると ${ratioOf(d.mats)}` })),
-        { id: 'myblock:new', name: '＋ つくる', img: emojiIcon('🧊'), help: 'マイブロックを作る（AI に色と模様を考えてもらう）' },
+        ...[...game.myBlocks.values()].map((d) => ({ id: `block:${d.id}`, name: d.name, img: myBlockImg(d), help: `マイブロック「${d.name}」を置く（${matsText(blockCost(d.id) ?? {})}）。掘ると ${ratioOf(d.mats)}` })),
+        { id: 'myblock:new', name: '＋ つくる', img: emojiIcon('🧊'), help: 'マイブロックを作る（AI に 1 マスの中に収まる小さな物を作ってもらう）' },
       ],
     },
     {
@@ -713,21 +715,25 @@ async function main() {
   const mbEl = $('myBlock');
   const myBlockOpen = () => mbEl.classList.contains('open');
   /** 貼り付けた JSON から読んだ見た目（読めなければ null） */
-  let mbLook: MyBlockLook | null = null;
+  let mbLook: Omit<FaceBlockDef, 'id'> | ModelBlockLook | null = null;
+  let mbIssues: ParseIssue[] = [];
+  /** マイブロックの絵（形のあるものは形から、面だけのもの（v0.20.4）は模様から） */
+  const myBlockImg = (d: Omit<FaceBlockDef, 'id'> | ModelBlockLook, size = 72): string =>
+    d.design ? thumbOf(`model:${d.design.id}:${size}`, () => toGeometry(buildBuildingMesh(d.design!)), { size }) : myBlockThumb(d as MyBlockLook, size);
   const ratioOf = (m: Partial<Record<MatId, number>>) => MAT_IDS.filter((k) => m[k]).map((k) => `${MAT_NAME[k]} ${Math.round((m[k] ?? 0) * 100)}%`).join('・');
   const renderMyBlockWin = () => {
     const prev = $<HTMLImageElement>('mbPreview');
     prev.hidden = !mbLook;
-    if (mbLook) prev.src = myBlockThumb(mbLook, 160);
+    if (mbLook) prev.src = myBlockImg(mbLook, 160);
     $('mbInfo').textContent = mbLook
-      ? `${mbLook.name}　素材：${ratioOf(mbLook.mats)}　模様：上 ${PATTERN_NAME[mbLook.top.pattern]}・横 ${PATTERN_NAME[mbLook.side.pattern]}・下 ${PATTERN_NAME[mbLook.bottom.pattern]}`
+      ? `${mbLook.name}　素材：${ratioOf(mbLook.mats)}${mbLook.design ? `　部品 ${mbLook.design.cubes.length} 個` : `　模様：上 ${PATTERN_NAME[(mbLook as MyBlockLook).top.pattern]}・横 ${PATTERN_NAME[(mbLook as MyBlockLook).side.pattern]}・下 ${PATTERN_NAME[(mbLook as MyBlockLook).bottom.pattern]}`}`
       : 'AI の返事を貼り付けると、ここに見本が出ます';
     $<HTMLButtonElement>('mbAdd').disabled = !mbLook;
     const list = $('mbList');
     list.replaceChildren(...[...game.myBlocks.values()].map((d) => {
       const row = document.createElement('div');
       row.className = 'bag-raw';
-      const img = Object.assign(document.createElement('img'), { src: myBlockThumb(d), alt: '' });
+      const img = Object.assign(document.createElement('img'), { src: myBlockImg(d), alt: '' });
       img.className = 'mb-thumb';
       const name = Object.assign(document.createElement('span'), { className: 'bag-name', textContent: `${d.name}（${ratioOf(d.mats)}）` });
       const del = Object.assign(document.createElement('button'), { type: 'button', textContent: '消す', className: 'mb-del' });
@@ -750,11 +756,16 @@ async function main() {
   };
   $('myBlockClose').addEventListener('click', () => setMyBlockWin(false));
   mbEl.addEventListener('pointerdown', (e) => { if (e.target === mbEl) setMyBlockWin(false); });
-  $('mbCopyPrompt').addEventListener('click', () => copyText(buildMyBlockPrompt($<HTMLTextAreaElement>('mbIdea').value)));
+  // v0.20.6：建物と同じ形式で、1 マスの中に収まる小さな物（立方体を埋めなくてよい）を AI に頼む
+  $('mbCopyPrompt').addEventListener('click', () => copyText(buildPrompt($<HTMLTextAreaElement>('mbIdea').value, { block: true })));
+  $('mbCopyFix').addEventListener('click', () => copyText(buildFixPrompt(mbIssues)));
   $('mbPaste').addEventListener('input', () => {
     const text = $<HTMLTextAreaElement>('mbPaste').value;
-    const r = text.trim() ? parseMyBlock(text) : null;
+    // 面の色と模様だけの形式（v0.20.4。"faces" がある）も、そのまま読める
+    const r = !text.trim() ? null : /"faces"\s*:/.test(text) ? parseMyBlock(text) : parseModelBlock(text, $<HTMLTextAreaElement>('mbIdea').value);
     mbLook = r?.ok ? r.look : null;
+    mbIssues = r && !r.ok ? r.issues as ParseIssue[] : [];
+    $('mbCopyFix').hidden = !mbIssues.length;
     $('mbIssues').replaceChildren(...(r && !r.ok ? r.issues : []).map((i) => Object.assign(document.createElement('li'), { textContent: i.message })));
     renderMyBlockWin();
   });
@@ -1098,12 +1109,12 @@ async function main() {
     if (mode === 'view' && !viewOnly) {
       const t = targetAtMouse();
       if (t?.kind === 'animal') {
-        const a = t.animal;
-        clearTimeout(petTimer);
-        petTimer = window.setTimeout(() => a.pet(), PET_WAIT_MS);
+        // v0.20.6：クリックで必ず 2 回上下する。上下している間に 2 回目のクリックが来たら、餌をあげる（その時も上下する）
+        if (t.animal.petting) feedAnimal(t.animal);
+        else t.animal.pet();
         return;
       }
-      const r = game.viewUse(pickAtMouse(), 'click');
+      const r = viewDo('click');
       if (r) { toast(r); if (bagIsOpen()) renderBagNow(); return; }
     }
     // 見る・ステータス：水面をクリックすると波紋
@@ -1113,25 +1124,22 @@ async function main() {
   });
 
   /** クリックで撫でるのは、ダブルクリックでないと分かってから（v0.20.5：ダブルクリックで 4 回撫でていた） */
-  const PET_WAIT_MS = 260;
-  let petTimer = 0;
+  /** 餌：収穫物を 1 つ（好きなものがあればそれ）。おすそ分けと同じく、しばらく素材を多く拾ってくる。上下もする */
+  const feedAnimal = (a: Animal) => {
+    a.pet();
+    const crop = eco.share(a, game.farm.inventory, game.farm.simMs);
+    if (!crop) { toast('あげられる収穫物がありません（作物を収穫すると持ち物に入る）'); return; }
+    game.unsaved = true; playerChanged();
+    const liked = CROPS[crop as CropKind].name === a.favorite;
+    toast(`${a.name}に${CROPS[crop as CropKind].name}をあげた${liked ? '（大好物！）' : ''}。しばらく素材を多く拾ってくる`);
+  };
   // 見るモードのダブルクリック（v0.20.2）：住人に餌（収穫物）をあげる、耕す・花を摘む・葦を刈る・木を切る
   renderer.domElement.addEventListener('dblclick', (e) => {
     if (mode !== 'view' || viewOnly || !world || e.button !== 0) return;
     setMouse(e.clientX, e.clientY);
-    clearTimeout(petTimer); // ダブルクリック：前のクリックで撫でるのは取りやめる（v0.20.5）
-    const t = targetAtMouse();
-    if (t?.kind === 'animal') {
-      // 餌：収穫物を 1 つ（好きなものがあればそれ）。おすそ分けと同じく、しばらく素材を多く拾ってくる
-      const crop = eco.share(t.animal, game.farm.inventory, game.farm.simMs);
-      if (!crop) { toast('あげられる収穫物がありません（作物を収穫すると持ち物に入る）'); return; }
-      t.animal.pet();
-      game.unsaved = true; playerChanged();
-      const liked = CROPS[crop as CropKind].name === t.animal.favorite;
-      toast(`${t.animal.name}に${CROPS[crop as CropKind].name}をあげた${liked ? '（大好物！）' : ''}。しばらく素材を多く拾ってくる`);
-      return;
-    }
-    const r = game.viewUse(pickAtMouse(), 'dbl');
+    // 住人はクリックだけで扱う（2 回目のクリックで餌。v0.20.6）
+    if (targetAtMouse()?.kind === 'animal') return;
+    const r = viewDo('dbl');
     if (r) { toast(r); if (bagIsOpen()) renderBagNow(); }
   });
 
@@ -1142,10 +1150,11 @@ async function main() {
   type ActBox = ReturnType<typeof game.actionBox>;
   const actionsOf = (t: Target | null): { click: string | null; dbl: string | null; hit: ReturnType<typeof pickAtMouse>; box: ActBox } | null => {
     if (viewOnly || !world) return null;
-    if (t?.kind === 'animal') return { click: '撫でる', dbl: '餌（収穫物）をあげる', hit: null, box: null };
+    if (t?.kind === 'animal') return { click: t.animal.petting ? '餌（収穫物）をあげる' : '撫でる（上下している間にもう一度クリックで餌）', dbl: null, hit: null, box: null };
     if (t && t.kind !== 'crop') return null;
-    const hit = pickAtMouse();
-    const c = game.viewAction(hit, 'click'), d = game.viewAction(hit, 'dbl');
+    const { hit, obj } = viewTarget();
+    const c = obj ? game.objectView(obj, 'click') : game.blockView(hit, 'click');
+    const d = obj ? game.objectView(obj, 'dbl') : game.blockView(hit, 'dbl');
     // 指している物（木・作物・花・葦）を黄色い箱で囲む（v0.20.5）。物が無ければ（作物の無い畑など）ブロックの枠
     const a = c ?? d;
     return c || d ? { click: c?.msg ?? null, dbl: d?.msg ?? null, hit, box: a ? game.actionBox(a) : null } : null;
@@ -1198,8 +1207,21 @@ async function main() {
     // 建設中の建物（地形より手前にある時）
     const site = game.siteAt(raycaster.ray.origin, raycaster.ray.direction, voxelHit ? voxelHit.t : Infinity);
     if (site) return { kind: 'site', key: site.key };
-    const col = game.cropColAt(voxelHit);
-    return col !== null ? { kind: 'crop', col } : null;
+    // 作物：モデルにおおよそ外接する箱で指す（根元のブロックは含まない。v0.20.6）
+    const obj = game.pickObject(raycaster.ray.origin, raycaster.ray.direction, voxelHit ? voxelHit.t + 0.01 : Infinity);
+    return obj?.kind === 'crop' ? { kind: 'crop', col: obj.col } : null;
+  };
+  /**
+   * 見るモードで指している物かブロック（v0.20.6）。物（作物・花は外接する箱、木は幹と葉の形）が地形より手前なら物
+   */
+  const viewTarget = () => {
+    const hit = pickAtMouse();
+    const obj = game.pickObject(raycaster.ray.origin, raycaster.ray.direction, hit ? hit.t + 0.01 : Infinity);
+    return { hit, obj };
+  };
+  const viewDo = (which: 'click' | 'dbl') => {
+    const { hit, obj } = viewTarget();
+    return obj ? game.objectUse(obj, which) : game.blockUse(hit, which);
   };
 
   /** 観察の進み具合の輪（まだ観察していない生き物にカーソルを合わせている間） */

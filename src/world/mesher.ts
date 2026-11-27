@@ -1,4 +1,4 @@
-import { WATER, faceColor, isOpaque, vegKind, type FaceKind } from './blocks';
+import { WATER, faceColor, isMeshed, vegKind, type FaceKind } from './blocks';
 
 /** ボクセルの格子。index = x + z*sx + y*sx*sz */
 export interface Grid {
@@ -62,20 +62,20 @@ export function buildMesh(g: Grid, opt: MeshOptions = {}): MeshData {
             const core = opt.core;
             if (core && (p[0] < core.x0 || p[0] >= core.x1 || p[2] < core.z0 || p[2] >= core.z1)) continue;
             const a = get(p[0], p[1], p[2]);
-            if (water ? a !== WATER : !isOpaque(a)) continue;
+            if (water ? a !== WATER : !isMeshed(a)) continue;
             q[0] = p[0]; q[1] = p[1]; q[2] = p[2]; q[d] += s;
             const b = get(q[0], q[1], q[2]);
-            if (water ? b === WATER || isOpaque(b) : isOpaque(b)) continue;
+            if (water ? b === WATER || isMeshed(b) : isMeshed(b)) continue;
 
             let ao0 = 3, ao1 = 3, ao2 = 3, ao3 = 3;
             if (!water) {
               const aoAt = (su: number, sv: number) => {
                 c[0] = q[0]; c[1] = q[1]; c[2] = q[2]; c[u] += su;
-                const s1 = isOpaque(get(c[0], c[1], c[2]));
+                const s1 = isMeshed(get(c[0], c[1], c[2]));
                 c[u] -= su; c[v] += sv;
-                const s2 = isOpaque(get(c[0], c[1], c[2]));
+                const s2 = isMeshed(get(c[0], c[1], c[2]));
                 c[u] += su;
-                const cr = isOpaque(get(c[0], c[1], c[2]));
+                const cr = isMeshed(get(c[0], c[1], c[2]));
                 return s1 && s2 ? 0 : 3 - ((s1 ? 1 : 0) + (s2 ? 1 : 0) + (cr ? 1 : 0));
               };
               ao0 = aoAt(-1, -1); ao1 = aoAt(1, -1); ao2 = aoAt(1, 1); ao3 = aoAt(-1, 1);

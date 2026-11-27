@@ -19,8 +19,10 @@ export const MUD = 17; // 湿地の泥（v0.13）
 export const BLOCK_COUNT = 18;
 
 export const isOpaque = (t: number) => t > 0 && t !== WATER;
+/** 地形のメッシュに描く・となりの面を隠すブロック（形のあるマイブロック 96〜127 は描かず、隠さない。v0.20.6） */
+export const isMeshed = (t: number) => isOpaque(t) && !(t >= 96 && t < 128);
 /** 一番上がこのブロックなら、住人が歩ける（草地・砂・土・畑・道） */
-export const isWalkableTop = (t: number) => t === GRASS || t === SAND || t === DIRT || t === FARMLAND || t === WET_FARMLAND || t === PATH || t === COBBLE || t === MUD || (t >= 64 && t < 128); // 64〜127 はマイブロック（v0.20.4）
+export const isWalkableTop = (t: number) => t === GRASS || t === SAND || t === DIRT || t === FARMLAND || t === WET_FARMLAND || t === PATH || t === COBBLE || t === MUD || (t >= 64 && t < 96); // 64〜95 は面だけのマイブロック（v0.20.4）。形のあるマイブロックの上は歩かない
 /** 道（住人が好んで歩く） */
 export const isPathBlock = (t: number) => t === PATH || t === COBBLE;
 

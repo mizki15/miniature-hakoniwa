@@ -3,7 +3,7 @@
  * データは数値と名前としてだけ読む。three.js に頼らない純粋な関数なので、テストから直接呼べる。
  * 規格：docs/superpowers/specs/2026-11-19-building-import-design.md
  */
-import { LIMITS, UNITS_PER_VOXEL } from './limits';
+import { LIMITS, type Limits, UNITS_PER_VOXEL } from './limits';
 import { cubeMat, isCubeColor, isMatId, parseColorName, type CubeColor, type MatId } from './palette';
 
 export type IssueCode =
@@ -109,7 +109,7 @@ const jsonErrorWhere = (e: unknown) => {
 };
 
 /** JSON を読み、グループの親子と色まで決める。問題は issues に足す */
-export function resolveBones(json: unknown, issues: ParseIssue[]): { name: string; bones: ResolvedBone[] } | null {
+export function resolveBones(json: unknown, issues: ParseIssue[], lim: Limits = LIMITS): { name: string; bones: ResolvedBone[] } | null {
   const list = isObj(json) ? json['minecraft:geometry'] : undefined;
   const geo = Array.isArray(list) ? list[0] : undefined;
   if (!isObj(geo) || !Array.isArray(geo.bones)) {
@@ -120,8 +120,8 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
   const ident = typeof desc.identifier === 'string' ? desc.identifier.replace(/^geometry\./, '').trim() : '';
   const name = ident || '名前のない建物';
   const raw = geo.bones as unknown[];
-  if (raw.length > LIMITS.bones) {
-    issues.push({ code: 'too_many_bones', message: `グループが ${raw.length} 個あります。${LIMITS.bones} 個以下にしてください。` });
+  if (raw.length > lim.bones) {
+    issues.push({ code: 'too_many_bones', message: `グループが ${raw.length} 個あります。${lim.bones} 個以下にしてください。` });
     return null;
   }
 
@@ -169,7 +169,7 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
       });
     });
   });
-  if (cubeCount > LIMITS.cubes) issues.push({ code: 'too_many_cubes', message: `直方体が ${cubeCount} 個あります。${LIMITS.cubes} 個以下にしてください。` });
+  if (cubeCount > lim.cubes) issues.push({ code: 'too_many_cubes', message: `直方体が ${cubeCount} 個あります。${lim.cubes} 個以下にしてください。` });
 
   // 親子：名前 → 番号。親が見つからない・輪になっている・深すぎるものを調べる
   const byName = new Map<string, number>();
@@ -194,8 +194,8 @@ export function resolveBones(json: unknown, issues: ParseIssue[]): { name: strin
       seen.add(p);
       depth++;
     }
-    if (depth > LIMITS.depth) {
-      issues.push({ code: 'too_deep', message: `${labels[i]}の入れ子が ${depth} 段あります。${LIMITS.depth} 段以下にしてください。` });
+    if (depth > lim.depth) {
+      issues.push({ code: 'too_deep', message: `${labels[i]}の入れ子が ${depth} 段あります。${lim.depth} 段以下にしてください。` });
       chainOk = false;
     }
   });
@@ -292,10 +292,11 @@ function fnv1a(s: string) {
 const fmt = (v: number) => (Math.round(v * 10) / 10).toString();
 
 /** 建物の JSON を検査して、箱庭で使う形にする */
-export function parseBuilding(text: string): ParseResult {
+/** lim：上限（建物は LIMITS、マイブロックは BLOCK_LIMITS。v0.20.6） */
+export function parseBuilding(text: string, lim: Limits = LIMITS): ParseResult {
   const bytes = new TextEncoder().encode(text).length;
-  if (bytes > LIMITS.fileBytes) {
-    return { ok: false, issues: [{ code: 'file_size', message: `ファイルが ${Math.ceil(bytes / 1024)} KB あります。${LIMITS.fileBytes / 1024} KB 以下にしてください。` }] };
+  if (bytes > lim.fileBytes) {
+    return { ok: false, issues: [{ code: 'file_size', message: `ファイルが ${Math.ceil(bytes / 1024)} KB あります。${lim.fileBytes / 1024} KB 以下にしてください。` }] };
   }
   let json: unknown;
   try {
@@ -304,7 +305,7 @@ export function parseBuilding(text: string): ParseResult {
     return { ok: false, issues: [{ code: 'json', message: `JSON として読めません${jsonErrorWhere(e)}。途中で切れていないか、「…」で省略していないか確かめてください。` }] };
   }
   const issues: ParseIssue[] = [];
-  const r = resolveBones(json, issues);
+  const r = resolveBones(json, issues, lim);
   if (!r) return { ok: false, issues };
 
   // 色などの問題があっても、外形の検査まで進めて、問題をまとめて伝える（読めなかった直方体は除いてある）
@@ -321,10 +322,14 @@ export function parseBuilding(text: string): ParseResult {
   const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
   for (const c of cubes) for (const p of corners(c.m)) for (let a = 0; a < 3; a++) { min[a] = Math.min(min[a], p[a]); max[a] = Math.max(max[a], p[a]); }
   const EPS = 1e-6;
-  const W = LIMITS.widthUnits, H = LIMITS.heightUnits, U = UNITS_PER_VOXEL;
+  const W = lim.widthUnits, H = lim.heightUnits, U = UNITS_PER_VOXEL;
   const wide = Math.max(max[0] - min[0], max[2] - min[2]);
   if (wide > W + EPS) {
     issues.push({ code: 'too_wide', message: `建物の幅か奥行が ${fmt(wide / U)} マス（${fmt(wide)} 単位）あります。回転した分も含めて ${W / U} マス（${W} 単位）以内にしてください。` });
+  }
+  // マイブロック：となりのマスにはみ出さないよう、x・z は中心から ±半分の中
+  if (lim.centered && Math.max(-min[0], max[0], -min[2], max[2]) > W / 2 + EPS) {
+    issues.push({ code: 'too_wide', message: `マスからはみ出しています。横と奥は、x と z が −${W / 2}〜${W / 2} 単位の中に収めてください。` });
   }
   if (max[1] - min[1] > H + EPS) {
     issues.push({ code: 'too_tall', message: `建物の高さが ${fmt((max[1] - min[1]) / U)} マス（${fmt(max[1] - min[1])} 単位）あります。${H / U} マス（${H} 単位）以内にしてください。` });
@@ -332,7 +337,7 @@ export function parseBuilding(text: string): ParseResult {
   // 地面に着いているかは、膨らみ（inflate）を除いた形で見る（Blockbench で y = 0 に置いた直方体を膨らませても、置き直さなくてよいように）
   let ground = Infinity;
   for (const c of transformCubes(r.bones, false)) for (const p of corners(c.m)) ground = Math.min(ground, p[1]);
-  if (Math.abs(ground) > LIMITS.groundTolerance + EPS) {
+  if (Math.abs(ground) > lim.groundTolerance + EPS) {
     issues.push({ code: 'not_grounded', message: `一番低い所が y = ${fmt(ground)} にあります。建物の底を y = 0 にそろえてください。` });
   }
   if (issues.length) return { ok: false, issues };

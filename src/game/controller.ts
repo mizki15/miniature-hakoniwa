@@ -7,7 +7,8 @@ import { FRAME, PLOT, plotOfCol, plotRect } from '../world/plots';
 import { canSetCol, floodAllowed } from './edgeRules';
 import { CROPS, Farm, type Crop, type CropKind, type FarmEnv, type Sapling } from './farm';
 import { UndoStack } from './undoStack';
-import { MYBLOCK_MAX, freeMyBlockId, sameLook, sanitizeMyBlock, type MyBlockDef, type MyBlockLook } from '../world/myBlocks';
+import { freeMyBlockId, isModelBlock, isModelDef, sameLook, sanitizeMyBlock, type FaceBlockDef, type ModelBlockDef, type MyBlockDef } from '../world/myBlocks';
+import { matsOfDesign, sanitizeModelDesign } from '../build/modelBlock';
 import { setMyBlockLook } from '../render/materials';
 import { PATH_DEF, buildPathTile, pathIndex, pathOfIndex, type PathKind } from './paths';
 import { TOOL_DEFS, toolDef, type ToolAt, type ToolCtx } from './tools';
@@ -304,6 +305,10 @@ export class GameController {
     this.pathTiles.clear();
     for (const id of this.myBlocks.keys()) setBlockYield(id, null);
     this.myBlocks.clear();
+    this.modelCells.clear();
+    for (const g of this.modelGeos.values()) g.dispose();
+    this.modelGeos.clear();
+    this.modelsDirty = true;
     w.paths = new Uint8Array(w.size * w.size);
     this.pathsDirty = true;
     this.irrigatedCache.clear();
@@ -435,7 +440,7 @@ export class GameController {
       for (let i = 0; i < d.placements.length; i += 5) flowerCols.add(Math.floor(d.placements[i]) + Math.floor(d.placements[i + 2]) * w.size);
     }
     const pl = placeGround(w.voxels, w.heights, w.size, w.height, this.groundDensity,
-      (col) => this.treeCols.has(col) || this.buildingCols.has(col) || flowerCols.has(col) || this.pathTiles.has(col), (col) => this.reedCut.has(col));
+      (col) => this.treeCols.has(col) || this.buildingCols.has(col) || flowerCols.has(col) || this.pathTiles.has(col) || (w.heights[col] > 0 && isModelBlock(w.voxels[col + (w.heights[col] - 1) * w.size * w.size])), (col) => this.reedCut.has(col));
     const half = w.size / 2;
     const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
     const make = (geo: THREE.BufferGeometry, mat: THREE.Material, list: number[]) => {
@@ -607,6 +612,100 @@ export class GameController {
     im.computeBoundingSphere(); // 全部の木（花）を囲む境界球。画面外なら描かない
     d.mesh = im;
     this.deps.diorama.add(im);
+  }
+
+  /**
+   * 見るモードで指す物（v0.20.6）：作物・花はおおよそ外接する箱、木は幹と葉の形そのもの（三角形との交差）。
+   * どれも根元のブロックは含まない。光線 origin + dir·t の、いちばん手前の物（maxT より手前だけ）
+   */
+  private objRay = new THREE.Raycaster();
+  pickObject(origin: THREE.Vector3, dir: THREE.Vector3, maxT = Infinity): { kind: 'crop' | 'flower' | 'tree'; col: number; t: number } | null {
+    const w = this.world;
+    if (!w) return null;
+    const N = w.size, half = N / 2;
+    let best: { kind: 'crop' | 'flower' | 'tree'; col: number; t: number } | null = null;
+    const o = [origin.x, origin.y, origin.z], d = [dir.x, dir.y, dir.z];
+    const boxT = (lo: number[], hi: number[]) => {
+      let t0 = 0, t1 = Infinity;
+      for (let a = 0; a < 3; a++) {
+        if (Math.abs(d[a]) < 1e-12) { if (o[a] < lo[a] || o[a] > hi[a]) return Infinity; continue; }
+        let ta = (lo[a] - o[a]) / d[a], tb = (hi[a] - o[a]) / d[a];
+        if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+        if (t0 > t1) return Infinity;
+      }
+      return t0;
+    };
+    const consider = (kind: 'crop' | 'flower' | 'tree', col: number, t: number) => { if (t < maxT && (!best || t < best.t)) best = { kind, col, t }; };
+    // 作物：モデルの大きさの箱（地面の上だけ）
+    for (const [col, crop] of this.farm.crops) {
+      const g = this.cropGeo(crop.kind, Farm.stage(crop.progress));
+      if (!g.boundingBox) g.computeBoundingBox();
+      const b = g.boundingBox!;
+      const r = Math.max(0.18, Math.max(Math.abs(b.min.x), Math.abs(b.max.x), Math.abs(b.min.z), Math.abs(b.max.z)) * 1.05);
+      const cx = (col % N) + 0.5 - half, cz = Math.floor(col / N) + 0.5 - half, y0 = w.heights[col];
+      consider('crop', col, boxT([cx - r, y0, cz - r], [cx + r, y0 + Math.max(0.15, b.max.y * 1.08), cz + r]));
+    }
+    // 花：花の大きさの箱
+    for (const dset of this.decor) {
+      if (dset.kind !== 'flower') continue;
+      const p = dset.placements;
+      for (let i = 0; i < p.length; i += 5) {
+        const x = p[i] - half, y = p[i + 1], z = p[i + 2] - half, s = p[i + 4];
+        consider('flower', Math.floor(p[i]) + Math.floor(p[i + 2]) * N, boxT([x - 0.2 * s, y, z - 0.2 * s], [x + 0.2 * s, y + 0.52 * s, z + 0.2 * s]));
+      }
+    }
+    // 木：幹と葉の三角形（自然の木と、植えて育った木）
+    const meshes: THREE.Object3D[] = [];
+    for (const dset of this.decor) if (dset.kind === 'tree' && dset.mesh) meshes.push(dset.mesh);
+    for (const m of this.growingMeshes) meshes.push(m);
+    this.objRay.set(origin, dir);
+    this.objRay.far = Math.min(maxT, best ? (best as { t: number }).t : Infinity);
+    for (const h of this.objRay.intersectObjects(meshes, false)) {
+      if (h.instanceId === undefined) continue;
+      const m = h.object as THREE.InstancedMesh;
+      let col: number | undefined;
+      if (m.userData.cols) col = (m.userData.cols as number[])[h.instanceId];
+      else {
+        const dset = this.decor.find((x) => x.mesh === m);
+        if (dset) col = Math.floor(dset.placements[h.instanceId * 5]) + Math.floor(dset.placements[h.instanceId * 5 + 2]) * N;
+      }
+      if (col !== undefined) { consider('tree', col, h.distance / dir.length()); break; }
+    }
+    return best;
+  }
+  /**
+   * 指した物（pickObject）への見るモードの操作（v0.20.6）：作物は収穫・水やり、木は木を切る、花は摘む。
+   * 根元の列に当てて道具の判定を使う（光線で別の木を選ばないよう、その間だけ光線を外す）
+   */
+  private objTools = (k: 'crop' | 'flower' | 'tree'): Tool[] => (k === 'crop' ? ['harvest', 'water'] : k === 'tree' ? ['fell'] : ['pick']);
+  objectView(o: { kind: 'crop' | 'flower' | 'tree'; col: number; t: number }, which: 'click' | 'dbl') {
+    const ray = this.lastRay;
+    this.lastRay = null;
+    try { return this.viewAction(this.objectHit(o), which, this.objTools(o.kind)); } finally { this.lastRay = ray; }
+  }
+  objectUse(o: { kind: 'crop' | 'flower' | 'tree'; col: number; t: number }, which: 'click' | 'dbl'): string | null {
+    const ray = this.lastRay;
+    this.lastRay = null;
+    try { return this.viewUse(this.objectHit(o), which, this.objTools(o.kind)); } finally { this.lastRay = ray; }
+  }
+  /**
+   * 物に当たらず、ブロックを指した時の見るモードの操作（v0.20.6）：クリックで畑に水やり、ダブルクリックで葦を刈る。
+   * 根元のブロックを指しても、その上の作物・花・木は選ばない（収穫・摘む・木を切るは物を指した時だけ）
+   */
+  blockView(hit: VoxelHit | null, which: 'click' | 'dbl') {
+    if (!hit || !this.world) return null;
+    if (which === 'click') return this.viewAction(hit, 'click', ['water']);
+    const col = hit.x + hit.z * this.world.size;
+    return this.hasReed(col) && !this.hasFlower(col) ? this.viewAction(hit, 'dbl', ['pick']) : null;
+  }
+  blockUse(hit: VoxelHit | null, which: 'click' | 'dbl'): string | null {
+    return this.blockView(hit, which) ? this.viewUse(hit, which, which === 'click' ? ['water'] : ['pick']) : null;
+  }
+  /** 物の根元の列の表面を指した当たり（指した物に道具の判定を使うため） */
+  objectHit(o: { col: number; t: number }): VoxelHit {
+    const N = this.world!.size;
+    return { x: o.col % N, y: this.world!.heights[o.col] - 1, z: Math.floor(o.col / N), nx: 0, ny: 1, nz: 0, t: o.t } as VoxelHit;
   }
 
   /** その列にある花を取り除く（耕したり掘ったりした時） */
@@ -941,6 +1040,7 @@ export class GameController {
     }
     // 取り消しの記録：このなぞりで初めて変える所だけ、元の種類を覚える
     if (this.recording && !this.recording.voxels.has(i)) this.recording.voxels.set(i, w.voxels[i]);
+    if (isModelBlock(w.voxels[i]) || isModelBlock(t)) this.trackModel(i, w.voxels[i], t);
     w.voxels[i] = t;
     this.edits.set(i, t);
     this.delta.push(i, t);
@@ -1497,21 +1597,69 @@ export class GameController {
   /** 地形のシェーダーと、掘った時の素材の表に書き込む */
   private registerMyBlock(def: MyBlockDef) {
     this.myBlocks.set(def.id, def);
-    setMyBlockLook(def);
+    if (isModelDef(def)) this.modelsDirty = true; // 形のあるマイブロック（v0.20.6）は形のメッシュで描く
+    else setMyBlockLook(def);
     setBlockYield(def.id, def.mats);
   }
   /** 棚に入れる。同じ見た目のものがあればそれを返す。いっぱいなら理由の文 */
-  addMyBlock(look: MyBlockLook): MyBlockDef | string {
+  addMyBlock(look: Omit<FaceBlockDef, 'id'> | Omit<ModelBlockDef, 'id'>): MyBlockDef | string {
     for (const d of this.myBlocks.values()) if (sameLook(d, look)) return d;
-    const id = freeMyBlockId(this.myBlocks.keys());
-    if (id === null) return `マイブロックは ${MYBLOCK_MAX} 種類までです`;
-    const def: MyBlockDef = { id, ...look };
+    const id = freeMyBlockId(this.myBlocks.keys(), !!look.design);
+    if (id === null) return `マイブロックは ${look.design ? 32 : 32} 種類までです`;
+    const def = { id, ...look } as MyBlockDef;
     this.registerMyBlock(def);
     this.unsaved = true; this.onPlayerChange?.();
     return def;
   }
+  // ---------- 形のあるマイブロック（v0.20.6）：置いた場所に形のメッシュを置く ----------
+  /** 番号 → 置いたボクセルの番号 */
+  private modelCells = new Map<number, Set<number>>();
+  private modelMeshes: THREE.InstancedMesh[] = [];
+  private modelGeos = new Map<number, THREE.BufferGeometry>();
+  private modelsDirty = false;
+  /** ボクセルの種類が変わった時（setVoxel から） */
+  private trackModel(i: number, before: number, after: number) {
+    if (isModelBlock(before)) { this.modelCells.get(before)?.delete(i); this.modelsDirty = true; }
+    if (isModelBlock(after)) {
+      if (!this.modelCells.has(after)) this.modelCells.set(after, new Set());
+      this.modelCells.get(after)!.add(i);
+      this.modelsDirty = true;
+    }
+  }
+  /** 形のあるマイブロックの形（ボクセル単位。原点がマスの床の真ん中） */
+  modelGeo(def: ModelBlockDef) {
+    let g = this.modelGeos.get(def.id);
+    if (!g) { g = toGeometry(buildBuildingMesh(def.design)); this.modelGeos.set(def.id, g); }
+    return g;
+  }
+  private rebuildModels() {
+    const w = this.world;
+    for (const m of this.modelMeshes) { this.deps.diorama.remove(m); m.dispose(); }
+    this.modelMeshes = [];
+    if (!w) return;
+    const N = w.size, NN = N * N, half = N / 2;
+    const mtx = new THREE.Matrix4();
+    for (const [id, cells] of this.modelCells) {
+      const def = this.myBlocks.get(id);
+      if (!def || !isModelDef(def) || !cells.size) continue;
+      const im = new THREE.InstancedMesh(this.modelGeo(def), this.deps.buildingMat, cells.size);
+      let k = 0;
+      for (const i of cells) {
+        const x = i % N, z = Math.floor(i / N) % N, y = Math.floor(i / NN);
+        im.setMatrixAt(k++, mtx.makeTranslation(x + 0.5 - half, y, z + 0.5 - half));
+      }
+      im.castShadow = true;
+      im.receiveShadow = true;
+      im.userData.sharedGeometry = true;
+      im.computeBoundingSphere();
+      this.modelMeshes.push(im);
+      this.deps.diorama.add(im);
+    }
+  }
+
   /** 箱庭に置いてある数 */
   countMyBlock(id: number): number {
+    if (isModelBlock(id)) return this.modelCells.get(id)?.size ?? 0;
     const v = this.world?.voxels;
     if (!v) return 0;
     let n = 0;
@@ -1797,11 +1945,12 @@ export class GameController {
   static readonly VIEW_CLICK: Tool[] = ['harvest', 'water'];
   /** v0.20.5：耕すはダブルクリックから外した（道具の「耕す」で） */
   static readonly VIEW_DBL: Tool[] = ['fell', 'pick'];
-  viewAction(hit: VoxelHit | null, which: 'click' | 'dbl'): { tool: Tool; msg: string; col: number } | null {
+  viewAction(hit: VoxelHit | null, which: 'click' | 'dbl', only?: readonly Tool[]): { tool: Tool; msg: string; col: number } | null {
     if (!hit || !this.world || this.locked) return null;
     const prev = this.tool;
     try {
       for (const t of which === 'click' ? GameController.VIEW_CLICK : GameController.VIEW_DBL) {
+        if (only && !only.includes(t)) continue;
         this.tool = t;
         const c = this.check(hit);
         if (c?.ok) return { tool: t, msg: c.msg, col: c.x + c.z * this.world.size };
@@ -1849,8 +1998,8 @@ export class GameController {
   }
 
   /** 見るモードの操作をする。結果の文（できなければ null） */
-  viewUse(hit: VoxelHit | null, which: 'click' | 'dbl'): string | null {
-    const a = this.viewAction(hit, which);
+  viewUse(hit: VoxelHit | null, which: 'click' | 'dbl', only?: readonly Tool[]): string | null {
+    const a = this.viewAction(hit, which, only);
     if (!a) return null;
     const prev = this.tool;
     this.tool = a.tool;
@@ -1891,6 +2040,7 @@ export class GameController {
     if (this.cropsDirty) { this.cropsDirty = false; this.rebuildCrops(); }
     if (this.growingDirty) { this.growingDirty = false; this.rebuildGrowing(); }
     if (this.pathsDirty) { this.pathsDirty = false; this.rebuildPaths(); }
+    if (this.modelsDirty) { this.modelsDirty = false; this.rebuildModels(); }
     const t = this.typeTex as (THREE.Data3DTexture & { layerUpdates?: Set<number> }) | null;
     if (t && (this.texFull || this.texLayers.size)) {
       // WebGPU は layerUpdates の層だけを送り、送ったら空にする。WebGL は 3D テクスチャを毎回丸ごと送る（層は残るので、多くなったら空にする）
@@ -1941,6 +2091,8 @@ export class GameController {
     const w = this.world!;
     const half = w.size / 2;
     const byGeo = new Map<THREE.BufferGeometry, THREE.Matrix4[]>();
+    /** 形ごとの、インスタンスの番号 → 列（指す時に使う。v0.20.6） */
+    const colsOf = new Map<THREE.BufferGeometry, number[]>();
     const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
     for (const s of this.farm.saplings) {
       const x = s.col % w.size, z = Math.floor(s.col / w.size);
@@ -1951,14 +2103,16 @@ export class GameController {
       if (s.progress < 0.25) { geo = sapGeo; scale = 0.8 + s.progress * 1.6; }
       else { geo = this.treeGeos[s.variant] ?? sapGeo; scale = 0.25 + 0.75 * ((s.progress - 0.25) / 0.75); }
       const m = new THREE.Matrix4().compose(pos, q, new THREE.Vector3(scale, scale, scale));
-      if (!byGeo.has(geo)) byGeo.set(geo, []);
+      if (!byGeo.has(geo)) { byGeo.set(geo, []); colsOf.set(geo, []); }
       byGeo.get(geo)!.push(m);
+      colsOf.get(geo)!.push(s.col);
     }
     // 形ごとの数が前と同じなら（大きくなっただけ）、作り直さずに行列だけ書き換える
     const same = this.growingMeshes.length === byGeo.size && [...byGeo].every(([geo, mats], i) => this.growingMeshes[i].geometry === geo && this.growingMeshes[i].count === mats.length);
     if (same) {
       [...byGeo.values()].forEach((mats, i) => {
         const im = this.growingMeshes[i];
+        im.userData.cols = colsOf.get(im.geometry);
         mats.forEach((m, j) => im.setMatrixAt(j, m));
         im.instanceMatrix.needsUpdate = true;
         im.computeBoundingSphere();
@@ -1974,6 +2128,7 @@ export class GameController {
       im.receiveShadow = true;
       im.userData.sharedGeometry = true;
       im.userData.kind = 'tree';
+      im.userData.cols = colsOf.get(geo);
       this.growingMeshes.push(im);
       this.deps.diorama.add(im);
     }
@@ -2167,7 +2322,18 @@ export class GameController {
     this.placed = save.buildings.placed.filter(([id]) => this.designs.has(id)).map(([id, x, z, rot, progress, paid]) => ({ id, x, z, rot, progress: progress ?? 1, paid: paid === 1 }));
     if (this.selectedDesign && !this.designs.has(this.selectedDesign)) this.selectedDesign = null;
     // マイブロック（v0.20.4）
-    for (const v of save.myBlocks ?? []) { const d = sanitizeMyBlock(v); if (d) this.registerMyBlock(d); }
+    for (const v of save.myBlocks ?? []) {
+      const o = v as { id?: unknown; name?: unknown; design?: unknown };
+      if (o && o.design !== undefined) {
+        const design = sanitizeModelDesign(o.design);
+        if (design && typeof o.id === 'number' && isModelBlock(o.id)) this.registerMyBlock({ id: o.id, name: typeof o.name === 'string' ? o.name.slice(0, 24) : 'マイブロック', mats: matsOfDesign(design), design });
+        continue;
+      }
+      const d = sanitizeMyBlock(v);
+      if (d) this.registerMyBlock(d);
+    }
+    // 形のあるマイブロックを置いた場所（地形の差分にだけある）
+    for (const [i, t] of this.edits) if (isModelBlock(t) && w.voxels[i] === t) this.trackModel(i, 0, t);
     // 道のタイル（v0.20.3）。昔の道のブロックはタイルに移す
     const savedPaths = new Map<number, PathKind>();
     for (const [col, k] of save.paths ?? []) { const kind = pathOfIndex(k); if (kind && col >= 0 && col < w.size * w.size) savedPaths.set(col, kind); }

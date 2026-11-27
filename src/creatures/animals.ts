@@ -148,6 +148,8 @@ export class Animal {
   /** いる列（保存用。枠の座標） */
   get colXZ(): [number, number] { return [Math.floor(this.pos.x), Math.floor(this.pos.y)]; }
 
+  /** 撫でられて上下している最中か（v0.20.6：その間のクリックで餌） */
+  get petting() { return this.petT > 0; }
   /** 撫でる（v0.20.2）：ちょっと潰れて戻る、を 2 回。その間は立ち止まる */
   pet() {
     this.petT = PET_SECONDS;

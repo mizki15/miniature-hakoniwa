@@ -5,7 +5,7 @@
  * 文面は利用者の決めたテンプレート（2026-11-20）を英語にしたもの。AI は英語の規格のほうが取り違えにくいため、
  * 利用者が書く「作ってほしいもの」と、検査の問題の文（日本語）以外は英語にする
  */
-import { LIMITS, UNITS_PER_VOXEL } from './limits';
+import { BLOCK_LIMITS, LIMITS, UNITS_PER_VOXEL, type Limits } from './limits';
 import { MAT_DEFAULT_HEX, MAT_IDS } from './palette';
 import type { ParseIssue } from './geoParse';
 
@@ -40,10 +40,34 @@ const EXAMPLE = `{
   }]
 }`;
 
-export function buildPrompt(idea: string): string {
+/** マイブロック（v0.20.6）の例：小さな机（立方体を埋めない。脚の間は空いている） */
+const BLOCK_EXAMPLE = `{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [{
+    "description": { "identifier": "geometry.small_table" },
+    "bones": [
+      { "name": "wood_b08454_top", "pivot": [0, 0, 0], "cubes": [ { "origin": [-7, 10, -7], "size": [14, 2, 14] } ] },
+      { "name": "wood_6e4c2e_legs", "pivot": [0, 0, 0], "cubes": [
+        { "origin": [-6, 0, -6], "size": [2, 10, 2] },
+        { "origin": [4, 0, -6], "size": [2, 10, 2] },
+        { "origin": [-6, 0, 4], "size": [2, 10, 2] },
+        { "origin": [4, 0, 4], "size": [2, 10, 2] }
+      ] },
+      { "name": "fiber_e8dcc0_cloth", "pivot": [0, 0, 0], "cubes": [ { "origin": [-5, 12, -5], "size": [10, 1, 10] } ] }
+    ]
+  }]
+}`;
+
+/**
+ * AI に渡す説明文。block：マイブロック（v0.20.6。1 × 1 × 1 の中に収まる小さな物。立方体を埋める必要は無い）
+ */
+export function buildPrompt(idea: string, opts: { block?: boolean } = {}): string {
   const U = UNITS_PER_VOXEL;
+  const block = !!opts.block;
+  const L: Limits = block ? BLOCK_LIMITS : LIMITS;
   const mats = MAT_IDS.map((m) => `   * ${m}: ${MAT_NOTE[m]} (default color ${hex6(MAT_DEFAULT_HEX[m])})`).join('\n');
-  return `You are an assistant that creates 3D models. Strictly follow the specification below and create a low-poly building
+  const what = block ? 'a small low-poly object that fits inside ONE block' : 'a low-poly building';
+  return `You are an assistant that creates 3D models. Strictly follow the specification below and create ${what}
 as Minecraft Bedrock geometry JSON (the Blockbench "Bedrock Entity" format, .geo.json).
 ## What to build (it may be written in Japanese)
 ${idea.trim()}
@@ -53,17 +77,22 @@ ${idea.trim()}
 * Cubes: "origin" (the coordinates of the smallest corner), "size" (width, height, depth), and if needed "pivot" (the center of rotation) and "rotation" (degrees, [x, y, z])
 * Groups can also have "pivot" and "rotation". To nest a group, give the child "parent": "<parent name>". Write pivots in the coordinates of the whole building, not relative to the parent
 * Cubes only. Do not use "poly_mesh". "uv" and textures are not needed (they are ignored if present)
-* Units: ${U} units = 1 block (about 1 m). Y is up. The bottom of the building is at y = 0, centered around x = 0, z = 0
+* Units: ${U} units = 1 block (about 1 m). Y is up. The bottom of the ${block ? 'object' : 'building'} is at y = 0, centered around x = 0, z = 0
 * Orientation: the front faces -Z (north). Seen from the front, +X is on the right
-* Size: including any rotation, width and depth within ${LIMITS.widthUnits} units (${LIMITS.widthUnits / U} blocks), height within ${LIMITS.heightUnits} units (${LIMITS.heightUnits / U} blocks)
-* Counts: at most ${LIMITS.cubes} cubes, ${LIMITS.bones} groups, and ${LIMITS.depth} levels of nesting. The whole JSON must be within ${LIMITS.fileBytes / 1024} KB
+${block
+    ? `* Size: the whole object must fit inside one block, including any rotation: x and z from -${L.widthUnits / 2} to ${L.widthUnits / 2} units, y from 0 to ${L.heightUnits} units
+* It does NOT have to fill the block. Model the real shape of the thing (a table has legs with empty space between them, a pot is round-ish and smaller than the block, a lantern is small). Do not just make a full cube unless the thing really is a cube (like a crate or a hay bale)
+* Use proportions that look right at this small size; tiny details thinner than 1 unit will not be visible`
+    : `* Size: including any rotation, width and depth within ${L.widthUnits} units (${L.widthUnits / U} blocks), height within ${L.heightUnits} units (${L.heightUnits / U} blocks)`}
+* Counts: at most ${L.cubes} cubes, ${L.bones} groups, and ${L.depth} levels of nesting. The whole JSON must be within ${L.fileBytes / 1024} KB
 * Materials and colors: decided by the group name, "<material>_<rrggbb>" or "<material>_<rrggbb>_<anything>" (e.g. wood_8a5a3c_door, stone_6f7780_base). <rrggbb> is any color as 6 lowercase hex digits. A group without a material name uses its parent group's material and color
 * Materials (choose the one the part is made of; the color can be anything):
 ${mats}
-* Windows: add "_glass" to the name (e.g. mineral_bfd8e0_glass). Windows glow at night
+* Windows: add "_glass" to the name (e.g. mineral_bfd8e0_glass). Windows glow at night${block ? `
+* The materials also decide what the player gets when the block is dug up (by visible surface area), so choose them to match what the object is made of` : ''}
 
-## Example (small hut)
-${EXAMPLE}
+## Example (${block ? 'small table' : 'small hut'})
+${block ? BLOCK_EXAMPLE : EXAMPLE}
 ## Output
 
 * Output only the JSON, in a single code block. Do not abbreviate, do not use "...", and do not write comments.
