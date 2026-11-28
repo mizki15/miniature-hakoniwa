@@ -33,7 +33,7 @@ const PEAK: Record<string, number> = {
 /** ピークをそろえる倍率（大きくするのは 4 倍まで） */
 export const normGain = (f: string) => Math.min(4, 10 ** ((-10 - (PEAK[f] ?? -10)) / 20));
 
-/**
+/** 
  * 1 つの ID の音：f 録音（public/sfx/<f>.ogg）、max 長さの上限（秒。そこで消えていく）、g 大きさ、
  * rate 速さ（音の高さも変わる）、lp こもらせる（Hz）、tones 楽器の音（録音と重ねる）、vary 鳴らすたびに変える
  */
@@ -41,46 +41,48 @@ interface Cue { f?: string; max?: number; g?: number; rate?: number; lp?: number
 const k1 = (n: string, t: number, v = 0.6): Tone[] => [{ i: 'kalimba', n, t, v }];
 export const CUES: Record<string, Cue> = {
   // 見るモードの操作（A）
-  A01: { f: 'a01', max: 0.9 },
-  A02: { f: 'a02', tones: k1('E5', 0.15, 0.45) },
-  A03: { f: 'a03', max: 0.8, g: 0.8 },
-  A04: { f: 'a04', max: 1.1, tones: k1('G5', 1.0, 0.5) },
-  A05: { f: 'a05', max: 1.7 },
-  A06: { f: 'a06', g: 0.7 },
-  A07: { f: 'a07', max: 0.5 },
-  A08: { tones: [{ i: 'plop', t: 0 }], vary: true, g: 2 },
-  A09: { f: 'a09', max: 0.5, g: 0.7, tones: k1('B5', 0.35, 0.4) },
+  A01: { f: 'a01', max: 0.3, rate: 4 },
+  A02: { f: 'a02',g: 3},
+  A03: { f: 'a03', max: 0.8, g: 0.6,rate:0.7 },
+  A04: { f: 'a04', max: 0.3, rate: 1,g:1.5,},
+  A05: { f: 'a05', max: 1.0, g:3,rate:0.8 },
+  A06: { f: 'a06', max:0.4,g: 2, rate:1.5 },
+  A07: { f: 'a06', max:0.4,g: 2, rate:1.0 },
+  A08: { f: 'a08', max: 0.4, g: 1.5, rate: 0.9},
+  A09: { f: 'a09', max: 0.1, g: 0.0},
   A10: { tones: MELODY.A10 },
   // エディタの道具（B）
-  B01: { f: 'b01', max: 0.6 },
-  B02: { f: 'b02', max: 0.7, g: 0.8 },
-  B03: { f: 'b03', max: 1.1 },
-  B04: { f: 'b04', max: 0.6, tones: [{ i: 'musicbox', n: 'E7', t: 0.4, v: 0.15 }] },
-  B05a: { f: 'b05a', max: 0.5 },
-  B05b: { f: 'b05b', max: 0.5 },
-  B05c: { f: 'b05c', max: 0.45, g: 1.8 },
-  B05d: { f: 'b05d', max: 0.45 },
-  B05e: { f: 'b05e', max: 0.45 },
-  B05f: { f: 'b05f', max: 0.5 },
-  B05h: { f: 'b05h', tones: [{ i: 'musicbox', n: 'B6', t: 0.05, v: 0.35 }, { i: 'musicbox', n: 'E7', t: 0.12, v: 0.25 }] },
+  B01: { f: 'b01', max: 0.4, g: 1.4, rate: 0.8, lp:10000},
+  B02: { f: 'b01', max: 0.2, g: 1.4, rate: 1.4    , lp:10000},
+  B03: { f: 'b03', max: 0.3, rate: 1 ,g :1.4 },
+  B04: { f: 'b01', max: 0.2, g: 1.0, rate: 1.2    , lp:10000},
+  B05a: { f: 'b05c', max: 0.3, g: 6, rate:0.8 ,vary:true },
+  B05b: { f: 'b05b', max: 0.3,rate:0.9,vary:true },
+  B05c: { f: 'b05c', max: 0.3, g: 5 ,vary:true},
+  B05d: { f: 'b05d', max: 0.3, g: 1.2, rate: 0.8, vary:true, lp: 6000 },
+  B05e: { f: 'b05e', max: 0.3 },
+  B05f: { f: 'b05f', max: 0.3, g: 1.2, rate: 0.8, vary:true, },
+  B05h: { f: 'b05h', max:0.3, g:0.8},
   B06: { f: 'b06', max: 0.55 },
+  // ここまで終わった。2026-11-28
   B07a: { f: 'b07a', max: 0.35 },
   B07b: { f: 'b07b', max: 0.35 },
   B07c: { f: 'b07c', max: 0.35 },
   B07d: { f: 'b07d', max: 0.4 },
   B07e: { f: 'b07e', max: 0.35 },
-  B08a: { f: 'b08a', max: 0.4 },
-  B08b: { f: 'b08b', max: 0.45 },
-  B08c: { f: 'b08c', max: 0.4 },
+  // ここから始める。2026-11-28
+  B08a: { f: 'b08d', max: 0.4 },
+  B08b: { f: 'b08d', max: 0.4 },
+  B08c: { f: 'b08d', max: 0.4 },
   B08d: { f: 'b08d', max: 0.4 },
-  B08e: { f: 'b08e', max: 0.4 },
+  B08e: { f: 'b08d', max: 0.4 },
   /** 道が消える：道の音をこもらせて短く */
   B09: { f: 'b08a', max: 0.25, lp: 1200, g: 0.7 },
-  B10: { f: 'b10', max: 1.0 },
-  B11: { f: 'b11', max: 0.28, g: 0.6 },
+  B10: { f: 'b10', max: 1.0,rate:0.8, g: 0.7 },
+  B11: { f: 'b11', max: 0.28, g: 0.0},
   B12: { tones: MELODY.B12 },
-  B13: { f: 'b13', max: 0.8 },
-  B14: { f: 'b14', g: 1.2, tones: [{ i: 'rumble', t: 0, v: 0.8 }, { i: 'musicbox', n: 'G6', t: 0.8, v: 0.3 }, { i: 'musicbox', n: 'D7', t: 0.95, v: 0.22 }] },
+  B13: { f: 'b13', max: 0.3 },
+  B14: { f: 'b14', g: 10,max:1.0},
   B15: { f: 'b15', g: 0.8 },
   B16: { f: 'b16', g: 0.8 },
   B17: { f: 'b17', max: 0.35, g: 0.7 },
