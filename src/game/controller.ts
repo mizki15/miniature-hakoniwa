@@ -7,6 +7,7 @@ import { FRAME, PLOT, plotOfCol, plotRect } from '../world/plots';
 import { canSetCol, floodAllowed } from './edgeRules';
 import { CROPS, Farm, type Crop, type CropKind, type FarmEnv, type Sapling } from './farm';
 import { UndoStack } from './undoStack';
+import type { FxEvent } from '../render/effects';
 import { freeMyBlockId, isModelBlock, isModelDef, sameLook, sanitizeMyBlock, type FaceBlockDef, type ModelBlockDef, type MyBlockDef } from '../world/myBlocks';
 import { matsOfDesign, sanitizeModelDesign } from '../build/modelBlock';
 import { setMyBlockLook } from '../render/materials';
@@ -142,6 +143,11 @@ export interface ControllerDeps {
 }
 
 const isFarm = (t: number) => t === FARMLAND || t === WET_FARMLAND;
+/** エフェクトの粒の色（作物・花・道） */
+const CROP_COLOR: Record<CropKind, number> = { turnip: 0xf4f0ea, carrot: 0xf08a24, strawberry: 0xe0303a, cabbage: 0xa6d66a, wheat: 0xeec86a, tomato: 0xe23a2a, eggplant: 0x5a2a76, sunflower: 0xf6c62a, corn: 0xf2cc3a, pumpkin: 0xe9822a };
+const FLOWER_COLOR = [0xe0504a, 0xf2c94c, 0xf6f2ea];
+interface UseAt { x: number; y: number; z: number; col: number; block: number; crop?: CropKind; flower: boolean; reed: boolean }
+const PATH_COLOR: Record<PathKind, number> = { dirt: 0xc4a574, gravel: 0xa49a88, cobble: 0xa9a79c, plank: 0xb08454, brick: 0xb05a40 };
 /** ブロックの枠を、ブロックより少しだけ大きくする倍率（面と線が重なってちらつかないように） */
 export const CURSOR_PAD = 1.012;
 const HOUR = 3600 * 1000;
@@ -393,6 +399,10 @@ export class GameController {
     }
     w.plots |= 1 << r.plot;
     this.texFull = true;
+    {
+      const pr = plotRect(r.plot);
+      this.emit('B14', (pr.x0 + pr.x1) / 2, w.waterLevel + 2, (pr.z0 + pr.z1) / 2, { n: PLOT });
+    }
     this.irrigatedCache.clear();
     const risers: THREE.Object3D[] = [];
     for (const c of r.chunks) {
@@ -747,6 +757,7 @@ export class GameController {
       this.bareSince.delete(col);
       if (h <= 0 || this.farmland.has(col) || this.buildingCols.has(col) || w.voxels[this.idx(x, h - 1, z)] !== DIRT) continue;
       this.setVoxel(x, h - 1, z, GRASS);
+      this.emit('C06', x + 0.5, h, z + 0.5);
       changed = true;
     }
     // 森への移り変わり（1 日に 1 回）
@@ -767,6 +778,7 @@ export class GameController {
         const y = w.heights[col];
         const variant = y > 19 ? 4 + Math.floor(Math.random() * 2) : Math.floor(Math.random() * 4);
         f.plantSapling(col, variant, Math.floor(Math.random() * 4) * (Math.PI / 2));
+        this.emit('C07', (col % N) + 0.5, w.heights[col], Math.floor(col / N) + 0.5);
         this.treeCols.add(col);
         w.walkable[col] = 0;
         changed = true;
@@ -775,6 +787,7 @@ export class GameController {
       for (const dd of this.decor) if (dd.kind === 'flower') for (let i = 0; i < dd.placements.length; i += 5) flowerCols.add(Math.floor(dd.placements[i]) + Math.floor(dd.placements[i + 2]) * N);
       for (const col of fadeFlowers(flowerCols, Math.random, jobs.flowerFadeMul)) {
         if (!this.planted.has(col)) this.faded.add(col);
+        this.emit('C08', (col % N) + 0.5, w.heights[col], Math.floor(col / N) + 0.5);
         this.removeFlowersAt(col % N, Math.floor(col / N));
         changed = true;
       }
@@ -1320,7 +1333,50 @@ export class GameController {
    * 道具を使う。結果の短いメッセージを返す。
    * visited を渡すと、同じ列には 1 回しか使わない（ドラッグでなぞる時、掘りすぎ・積みすぎを防ぐ）
    */
+  /**
+   * エフェクト（v0.21.0。render/effects.ts）：道具を使えた・使えなかった、育った、建った、などを main に知らせる。
+   * x・z はマスの真ん中、y は高さ（マスの座標）。id は docs/エフェクト一覧.md の ID
+   */
+  onFx: ((e: FxEvent) => void) | null = null;
+  private emit(id: string, x: number, y: number, z: number, extra: Partial<FxEvent> = {}) { this.onFx?.({ id, x, y, z, ...extra }); }
+  /** use() で、道具を向けたマスの様子（使う前。エフェクトの色・種類に使う） */
+  private useAt: UseAt | null = null;
+  private lastUseAt(): UseAt | null { return this.useAt; }
+
   use(hit: VoxelHit | null, visited?: Set<number>): string | null {
+    const tool = this.tool;
+    this.useAt = null;
+    const r = this.useInner(hit, visited);
+    const a = this.lastUseAt();
+    if (!a || r === null) return r;
+    const N = this.world!.size;
+    const cx = a.x + 0.5, cz = a.z + 0.5, top = this.world!.heights[a.col];
+    if (/要ります|足りません/.test(r)) { this.emit('B16', cx, top, cz); return r; }
+    if (!/ました|ています/.test(r)) return r;
+    switch (tool) {
+      case 'till': this.emit('B01', cx, top, cz); break;
+      case 'seed': this.emit('B02', cx, top, cz, { color: CROP_COLOR[this.seed] }); break;
+      case 'water': this.emit('A01', cx, top, cz); break;
+      case 'harvest': this.emit('A02', cx, top, cz, { color: a.crop ? CROP_COLOR[a.crop] : undefined }); break;
+      case 'plant': this.emit('B03', cx, top, cz); break;
+      case 'flower': this.emit('B04', cx, top, cz, { color: FLOWER_COLOR[this.flowerVariant] }); break;
+      case 'path': this.emit(`B08${'abcde'[Math.max(0, ['dirt', 'gravel', 'cobble', 'plank', 'brick'].indexOf(this.pathKind))]}`, cx, top, cz, { color: PATH_COLOR[this.pathKind] }); break;
+      case 'pick': this.emit(a.flower ? 'A06' : 'A07', cx, top, cz, { color: a.flower ? 0xf2c94c : undefined }); break;
+      case 'fell': this.emit('A05', cx, top, cz); break;
+      case 'dig':
+        this.emit('B05', cx, a.y + 0.5, cz, { block: a.block });
+        if (r.includes('鉱石')) this.emit('B05h', cx, a.y + 0.5, cz);
+        break;
+      case 'raise': this.emit('B07', cx, a.y + 0.5, cz, { block: this.block }); break;
+      case 'level': this.emit('B06', cx, top, cz); break;
+      case 'build': this.emit('B10', cx, top, cz); break;
+      case 'unbuild': this.emit('B13', cx, top, cz); break;
+    }
+    void N;
+    return r;
+  }
+
+  private useInner(hit: VoxelHit | null, visited?: Set<number>): string | null {
     if (this.locked) return null;
     const c = this.check(hit);
     if (!c) return null;
@@ -1333,7 +1389,8 @@ export class GameController {
       if (visited.has(col) || (building && visited.size)) return null;
       visited.add(col);
     }
-    if (!c.ok) return c.msg;
+    if (!c.ok) { this.emit('B15', x + 0.5, y + 1, z + 0.5); return c.msg; }
+    this.useAt = { x, y, z, col, block: this.get(x, y, z), crop: this.farm.crops.get(col)?.kind, flower: this.hasFlower(col), reed: this.hasReed(col) };
     this.unsaved = true; this.onPlayerChange?.();
     if (this.recording) this.recording.changed = true;
     // レジストリにある道具（game/tools.ts）
@@ -1528,6 +1585,7 @@ export class GameController {
     if (!k) return;
     this.pathTiles.delete(col);
     if (this.world?.paths) this.world.paths[col] = 0;
+    if (!this.applyingEntry && this.world) this.emit('B09', (col % this.world.size) + 0.5, this.world.heights[col], Math.floor(col / this.world.size) + 0.5, { color: PATH_COLOR[k] });
     const c = PATH_DEF[k].cost;
     if (refund && c) refundMats(this.farm.inventory, { mats: c });
     this.pathsDirty = true;
@@ -1833,11 +1891,23 @@ export class GameController {
       if (p.progress >= 1) continue;
       const d = this.designs.get(p.id);
       if (!d) continue;
+      const before = builtCount(p.progress, d.cubes.length);
       p.progress = advanceProgress(p.progress, dtMs, d);
-      if (p.progress >= 1) { finished = true; this.onBuildingDone?.(d.name); this.onGoalEvent?.({ k: 'built', design: d }); }
+      const at = this.buildingCenter(p, d);
+      if (p.progress >= 1) { finished = true; this.onBuildingDone?.(d.name); this.onGoalEvent?.({ k: 'built', design: d }); this.emit('B12', at.x, at.y, at.z); }
+      else if (builtCount(p.progress, d.cubes.length) > before && this.onBuildingDone) this.emit('B11', at.x, at.y, at.z);
     }
     if (finished) { this.rebuildBuildings(); this.env(); }
     else for (const st of this.sites) this.updateSite(st);
+  }
+
+  /** 建物の真ん中の上（エフェクトの位置。マスの座標） */
+  private buildingCenter(p: { x: number; z: number; rot: Rot }, d: BuildingDesign) {
+    const w = this.world!;
+    const b = rotatedBounds(d, p.rot);
+    const x = p.x + 0.5 + (b.min[0] + b.max[0]) / 2, z = p.z + 0.5 + (b.min[2] + b.max[2]) / 2;
+    const col = Math.floor(x) + Math.floor(z) * w.size;
+    return { x, y: (w.heights[col] ?? 0) + b.max[1], z };
   }
 
   /** 建設中の動き（毎フレーム、現実の秒で）：次のパーツの点滅と土ぼこり */
@@ -2160,7 +2230,22 @@ export class GameController {
     }
     for (const r of this.rising) if (r.t >= 1) r.done?.();
     this.rising = this.rising.filter((r) => r.t < 1);
+    // 育った作物・苗木を知るため、進める前の段階を覚える（エフェクト。v0.21.0）
+    const stagesBefore = this.onFx ? new Map([...this.farm.crops].map(([c, cr]) => [c, Farm.stage(cr.progress)])) : null;
+    const sapBefore = this.onFx ? new Map(this.farm.saplings.map((sp) => [sp.col, sp.progress])) : null;
     const ch = this.farm.advance(dtSim * 1000 * this.farm.speed, this.farmEnv(env));
+    if (stagesBefore && ch.crops) {
+      for (const [c, cr] of this.farm.crops) {
+        const st = Farm.stage(cr.progress);
+        if (st !== stagesBefore.get(c)) this.emit(st === 3 ? 'C02' : 'C01', (c % this.world.size) + 0.5, this.world.heights[c], Math.floor(c / this.world.size) + 0.5);
+      }
+    }
+    if (sapBefore && ch.matured) {
+      for (const sp of this.farm.saplings) {
+        const was = sapBefore.get(sp.col) ?? 0;
+        if ((was < 0.25 && sp.progress >= 0.25) || (was < 1 && sp.progress >= 1)) this.emit('C04', (sp.col % this.world.size) + 0.5, this.world.heights[sp.col], Math.floor(sp.col / this.world.size) + 0.5);
+      }
+    }
     if (ch.crops) this.markCrops(false);
     if (ch.saplings || ch.matured) this.markGrowing(ch.matured);
     this.advanceBuildings(dtSim * 1000 * this.farm.speed);

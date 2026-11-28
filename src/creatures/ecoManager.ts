@@ -27,6 +27,8 @@ export interface EcoDeps {
   onPoints?: (n: number) => void;
   /** 訪問者が、その箱庭でとれない素材を運んできた（v0.16.1） */
   onGift?: (id: VisitorId, mat: MatId, n: number) => void;
+  /** エフェクト（v0.21.0。ID は docs/エフェクト一覧.md。位置はマスの座標） */
+  onFx?: (id: string, at: { x: number; y: number; z: number }) => void;
 }
 
 /**
@@ -197,7 +199,7 @@ export class EcoManager {
     const state: EcoState = { visitors, residents: this.animals.map((a) => a.species), openPlots: countOpen(this.world!.plots), abundance: this.abundance, liked: input.liked, boost: this.goalBoost };
     const r = checkEcosystem(state, this.env(), moment, nowReal, rand);
     let arrived = 0, movedIn = false;
-    for (const id of r.leave) this.removeVisitor(id);
+    for (const id of r.leave) { this.fxAtVisitor('D03', id); this.removeVisitor(id); }
     // きつねがいると、訪問者が少し長くいる（仕事）
     const jobs = jobEffects(this.residentInfos(), this.world!.size);
     for (const id of r.arrive) {
@@ -205,7 +207,7 @@ export class EcoManager {
       arrived++;
       // その箱庭でとれない素材を、たまに運んでくる
       const gift = visitorGift(this.env(), Math.random);
-      if (gift) this.deps.onGift?.(id, gift.mat, gift.n);
+      if (gift) { this.deps.onGift?.(id, gift.mat, gift.n); this.fxAtVisitor('D12', id); }
     }
     if (arrived) this.deps.onPoints?.(arrived * VISITOR_POINTS); // 訪問者が来るたびに少し
     // 生き物の多さを上げていると、1 回に何匹も引っ越してくる。知らせは 1 回にまとめる
@@ -215,12 +217,14 @@ export class EcoManager {
       const first = !this.dex[sp];
       const a = this.addResident(sp);
       if (!a) continue;
+      this.fxAtAnimal('D04', a);
       if (first) firstSeen = true;
       else came.push(`${SPECIES[sp].name}の${a.name}`);
       movedIn = true;
       // 好きな家がある所に来た：満足して発見ポイント（カピバラがいると 2 倍）
       if (input.liked?.has(sp)) {
         const pts = SATISFIED_POINTS * jobEffects(this.residentInfos(), this.world!.size).satisfyMul;
+        this.fxAtAnimal('D05', a);
         this.deps.onPoints?.(pts);
         if (!first) this.deps.toast(`${SPECIES[sp].name}の${a.name}は、家が気に入ったようだ ✨ +${pts}`);
       }
@@ -310,8 +314,23 @@ export class EcoManager {
     // ホタルは見た目を持たない（光そのものが目印）
     if (def.motion !== 'glow') this.mark(v.object, 'visitor');
     if (id === 'firefly') this.deps.fireflies.setPresent(true);
-    if (markSeen(this.dex, id, Date.now())) this.deps.toast('何かの気配がする…');
+    const first = markSeen(this.dex, id, Date.now());
+    if (first) this.deps.toast('何かの気配がする…');
+    if (id !== 'firefly') this.fxAtVisitor(first ? 'D01' : 'D02', id);
     return true;
+  }
+
+  /** エフェクトを、その訪問者・住人の所で */
+  private fxAtVisitor(fx: string, id: VisitorId) {
+    const v = this.visitors.find((x) => x.def.id === id);
+    if (!v || !this.world) return;
+    const h = this.world.size / 2, p = v.anchor ?? v.object.position;
+    this.deps.onFx?.(fx, { x: p.x + h, y: p.y, z: p.z + h });
+  }
+  fxAtAnimal(fx: string, a: Animal) {
+    if (!this.world) return;
+    const h = this.world.size / 2, p = a.object.position;
+    this.deps.onFx?.(fx, { x: p.x + h, y: p.y, z: p.z + h });
   }
 
   removeVisitor(id: VisitorId) {
