@@ -1,7 +1,7 @@
 /**
  * 効果音の呼び出し口（v0.21.0）：docs/エフェクト一覧.md の ID（A01・B05a など）で鳴らす。
- * 音そのものは、コマンドラインの Claude Code で lumina-sfx を使って作り、src/audio に入れる（8 章のプロンプト）。
- * 届いた音は register で ID につなぐ。つないでいない ID は何もしない（見た目だけ）。
+ * 音そのものは audio/bank.ts（lumina-sfx の録音 public/sfx と、tones.ts の楽器の音）が register で ID につなぐ。
+ * つないでいない ID は何もしない（見た目だけ）。
  *
  * 鳴らし方の決まり（docs 1.2）：箱庭の中の音は位置から（左右・遠いほど小さく。60 マスより遠いと鳴らさない）、
  * 同じ音は同時に 3 つまで・0.06 秒より詰めない、早送り中は時間で起きる変化の音を鳴らさない
@@ -12,7 +12,7 @@ export type SfxVoice = (opts: { pan: number; gain: number }) => void;
 
 /** 音の優先度・大きさの段（docs 1.2） */
 export type SfxTier = 'bed' | 'passive' | 'action' | 'reward';
-const TIER_GAIN: Record<SfxTier, number> = { bed: 0.06, passive: 0.1, action: 0.2, reward: 0.32 };
+const TIER_GAIN: Record<SfxTier, number> = { bed: 0.25, passive: 0.35, action: 0.6, reward: 0.75 };
 /** ID の頭の文字から段を決める（C・D は時間で起きる変化、F02・B12・B14・A10 はほうび） */
 export function tierOf(id: string): SfxTier {
   if (['F02', 'F03', 'B12', 'B14', 'A10', 'E07a', 'E07b', 'E07c', 'E07d'].includes(id)) return 'reward';

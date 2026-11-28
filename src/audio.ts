@@ -1,144 +1,99 @@
 /**
- * 環境音：音声ファイルを使わず Web Audio で合成する（サーバー・素材不要）。
- * 風・水のせせらぎ・雨・昼の鳥のさえずり・夜の虫の声を、時刻と天気に合わせて混ぜる。
- * ブラウザの自動再生の制限があるので、ユーザーの操作（ボタン）で開始する。
+ * 環境音（v0.21.1 で、合成した音から lumina-sfx の録音のループに置き換え。public/sfx/amb-*.ogg）。
+ * 風・水のせせらぎ・雨・葉ずれ・昼の鳥・朝の鳥・夜の虫・夜のカエルを、時刻・天気・季節に合わせて混ぜる。
+ * 音の出口は効果音と同じ（audio/bank.ts の audioOut）。「環境音」のボタンで鳴らす・止める
  */
+import { audioOut, loadSounds, normGain, soundBuffer } from './audio/bank';
+
 export interface AmbienceState {
   day: number; // 0..1
   rain: number; // 0..1
   wind: number; // 0..2 程度
   season: number; // 0 春, 1 夏, 2 秋, 3 冬
   volume: number; // 0..1
+  /** 時刻（0〜24）。朝の鳥に使う */
+  hour?: number;
+  /** 雪（0〜1） */
+  snow?: number;
 }
 
-export class Ambience {
-  private ctx: AudioContext | null = null;
-  private master!: GainNode;
-  private wind!: GainNode;
-  private water!: GainNode;
-  private rain!: GainNode;
-  private windFilter!: BiquadFilterNode;
-  private nextChirp = 0;
-  private nextCricket = 0;
-  private state: AmbienceState = { day: 1, rain: 0, wind: 1, season: 0, volume: 0.6 };
+const LOOPS = ['amb-wind', 'amb-stream', 'amb-rain', 'amb-leaves', 'amb-birds', 'amb-dawn', 'amb-night', 'amb-frogs'] as const;
+type LoopName = (typeof LOOPS)[number];
 
-  get running() { return this.ctx !== null && this.ctx.state === 'running'; }
+export class Ambience {
+  private on = false;
+  private master: GainNode | null = null;
+  private gains = new Map<LoopName, GainNode>();
+  private windFilter: BiquadFilterNode | null = null;
+
+  get running() { return this.on; }
 
   async start() {
-    if (!this.ctx) this.build();
-    await this.ctx!.resume();
-  }
-
-  async stop() { await this.ctx?.suspend(); }
-
-  private noiseBuffer(ctx: AudioContext, seconds = 3) {
-    const buf = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    // ブラウンノイズ寄り（低音が多く耳に優しい）
-    let last = 0;
-    for (let i = 0; i < d.length; i++) { const w = Math.random() * 2 - 1; last = (last + 0.02 * w) / 1.02; d[i] = last * 3.5; }
-    return buf;
-  }
-
-  private loopNoise(filterType: BiquadFilterType, freq: number, q = 0.7) {
-    const ctx = this.ctx!;
-    const src = ctx.createBufferSource();
-    src.buffer = this.noiseBuffer(ctx);
-    src.loop = true;
-    const f = ctx.createBiquadFilter();
-    f.type = filterType; f.frequency.value = freq; f.Q.value = q;
-    const g = ctx.createGain(); g.gain.value = 0;
-    src.connect(f).connect(g).connect(this.master);
-    src.start();
-    return { gain: g, filter: f };
-  }
-
-  private build() {
-    const ctx = new AudioContext();
-    this.ctx = ctx;
-    this.master = ctx.createGain();
-    this.master.gain.value = this.state.volume;
-    this.master.connect(ctx.destination);
-    const w = this.loopNoise('bandpass', 380, 0.6);
-    this.wind = w.gain; this.windFilter = w.filter;
-    this.water = this.loopNoise('lowpass', 900).gain;
-    // 雨は高い音のノイズ（白色に近いもの）
-    const rainSrc = ctx.createBufferSource();
-    const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    rainSrc.buffer = buf; rainSrc.loop = true;
-    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1200;
-    this.rain = ctx.createGain(); this.rain.gain.value = 0;
-    rainSrc.connect(hp).connect(this.rain).connect(this.master);
-    rainSrc.start();
-  }
-
-  /** 鳥のさえずり：短い上昇音を数回 */
-  private chirp() {
-    const ctx = this.ctx!;
-    const t0 = ctx.currentTime;
-    const base = 2600 + Math.random() * 1600;
-    const notes = 2 + Math.floor(Math.random() * 4);
-    for (let i = 0; i < notes; i++) {
-      const o = ctx.createOscillator(); const g = ctx.createGain();
-      const t = t0 + i * (0.09 + Math.random() * 0.05);
-      o.type = 'sine';
-      o.frequency.setValueAtTime(base, t);
-      o.frequency.exponentialRampToValueAtTime(base * (1.25 + Math.random() * 0.3), t + 0.07);
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(0.05, t + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
-      const pan = ctx.createStereoPanner(); pan.pan.value = Math.random() * 2 - 1;
-      o.connect(g).connect(pan).connect(this.master);
-      o.start(t); o.stop(t + 0.1);
+    const { ctx, amb } = audioOut();
+    await ctx.resume();
+    if (!this.master) {
+      this.master = ctx.createGain();
+      this.master.gain.value = 0;
+      this.master.connect(amb);
+      await loadSounds(import.meta.env.BASE_URL, LOOPS);
+      for (const n of LOOPS) {
+        const buf = soundBuffer(n);
+        const g = ctx.createGain();
+        g.gain.value = 0;
+        if (n === 'amb-wind') {
+          // 冬・雪の日は風をこもらせる
+          this.windFilter = ctx.createBiquadFilter();
+          this.windFilter.type = 'lowpass';
+          this.windFilter.frequency.value = 12000;
+          g.connect(this.windFilter).connect(this.master);
+        } else g.connect(this.master);
+        this.gains.set(n, g);
+        if (!buf) continue;
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        const pre = ctx.createGain();
+        pre.gain.value = normGain(n);
+        src.connect(pre).connect(g);
+        // ループごとに始まりをずらす（同じ所が重ならないように）
+        src.start(ctx.currentTime + 0.05, Math.random() * buf.duration);
+      }
     }
+    this.on = true;
   }
 
-  /** 虫の声：高い音を細かく区切って鳴らす */
-  private cricket() {
-    const ctx = this.ctx!;
-    const t0 = ctx.currentTime;
-    const o = ctx.createOscillator(); const g = ctx.createGain();
-    o.type = 'sine'; o.frequency.value = 4200 + Math.random() * 600;
-    g.gain.value = 0;
-    const pulses = 3 + Math.floor(Math.random() * 3);
-    for (let i = 0; i < pulses; i++) {
-      const t = t0 + i * 0.06;
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.linearRampToValueAtTime(0.018, t + 0.012);
-      g.gain.linearRampToValueAtTime(0.0001, t + 0.04);
-    }
-    const pan = ctx.createStereoPanner(); pan.pan.value = Math.random() * 2 - 1;
-    o.connect(g).connect(pan).connect(this.master);
-    o.start(t0); o.stop(t0 + pulses * 0.06 + 0.05);
+  async stop() {
+    this.on = false;
+    const m = this.master;
+    if (m) m.gain.setTargetAtTime(0, m.context.currentTime, 0.2);
   }
 
-  update(dt: number, s: AmbienceState) {
-    this.state = s;
-    if (!this.running) return;
-    const ctx = this.ctx!;
-    const k = 0.5; // なめらかに変える時間（秒）
-    const t = ctx.currentTime;
-    this.master.gain.setTargetAtTime(s.volume, t, k);
-    const gust = 0.6 + 0.4 * Math.sin(t * 0.3) * Math.sin(t * 0.11);
-    this.wind.gain.setTargetAtTime(0.05 * s.wind * gust, t, k);
-    this.windFilter.frequency.setTargetAtTime(300 + 250 * gust * s.wind, t, k);
-    this.water.gain.setTargetAtTime(0.035, t, k);
-    this.rain.gain.setTargetAtTime(0.06 * s.rain, t, k);
-
-    // 鳥：昼・雨でない時
-    this.nextChirp -= dt;
-    if (this.nextChirp <= 0) {
-      this.nextChirp = 1.2 + Math.random() * 3.5;
-      if (s.day > 0.5 && s.rain < 0.3 && s.season !== 3 && Math.random() < s.day) this.chirp();
-    }
-    // 虫：夜・夏〜秋
-    this.nextCricket -= dt;
-    if (this.nextCricket <= 0) {
-      this.nextCricket = 0.15 + Math.random() * 0.5;
-      const night = 1 - s.day;
-      if (night > 0.6 && s.rain < 0.3 && (s.season === 1 || s.season === 2)) this.cricket();
-    }
+  update(_dt: number, s: AmbienceState) {
+    const m = this.master;
+    if (!m) return;
+    const t = m.context.currentTime;
+    const k = 1.2; // なめらかに変える時間（秒）
+    m.gain.setTargetAtTime(this.on ? s.volume : 0, t, 0.3);
+    if (!this.on) return;
+    const night = 1 - s.day;
+    const snow = s.snow ?? 0;
+    const hour = s.hour ?? 12;
+    const dry = 1 - Math.min(1, s.rain + snow);
+    const set = (n: LoopName, v: number) => this.gains.get(n)?.gain.setTargetAtTime(Math.max(0, v), t, k);
+    const gust = 0.75 + 0.25 * Math.sin(t * 0.3) * Math.sin(t * 0.11);
+    set('amb-wind', 0.22 * Math.min(2, s.wind) * gust + 0.12 * snow);
+    this.windFilter?.frequency.setTargetAtTime(s.season === 3 || snow > 0.2 ? 1400 : 9000, t, k);
+    set('amb-stream', 0.22 * (1 - snow * 0.6));
+    set('amb-rain', 0.5 * s.rain);
+    set('amb-leaves', s.season === 3 ? 0 : 0.12 * Math.min(1.5, s.wind) * (1 - s.rain * 0.5));
+    // 朝の鳥（5〜8 時）・昼の鳥（冬・雨の日はなし）
+    const dawn = hour >= 4.8 && hour < 8.5 ? Math.min(1, (hour - 4.8) / 0.7, (8.5 - hour) / 1.2) : 0;
+    const birdOk = s.season === 3 ? 0.2 : 1;
+    set('amb-dawn', 0.4 * dawn * dry * birdOk);
+    set('amb-birds', 0.35 * Math.max(0, s.day - 0.4) / 0.6 * (1 - dawn) * dry * birdOk);
+    // 夜の虫（夏・秋）・カエル（春・夏）
+    const nightK = Math.max(0, (night - 0.5) / 0.5);
+    set('amb-night', 0.35 * nightK * dry * (s.season === 1 || s.season === 2 ? 1 : 0.15));
+    set('amb-frogs', 0.18 * nightK * dry * (s.season === 0 || s.season === 1 ? 1 : 0));
   }
 }

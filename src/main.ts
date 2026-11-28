@@ -40,6 +40,7 @@ import { CURSOR_PAD, FLOWER_KINDS, GameController, PLACE_BLOCKS, TOOLS, toGeomet
 import { HoverTip } from './ui/hoverTip';
 import { Effects, type FxEvent } from './render/effects';
 import { sfx } from './audio/sfx';
+import { installSounds, audioOut, soundBuffer } from './audio/bank';
 import { banner, edgeGlow, floatText, seasonSweep, shake } from './ui/floaters';
 import { myBlockThumb } from './ui/myBlockThumb';
 import { PATTERN_NAME, parseMyBlock, type FaceBlockDef, type MyBlockLook } from './world/myBlocks';
@@ -183,6 +184,9 @@ async function main() {
   const birds = new Birds();
   scene.add(fireflies.mesh, birds.group);
   const ambience = new Ambience();
+  // 効果音（v0.21.1。audio/bank.ts）：ID ごとの録音・楽器の音をつなぐ。最初のクリックで鳴るようになる
+  installSounds();
+  let ambHour = 12;
   let liteTerrain = false;
   let world: WorldData | null = null;
   let info = '';
@@ -1639,6 +1643,17 @@ async function main() {
     if (ambience.running) { await ambience.stop(); soundBtn.classList.remove('on'); soundBtn.textContent = '🔈 環境音'; }
     else { await ambience.start(); soundBtn.classList.add('on'); soundBtn.textContent = '🔊 環境音'; }
   });
+  // 効果音（v0.21.1）：入・切を覚えておく
+  const sfxBtn = $('sfxToggle');
+  const showSfx = () => { sfxBtn.classList.toggle('on', sfx.volume > 0); sfxBtn.textContent = sfx.volume > 0 ? '🔔 効果音' : '🔕 効果音'; };
+  sfx.volume = localStorage.getItem('hakoniwa.sfx') === 'off' ? 0 : 1;
+  showSfx();
+  sfxBtn.addEventListener('click', () => {
+    sfx.volume = sfx.volume > 0 ? 0 : 1;
+    localStorage.setItem('hakoniwa.sfx', sfx.volume > 0 ? 'on' : 'off');
+    showSfx();
+    sfx.play('F07');
+  });
 
   // 時間の流れ（テスト用の早送り）
   let lastEnv = { season: 0, raining: false };
@@ -2218,7 +2233,8 @@ async function main() {
       const len = Math.hypot(dir.x, dir.z) || 1;
       sfx.right = { x: -dir.z / len, z: dir.x / len };
     }
-    sfx.fastForward = game.farm.speed > 1;
+    sfx.fastForward = game.farm.speed > 60; // ×60 がふだんの速さ。×600 の早送りでは時間で起きる音を鳴らさない
+    ambHour = hour;
     // 夜明け・日暮れ（E04・E05）
     const hb = hour < 5.5 ? 0 : hour < 17.5 ? 1 : 2;
     if (lastHourFx >= 0 && hb !== lastHourFx && hb > 0) sfx.play(hb === 1 ? 'E04' : 'E05');
@@ -2449,7 +2465,7 @@ async function main() {
     fireflies.update(tt, Math.max(0, (night - 0.6) / 0.4) * seasonFly * (1 - weatherNow.rain) * (1 - weatherNow.snow));
     // 鳥：昼・晴れ〜くもり
     birds.update(tt, Math.max(0, 1 - night * 1.5) * (1 - weatherNow.rain) * (1 - weatherNow.snow * 0.7));
-    ambience.update(dt, { day: 1 - night, rain: weatherNow.rain, wind: weatherNow.wind, season: s, volume: 0.6 });
+    ambience.update(dt, { day: 1 - night, rain: weatherNow.rain, wind: weatherNow.wind, season: s, volume: 0.6, hour: ambHour, snow: weatherNow.snow });
 
     const tr0 = performance.now();
     if (appEl.clientWidth > 0 && appEl.clientHeight > 0) pipeline.render();
@@ -2502,7 +2518,7 @@ async function main() {
   // Object.assign では今の値しか写らないので、変わる値は getter で
   Object.defineProperty((window as N).__hakoniwa, 'goals', { get: () => goals, configurable: true });
   Object.defineProperty((window as N).__hakoniwa, 'aa', { get: () => ({ mode: post.aaMode, scale: post.renderScale }), configurable: true });
-  Object.assign((window as N).__hakoniwa, { effects, sfx, playFx, tickGoals: () => { goalsAt = -Infinity; tickGoals(); }, spawnAll: () => eco.spawnAll(), camera, controls, shadows, setAntialias, setRenderStyle, uLine, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
+  Object.assign((window as N).__hakoniwa, { effects, sfx, playFx, sound: { audioOut, soundBuffer, ambience }, tickGoals: () => { goalsAt = -Infinity; tickGoals(); }, spawnAll: () => eco.spawnAll(), camera, controls, shadows, setAntialias, setRenderStyle, uLine, shaderFlags: { FIREFLIES_ON, RIPPLES_ON }, eco, spawnVisitor: (id: VisitorId) => eco.spawnVisitor(id), ecoCheck: (force = true) => eco.check(lastMoment, performance.now(), force ? () => 0 : Math.random), bench, adapterInfo, applyQuality, fireflyData, game, selectTool, saveNow, buildSave, encodeSave, saveLocal, setSize: (w: number, h: number) => { renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); } });
 }
 
 main().catch((err) => {
