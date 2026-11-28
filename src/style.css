@@ -421,3 +421,8 @@ body.night #tooltip .bar { background: rgba(255, 255, 255, 0.15); }
 .fx-edge { position: absolute; inset: 0; box-shadow: inset 0 0 60px rgba(140, 200, 255, 0.55); animation: fx-edge 0.6s ease-out forwards; }
 @keyframes fx-edge { 0% { opacity: 0; } 30% { opacity: 1; } 100% { opacity: 0; } }
 .pick-item.fx-pop, .tool-list button.fx-pop { animation: fx-bump 0.25s ease-out; }
+
+/* 鳴った効果音（デバッグ画面。v0.21.2） */
+#sfxLog { font-size: 11px; line-height: 1.5; margin-top: 4px; font-variant-numeric: tabular-nums; }
+#sfxLog b { display: inline-block; min-width: 3.2em; }
+#sfxLog .off { opacity: 0.5; }

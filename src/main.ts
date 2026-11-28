@@ -41,6 +41,7 @@ import { HoverTip } from './ui/hoverTip';
 import { Effects, type FxEvent } from './render/effects';
 import { sfx } from './audio/sfx';
 import { installSounds, audioOut, soundBuffer } from './audio/bank';
+import { sfxName } from './audio/names';
 import { banner, edgeGlow, floatText, seasonSweep, shake } from './ui/floaters';
 import { myBlockThumb } from './ui/myBlockThumb';
 import { PATTERN_NAME, parseMyBlock, type FaceBlockDef, type MyBlockLook } from './world/myBlocks';
@@ -1637,6 +1638,20 @@ async function main() {
     applyQuality(qualityAuto ? (forceWebGL || isMobile ? 'medium' : 'high') : (v as Quality));
   });
 
+  // ---------- 鳴った効果音（デバッグ画面。v0.21.2） ----------
+  // 開発用のページ（models.html・sounds.html）は開発サーバーの時だけ
+  if (!import.meta.env.DEV) $('devPages').remove();
+  const sfxLogEl = $('sfxLog');
+  const showSfxLog = () => {
+    const now = performance.now();
+    const rows = sfx.trace.filter((e) => now - e.t < 8000).slice(-8).reverse();
+    sfxLogEl.innerHTML = rows.length ? '🔊 効果音<br>' + rows.map((e) => {
+      const age = ((now - e.t) / 1000).toFixed(1);
+      const what = e.why ? `鳴らさない：${e.why}` : !e.voiced ? '音なし（つないでいない）' : `大きさ ${e.gain.toFixed(2)}${Math.abs(e.pan) > 0.05 ? ` · ${e.pan < 0 ? '左' : '右'} ${Math.abs(e.pan).toFixed(1)}` : ''}`;
+      return `<span class="${e.why || !e.voiced ? 'off' : ''}"><b>${e.id}</b> ${sfxName(e.id)} — ${what}（${age} 秒前）</span>`;
+    }).join('<br>') : '';
+  };
+
   // ---------- 環境音 ----------
   const soundBtn = $('sound');
   soundBtn.addEventListener('click', async () => {
@@ -2483,6 +2498,7 @@ async function main() {
       updateStatus(hh, mm, s, st.season);
       // GPU の処理時間（タイムスタンプが使える環境のみ）
       if (trackTimestamp) renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER).then(() => { gpuMs = renderer.info.render.timestamp; }).catch(() => {});
+      showSfxLog();
       $('stats').innerHTML = `${backendName} · ${fps.toFixed(0)} fps${gpuMs > 0 ? ` · GPU ${gpuMs.toFixed(1)}ms` : ''} · CPU 処理 ${cpuLogic.toFixed(1)}ms＋描画命令 ${cpuRender.toFixed(1)}ms · 画質 ${QUALITY_NAMES[quality]} · ピント ${focusSmoothed.toFixed(0)}<br>${info}`;
       // 自動画質：重い時は下げる（上げ下げを繰り返さないよう、下げるだけ）。
       // 変えた直後・箱庭を作っている間の 1.5 秒は見ない（シェーダーの準備で一瞬重くなるため）。2 秒ぶんの中央値で決める

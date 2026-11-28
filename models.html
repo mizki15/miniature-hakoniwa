@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>3D モデルの一覧（開発用）</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #dfe9f2; font-family: system-ui, sans-serif; overflow: hidden; }
+      #labels { position: fixed; inset: 0; pointer-events: none; }
+      #labels span { position: absolute; transform: translate(-50%, 0); font-size: 12px; color: #1f2933; background: rgba(255,255,255,0.75); padding: 1px 5px; border-radius: 6px; white-space: nowrap; }
+      #labels span.head { transform: none; font-size: 14px; font-weight: 600; background: rgba(31,41,51,0.8); color: #fff; }
+      #toc { position: fixed; left: 12px; top: 12px; display: flex; flex-direction: column; gap: 4px; background: rgba(255,255,255,0.8); padding: 10px; border-radius: 10px; font-size: 13px; }
+      #toc b { margin-bottom: 4px; }
+      #toc button { text-align: left; border: 0; background: #eef3f7; border-radius: 6px; padding: 4px 8px; cursor: pointer; font: inherit; }
+      #toc button:hover { background: #d8e6f0; }
+      #toc small { color: #52606d; margin-top: 4px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div id="view"></div>
+    <div id="labels"></div>
+    <div id="toc"><b>3D モデルの一覧</b><small>ドラッグで回す・ホイールで寄る<br>?fit で大きさをそろえる・?detail=4 で木を細かく<br><a href="/sounds.html">🔊 効果音の一覧へ</a></small></div>
+    <script>
+      if (location.protocol === 'file:') document.body.insertAdjacentHTML('beforeend',
+        '<p style="margin:24px;font-size:15px;line-height:1.8">このページは開発サーバーで開いてください（npm run dev → http://localhost:5173/models.html）。</p>');
+    </script>
+    <!-- 開発用：ゲームの 3D モデルを全部並べて見る（本番のビルドには入らない） -->
+    <script type="module" src="/src/debug/models.ts"></script>
+  </body>
+</html>

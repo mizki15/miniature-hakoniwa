@@ -37,7 +37,7 @@ export const normGain = (f: string) => Math.min(4, 10 ** ((-10 - (PEAK[f] ?? -10
  * 1 つの ID の音：f 録音（public/sfx/<f>.ogg）、max 長さの上限（秒。そこで消えていく）、g 大きさ、
  * rate 速さ（音の高さも変わる）、lp こもらせる（Hz）、tones 楽器の音（録音と重ねる）、vary 鳴らすたびに変える
  */
-interface Cue { f?: string; max?: number; g?: number; rate?: number; lp?: number; tones?: Tone[]; vary?: boolean }
+export interface Cue { f?: string; max?: number; g?: number; rate?: number; lp?: number; tones?: Tone[]; vary?: boolean }
 const k1 = (n: string, t: number, v = 0.6): Tone[] => [{ i: 'kalimba', n, t, v }];
 export const CUES: Record<string, Cue> = {
   // 見るモードの操作（A）
@@ -139,7 +139,7 @@ export function loadSounds(base: string, names: Iterable<string>) {
 export const soundBuffer = (n: string) => buffers.get(n);
 
 /** 1 つの ID を鳴らす関数を作る */
-function voiceFor(c: Cue): SfxVoice {
+export function voiceFor(c: Cue): SfxVoice {
   return ({ pan, gain }) => {
     if (!ctx || ctx.state !== 'running') return;
     const out = audioOut();

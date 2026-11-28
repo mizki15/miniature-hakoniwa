@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>効果音の一覧（開発用）</title>
+    <style>
+      body { margin: 0; background: #f4f1ea; color: #1f2933; font-family: system-ui, sans-serif; font-size: 14px; }
+      header { position: sticky; top: 0; background: rgba(244,241,234,0.95); padding: 12px 20px; border-bottom: 1px solid #ddd5c4; display: flex; flex-wrap: wrap; gap: 14px; align-items: center; z-index: 1; }
+      header h1 { font-size: 17px; margin: 0 8px 0 0; }
+      #now { font-weight: 600; min-width: 16em; }
+      #status { color: #52606d; }
+      main { padding: 4px 20px 40px; max-width: 1000px; }
+      h2 { font-size: 15px; margin: 22px 0 6px; }
+      table { border-collapse: collapse; width: 100%; }
+      td { padding: 5px 8px; border-bottom: 1px solid #e6dfd0; vertical-align: top; }
+      td:nth-child(2) { width: 3.5em; }
+      td small { color: #52606d; }
+      tr.cur { background: #fff2c4; }
+      button { border: 1px solid #c9bfa8; background: #fffdf7; border-radius: 7px; padding: 3px 10px; cursor: pointer; font: inherit; }
+      button:hover { background: #fff2c4; }
+      button.play { width: 2.4em; }
+      button.on { background: #ffe08a; }
+      #loops { display: flex; flex-wrap: wrap; gap: 6px; }
+      code { font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>🔊 効果音の一覧</h1>
+      <label>大きさ <input type="range" id="vol" min="0" max="2" step="0.05" value="1" /></label>
+      <label>左右 <input type="range" id="pan" min="-1" max="1" step="0.1" value="0" /></label>
+      <button id="all">全部を順に ▶</button>
+      <label><input type="checkbox" id="allRun" checked /> 続ける</label>
+      <label>間 <input type="number" id="gap" min="0.3" max="5" step="0.1" value="1.2" style="width:4em" /> 秒</label>
+      <span id="now"></span>
+      <span id="status"></span>
+      <a href="/models.html">🧸 3D モデルの一覧へ</a>
+    </header>
+    <main>
+      <p><small>▶ はゲームと同じ処理（src/audio/bank.ts の CUES：長さの上限・大きさ・速さ・こもり・楽器の音・鳴らすたびの揺らぎ）を通した音で、ゲームの大きさの段も掛けます。「録音」は public/sfx のファイルそのまま。bank.ts を保存すると、このページも読み直されます。</small></p>
+      <h2>環境音のループ</h2>
+      <div id="loops"></div>
+      <div id="list"></div>
+    </main>
+    <!-- 開発用：効果音を ID ごとに聴く（本番のビルドには入らない） -->
+    <script type="module" src="/src/debug/sounds.ts"></script>
+  </body>
+</html>
